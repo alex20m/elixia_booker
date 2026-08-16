@@ -1,0 +1,28 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+.env.local
+.env*.local
+
+# Raw discovery output: contains live tokens, cookies and personal data.
+# Only the redacted artifacts under captures/redacted/ are safe to commit.
+captures/raw/
+*.har
+auth-state.json
+
+# Deps / build
+node_modules/
+dist/
+.next/
+out/
+.vercel/
+coverage/
+next-env.d.ts
+*.tsbuildinfo
+
+# OS / editor
+.DS_Store
+*.log

@@ -1,0 +1,35 @@
+{
+  "name": "elixia_booker",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Next.js app on Vercel that books Elixia (SATS Group) group fitness classes the moment booking opens.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "discover": "tsx discovery/capture.ts",
+    "discover:headed": "tsx discovery/capture.ts --headed",
+    "redact": "tsx discovery/redact.ts"
+  },
+  "dependencies": {
+    "@supabase/ssr": "^0.12.4",
+    "@supabase/supabase-js": "^2.112.3",
+    "next": "^16.3.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "dotenv": "^16.4.7",
+    "playwright": "^1.56.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

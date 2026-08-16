@@ -1,0 +1,28 @@
+name: Nightly reindex
+
+# Reprojects every linked account's upcoming releases and prunes old ones, so
+# the per-minute tick stays a single indexed range scan.
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  reindex:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Rebuild the booking schedule
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$APP_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "::error::APP_URL and CRON_SECRET repository secrets must be set"
+            exit 1
+          fi
+
+          curl --fail-with-body --silent --show-error \
+            --max-time 90 --retry 2 --retry-delay 5 \
+            -X POST "$APP_URL/api/cron/reindex" \
+            -H "Authorization: Bearer $CRON_SECRET"
