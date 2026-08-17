@@ -167,6 +167,37 @@ In the Neon console under **Auth → Domains**, add your Vercel URL as a trusted
 domain. Confirmation and password-reset emails link back here; without it they
 point at `localhost` and appear broken to everyone but you.
 
+### Let CI deploy for you (optional)
+
+The **CI/CD** workflow lints, typechecks, tests and builds every push and pull
+request.
+Give it three more secrets and it also deploys: a preview for each pull request,
+and production for each push to `main` — but only after those checks pass, and
+only if the deployed app then answers `/api/health`.
+
+| Secret | Where to get it |
+| --- | --- |
+| `VERCEL_TOKEN` | Vercel → **Account Settings → Tokens** |
+| `VERCEL_ORG_ID` | `.vercel/project.json` after `npx vercel link` |
+| `VERCEL_PROJECT_ID` | same file |
+
+Add them under **Settings → Secrets and variables → Actions**. Leave any of them
+unset and the deploy steps skip with a note in the run log — the checks still
+run, so a fork's pull request is not blocked by secrets it cannot have.
+
+Two things to know before turning it on:
+
+- **Vercel's own Git integration also deploys**, so with both enabled every push
+  deploys twice. Pick one: either skip these secrets, or turn the integration's
+  automatic deploys off under **Project → Settings → Git** and let the workflow
+  be the only route to production.
+- **The deploy uses Vercel's environment variables, not GitHub's.** The workflow
+  runs `vercel pull` before building, so the table above stays the single place
+  those values live.
+
+If `APP_URL` is set (step 6), the post-deploy check uses it rather than the
+one-off deployment URL, which can sit behind Vercel's deployment protection.
+
 ---
 
 ## 6. Set up the cron (GitHub Actions)
@@ -268,6 +299,8 @@ If it succeeds:
 - [ ] All environment variables set in Vercel, then redeployed
 - [ ] `/api/health` reports everything configured
 - [ ] `APP_URL` and `CRON_SECRET` set as GitHub Actions secrets
+- [ ] **CI/CD** workflow green (and, if you want CI to deploy, the three
+      `VERCEL_*` secrets set and Vercel's own auto-deploy turned off)
 - [ ] **Booking cron** workflow run manually and green
 - [ ] Account created, gym account linked, one class added
 - [ ] Discovery done, `MOCK_ELIXIA=0`, one dry-run window observed

@@ -123,7 +123,7 @@ lib/
   elixia.ts             ⚠️ the only file with unverified assumptions
   mock.ts               stand-in backend so the app runs before discovery
 db/schema.sql           tables, indexes, constraints, cascades
-.github/workflows/      the every-minute tick and the nightly reindex
+.github/workflows/      CI/CD, the every-minute tick, the nightly reindex
 discovery/              local-only Playwright capture (never deployed)
 ```
 
@@ -135,7 +135,7 @@ Postgres — has never required touching the booking logic.
 ## Tests
 
 ```bash
-npm test           # 236 tests, no services required
+npm test           # 248 tests, no services required
 npm run typecheck
 npm run lint
 npm run build
@@ -174,6 +174,23 @@ Verified beyond the unit tests: built and served as a production Next.js app,
 driven through the browser with Playwright in both themes and at phone width,
 with the persisted data inspected directly to confirm no plaintext credential is
 written.
+
+### The pipeline
+
+`.github/workflows/ci.yml` runs those same four commands on every push and pull
+request, then — only on a green `main` — builds and deploys to Vercel and waits
+for the live `/api/health` to answer before calling the deploy good. Pull
+requests get a preview deployment under the same gate.
+
+Deploying is opt-in: without the `VERCEL_*` secrets those steps skip with a note
+rather than failing, so the checks still protect a fork's pull request. See
+[SETUP.md step 5](SETUP.md#let-ci-deploy-for-you-optional).
+
+Because no human reviews these merges, the pipeline's own shape is tested too:
+`tests/workflows.test.ts` asserts that the deploy jobs wait on the checks, that
+only the `main` job carries `--prod`, and that a deploy never cancels mid-flight.
+Those assertions were each confirmed to fail against a workflow edited to break
+them.
 
 ---
 
