@@ -1,25 +1,45 @@
--- Elixia Booker schema.
+-- Elixia Booker schema (Neon Postgres).
 --
--- Run this once in the Supabase SQL editor (see SETUP.md). It is idempotent, so
--- re-running it after a change is safe.
+-- Run this once against your Neon database (see SETUP.md):
 --
--- Two principles shape it:
+--   psql "$DATABASE_URL" -f db/schema.sql
 --
---  1. Row-level security enforces per-user isolation in the *database*, not just
---     in application code. Even a routing bug that hands the wrong user id to a
---     query cannot return another person's rows, because the policy checks the
---     JWT rather than the parameter.
+-- It is idempotent, so re-running it after a change is safe.
 --
---  2. Foreign keys cascade. Deleting a subscription deletes its scheduled
+-- Three things shape it:
+--
+--  1. **Identity lives in Neon Auth, data lives here.** Every row is keyed by
+--     the Neon Auth (Stack) user id, which is an opaque string rather than a
+--     uuid — hence `text`. Neon Auth mirrors its users into
+--     `neon_auth.users_sync`, but nothing here has a foreign key to it: that
+--     mirror is populated asynchronously, so a profile written seconds after
+--     signup would be rejected by the constraint it was supposed to protect.
+--     Reaping orphans is a query, not a constraint — see the bottom of this
+--     file.
+--
+--  2. **No row-level security, because nothing untrusted holds a connection.**
+--     Under Supabase the browser talked to Postgres directly with the user's
+--     JWT, so RLS was the boundary. Here every query is made by the server
+--     through one role, after `requireUser()` has resolved the session, and the
+--     browser never sees a connection string. The isolation is therefore the
+--     `user_id = $1` predicate on every statement in lib/db/neonRepo.ts — which
+--     is why it is present on every read *and* every write, including ones
+--     already narrowed by a primary key.
+--
+--  3. **Foreign keys cascade.** Deleting a subscription deletes its scheduled
 --     bookings, so a removed class cannot leave behind a pointer that the cron
 --     might still act on.
 
 -- ---------------------------------------------------------------------------
--- profiles: one row per Supabase auth user
+-- profiles: one row per Neon Auth user
 -- ---------------------------------------------------------------------------
 
 create table if not exists public.profiles (
-  id uuid primary key references auth.users on delete cascade,
+  -- The Neon Auth (Stack) user id. Created by the app on first authenticated
+  -- request, not by a database trigger: there is no local auth table to hang
+  -- one off, and a user who signed in but has no profile yet would otherwise
+  -- fail every subsequent query.
+  id text primary key,
   booking_window_days integer not null default 7
     check (booking_window_days between 0 and 60),
   time_zone text not null default 'Europe/Helsinki',
@@ -46,7 +66,7 @@ create table if not exists public.profiles (
 
 create table if not exists public.subscriptions (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references public.profiles (id) on delete cascade,
+  user_id text not null references public.profiles (id) on delete cascade,
   class_name text not null,
   center text not null,
   weekday text not null check (
@@ -80,7 +100,7 @@ create index if not exists subscriptions_user on public.subscriptions (user_id);
 
 create table if not exists public.due_entries (
   id bigserial primary key,
-  user_id uuid not null references public.profiles (id) on delete cascade,
+  user_id text not null references public.profiles (id) on delete cascade,
   subscription_id uuid not null references public.subscriptions (id) on delete cascade,
   release_at timestamptz not null,
   class_at timestamptz not null,
@@ -97,7 +117,7 @@ create index if not exists due_entries_release on public.due_entries (release_at
 
 create table if not exists public.booking_history (
   id bigserial primary key,
-  user_id uuid not null references public.profiles (id) on delete cascade,
+  user_id text not null references public.profiles (id) on delete cascade,
   -- Nulled rather than deleted when a subscription goes away: the attempt still
   -- happened, and losing that record would make a past failure unexplainable.
   subscription_id uuid references public.subscriptions (id) on delete set null,
@@ -116,56 +136,20 @@ create index if not exists booking_history_user_time
   on public.booking_history (user_id, created_at desc);
 
 -- ---------------------------------------------------------------------------
--- Row-level security
+-- Housekeeping: deleted Neon Auth users
 -- ---------------------------------------------------------------------------
 --
--- The cron uses the service-role key, which bypasses RLS by design. Every
--- browser-facing query goes through the anon key plus the user's JWT and is
--- therefore constrained by these policies.
-
-alter table public.profiles enable row level security;
-alter table public.subscriptions enable row level security;
-alter table public.due_entries enable row level security;
-alter table public.booking_history enable row level security;
-
-drop policy if exists "own profile" on public.profiles;
-create policy "own profile" on public.profiles
-  for all using (auth.uid() = id) with check (auth.uid() = id);
-
-drop policy if exists "own subscriptions" on public.subscriptions;
-create policy "own subscriptions" on public.subscriptions
-  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
-
--- Read-only from the browser: due entries are derived data, written only by the
--- server when subscriptions change or the nightly reindex runs.
-drop policy if exists "own due entries" on public.due_entries;
-create policy "own due entries" on public.due_entries
-  for select using (auth.uid() = user_id);
-
-drop policy if exists "own history" on public.booking_history;
-create policy "own history" on public.booking_history
-  for select using (auth.uid() = user_id);
-
--- ---------------------------------------------------------------------------
--- Create a profile automatically for every new auth user
--- ---------------------------------------------------------------------------
+-- Deleting an account in Neon Auth cannot cascade into these tables, because
+-- point 1 above rules out the foreign key that would carry the cascade. Neon
+-- Auth soft-deletes instead, setting `deleted_at` in its mirror, so the orphans
+-- are findable. Run this occasionally, or never — it is a few rows either way:
 --
--- Doing this in a trigger rather than in application code means a user can
--- never end up authenticated but profile-less, which would make every
--- subsequent query fail in a confusing way.
-
-create or replace function public.handle_new_user()
-returns trigger
-language plpgsql
-security definer set search_path = public
-as $$
-begin
-  insert into public.profiles (id) values (new.id) on conflict do nothing;
-  return new;
-end;
-$$;
-
-drop trigger if exists on_auth_user_created on auth.users;
-create trigger on_auth_user_created
-  after insert on auth.users
-  for each row execute function public.handle_new_user();
+--   delete from public.profiles p
+--   where not exists (
+--     select 1 from neon_auth.users_sync u
+--     where u.id = p.id and u.deleted_at is null
+--   );
+--
+-- The cascades above then clear that user's subscriptions, schedule and
+-- history. Check what it would remove before running it: a profile whose user
+-- has not yet appeared in the mirror looks identical to a deleted one.

@@ -1,7 +1,7 @@
 /**
  * In-memory Repo.
  *
- * Used by the test suite, and by `npm run dev` before Supabase is configured so
+ * Used by the test suite, and by `npm run dev` before Neon is configured so
  * the app is runnable with nothing installed. It reproduces the constraints the
  * database enforces — the duplicate-class unique index, and cascade on delete —
  * because a fake that is more permissive than production hides exactly the bugs

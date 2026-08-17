@@ -2,9 +2,9 @@
 
 Everything needed to get Elixia Booker running, in order. Roughly 20 minutes.
 
-All four services have free tiers that comfortably cover this: **Supabase**
-(database + auth), **Vercel** (hosting), **GitHub Actions** (the every-minute
-cron), and optionally **Telegram** (notifications).
+All four services have free tiers that comfortably cover this: **Neon**
+(Postgres + Neon Auth), **Vercel** (hosting), **GitHub Actions** (the
+every-minute cron), and optionally **Telegram** (notifications).
 
 > **Before you start, know the one gap:** Elixia's API has never been observed,
 > so the code that talks to it is a placeholder. The app runs today against a
@@ -20,7 +20,7 @@ cron), and optionally **Telegram** (notifications).
 git clone https://github.com/<you>/elixia_booker.git
 cd elixia_booker
 npm install
-npm test          # 214 tests, no services needed
+npm test          # 236 tests, no services needed
 ```
 
 If the tests pass, the toolchain is fine and anything that breaks later is
@@ -28,39 +28,46 @@ configuration rather than code.
 
 ---
 
-## 2. Create the Supabase project
+## 2. Create the Neon project
 
-1. Sign up at [supabase.com](https://supabase.com) and create a project. Pick a
-   region near you — every booking request makes a round trip to it, and at T-0
-   that latency is on the critical path.
-2. Wait for provisioning (~2 minutes).
-3. Open **SQL Editor** → **New query**, paste the entire contents of
-   [`supabase/schema.sql`](supabase/schema.sql), and run it.
+1. Sign up at [neon.tech](https://neon.tech) and create a project. Pick a region
+   near you — every booking request makes a round trip to it, and at T-0 that
+   latency is on the critical path.
+2. Copy the **pooled** connection string it offers you (it contains `-pooler`).
+   That is `DATABASE_URL`. The unpooled one works too, but the pooled endpoint is
+   what a serverless deployment wants.
+3. Create the tables, either by pasting
+   [`db/schema.sql`](db/schema.sql) into the Neon console's SQL editor, or:
 
-That creates four tables, the row-level-security policies that stop one user
-reading another's data, and a trigger that gives every new signup a profile.
-It is safe to re-run.
+   ```bash
+   psql "$DATABASE_URL" -f db/schema.sql
+   ```
 
-4. Go to **Project Settings → API** and copy three values:
+   That creates four tables with their indexes and cascades. It is safe to
+   re-run.
 
-| Supabase calls it | You'll use it as |
+### Turn on Neon Auth
+
+In your Neon project, open **Auth** and enable it. Neon provisions a Stack Auth
+project wired to this database and shows you three values:
+
+| Neon calls it | You'll use it as |
 | --- | --- |
-| Project URL | `NEXT_PUBLIC_SUPABASE_URL` |
-| `anon` `public` key | `NEXT_PUBLIC_SUPABASE_ANON_KEY` |
-| `service_role` `secret` key | `SUPABASE_SERVICE_ROLE_KEY` |
+| Project ID | `NEXT_PUBLIC_STACK_PROJECT_ID` |
+| Publishable client key | `NEXT_PUBLIC_STACK_PUBLISHABLE_CLIENT_KEY` |
+| Secret server key | `STACK_SECRET_SERVER_KEY` |
 
-> ⚠️ The **service_role key bypasses row-level security entirely.** It belongs
-> only in server-side environment variables. Never give it a `NEXT_PUBLIC_`
-> prefix, never paste it into client code — anyone holding it can read and write
-> every user's data.
+> ⚠️ The **secret server key acts for every user.** It belongs only in
+> server-side environment variables. Never give it a `NEXT_PUBLIC_` prefix and
+> never paste it into client code.
 
-### Email confirmation
+Neon Auth owns the accounts, and mirrors them into a `neon_auth.users_sync`
+table in the same database. This app never reads that mirror — it only needs the
+user id, which arrives with the session — but it is there if you ever want to
+join user emails onto your own tables in SQL.
 
-By default Supabase emails a confirmation link on signup, using a shared test
-SMTP server with tight rate limits. For a handful of users that is fine. To skip
-it while setting up: **Authentication → Sign In / Providers → Email** and turn
-off *Confirm email*. For real use, configure your own SMTP under
-**Authentication → Emails**.
+Sign-in, sign-up, email verification and password reset are served by Neon Auth
+itself at `/handler/*`, which is why this app has no password form of its own.
 
 ---
 
@@ -85,9 +92,10 @@ Keep both. What they do:
 
 ```bash
 cat > .env.local <<'EOF'
-NEXT_PUBLIC_SUPABASE_URL=https://xxxxx.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
-SUPABASE_SERVICE_ROLE_KEY=eyJ...
+DATABASE_URL=postgresql://…@ep-….neon.tech/neondb?sslmode=require
+NEXT_PUBLIC_STACK_PROJECT_ID=…
+NEXT_PUBLIC_STACK_PUBLISHABLE_CLIENT_KEY=pck_…
+STACK_SECRET_SERVER_KEY=ssk_…
 ENCRYPTION_KEY=<from step 3>
 CRON_SECRET=<from step 3>
 MOCK_ELIXIA=1
@@ -131,9 +139,10 @@ Variables** (Production *and* Preview):
 
 | Variable | Value |
 | --- | --- |
-| `NEXT_PUBLIC_SUPABASE_URL` | from step 2 |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | from step 2 |
-| `SUPABASE_SERVICE_ROLE_KEY` | from step 2 |
+| `DATABASE_URL` | from step 2 |
+| `NEXT_PUBLIC_STACK_PROJECT_ID` | from step 2 |
+| `NEXT_PUBLIC_STACK_PUBLISHABLE_CLIENT_KEY` | from step 2 |
+| `STACK_SECRET_SERVER_KEY` | from step 2 |
 | `ENCRYPTION_KEY` | from step 3 |
 | `CRON_SECRET` | from step 3 |
 | `MOCK_ELIXIA` | `1` for now |
@@ -152,11 +161,11 @@ curl https://<your-app>.vercel.app/api/health
 
 Every field should read `true` except `apiDiscovered` (see step 8).
 
-### Add your app URL to Supabase
+### Add your app URL to Neon Auth
 
-**Authentication → URL Configuration** → set **Site URL** to your Vercel URL and
-add it under **Redirect URLs**. Confirmation emails link back here; without it
-they point at `localhost` and appear broken to everyone but you.
+In the Neon console under **Auth → Domains**, add your Vercel URL as a trusted
+domain. Confirmation and password-reset emails link back here; without it they
+point at `localhost` and appear broken to everyone but you.
 
 ---
 
@@ -254,8 +263,8 @@ If it succeeds:
 ## Checklist
 
 - [ ] `npm test` passes locally
-- [ ] `supabase/schema.sql` run in the SQL editor
-- [ ] Site URL and Redirect URLs set in Supabase auth settings
+- [ ] `db/schema.sql` run against the Neon database
+- [ ] Neon Auth enabled, and your app URL added as a trusted domain
 - [ ] All environment variables set in Vercel, then redeployed
 - [ ] `/api/health` reports everything configured
 - [ ] `APP_URL` and `CRON_SECRET` set as GitHub Actions secrets
@@ -268,15 +277,15 @@ If it succeeds:
 
 ## Troubleshooting
 
-**"Supabase is not configured"** — `NEXT_PUBLIC_*` variables are missing.
+**"Neon Auth is not configured"** — `NEXT_PUBLIC_*` variables are missing.
 They're baked in at build time, so you must **redeploy** after adding them;
 setting them on an existing deployment does nothing.
 
-**Signup succeeds but no email arrives** — Supabase's shared SMTP is heavily rate
-limited. Turn off *Confirm email* while testing, or configure your own SMTP.
+**The build fails with "Invalid project ID"** — `NEXT_PUBLIC_STACK_PROJECT_ID`
+is malformed rather than absent. Re-copy it from the Neon console.
 
-**Confirmation link points at localhost** — set **Site URL** in Supabase
-(step 5).
+**Confirmation link points at localhost** — add your deployed URL as a trusted
+domain in Neon Auth (step 5).
 
 **The cron workflow fails with 401** — `CRON_SECRET` differs between GitHub and
 Vercel. They must match exactly; re-paste both.
@@ -289,7 +298,7 @@ booking run.
 days of repository inactivity. Push any commit to re-enable.
 
 **"No database configured" banner** — the app fell back to in-memory storage
-because the Supabase variables are missing. Data will not survive.
+because `DATABASE_URL` is missing. Data will not survive.
 
 **A booking was missed** — check the history entry's offset from T-0. A large
 positive number means the trigger arrived late (GitHub queueing); `too-early`

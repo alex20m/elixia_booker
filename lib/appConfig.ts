@@ -38,7 +38,7 @@ function flag(value: string | undefined): boolean {
 /**
  * A single in-memory repo shared across hot reloads in dev.
  *
- * Without it every edit would drop the data. Only ever used when Supabase is
+ * Without it every edit would drop the data. Only ever used when Neon is
  * not configured.
  */
 const globalForRepo = globalThis as unknown as { __elixiaDevRepo?: Repo };

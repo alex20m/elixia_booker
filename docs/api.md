@@ -284,3 +284,4 @@ assume answers to any of them:
 | 2026-08-13 | Rebuilt as a hosted multi-user app; mock backend added so the app is usable before discovery. | Claude |
 | 2026-08-13 | Ported to Next.js on Vercel with Upstash Redis. Adapter unchanged — the blanks below are still the only thing missing. | Claude |
 | 2026-08-16 | Moved to Supabase (Postgres + Auth) and GitHub Actions cron. Adapter still unchanged. | Claude |
+| 2026-08-17 | Moved to Neon (Postgres + Neon Auth). Adapter still unchanged. | Claude |

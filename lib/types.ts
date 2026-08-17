@@ -160,7 +160,7 @@ export interface SealedElixiaSecret {
 /** Whether a user's Elixia account is usable right now. */
 export type ElixiaStatus = 'unlinked' | 'ok' | 'expired';
 
-/** One account, keyed by the Supabase auth user id. */
+/** One account, keyed by the Neon Auth user id. */
 export interface Profile {
   id: string;
   bookingWindowDays: number;

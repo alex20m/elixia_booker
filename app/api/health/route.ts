@@ -1,5 +1,6 @@
 import { API_DISCOVERED } from '@/lib/elixia';
-import { publicSupabaseConfig } from '@/lib/db/clients';
+import { authConfigured } from '@/lib/auth/stack';
+import { databaseConfigured } from '@/lib/db/neon';
 import { handle, json } from '@/lib/http';
 
 export const runtime = 'nodejs';
@@ -13,8 +14,8 @@ export async function GET(): Promise<Response> {
       apiDiscovered: API_DISCOVERED,
       mock: (process.env.MOCK_ELIXIA ?? '') === '1',
       dryRun: (process.env.DRY_RUN ?? '') === '1',
-      supabaseConfigured: publicSupabaseConfig() !== null,
-      serviceRoleConfigured: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
+      databaseConfigured: databaseConfigured(),
+      authConfigured: authConfigured(),
       cronConfigured: Boolean(process.env.CRON_SECRET),
     }),
   );

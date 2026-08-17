@@ -1,8 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { SupabaseClient } from '@supabase/supabase-js';
-import { createBrowserSupabase } from '@/lib/db/clients';
+import { Suspense, useCallback, useEffect, useState } from 'react';
+import { useUser, type CurrentUser } from '@stackframe/stack';
 import type { DashboardView } from '@/lib/service';
 import type { Weekday } from '@/lib/types';
 
@@ -39,170 +38,108 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
 
 const titleCase = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
 
+/**
+ * Inlined at build time, so it is a constant here rather than a lookup.
+ *
+ * The check has to happen before `useUser()` runs: that hook needs the provider
+ * in app/layout.tsx, which itself only exists when Neon Auth is configured.
+ */
+const AUTH_CONFIGURED = Boolean(process.env.NEXT_PUBLIC_STACK_PROJECT_ID);
+
 export default function Page() {
-  const supabase = useMemo<SupabaseClient | null>(() => {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    return url && anonKey ? createBrowserSupabase(url, anonKey) : null;
-  }, []);
-
-  const [signedIn, setSignedIn] = useState(false);
-  const [view, setView] = useState<DashboardView | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  const refresh = useCallback(async () => {
-    if (!supabase) {
-      setLoading(false);
-      return;
-    }
-    const { data } = await supabase.auth.getSession();
-    setSignedIn(Boolean(data.session));
-
-    if (data.session) {
-      try {
-        setView(await api<DashboardView>('/api/me'));
-      } catch {
-        setView(null);
-      }
-    } else {
-      setView(null);
-    }
-    setLoading(false);
-  }, [supabase]);
-
-  useEffect(() => {
-    void refresh();
-    // Keeps the UI in step when Supabase refreshes or drops the session in
-    // another tab, rather than leaving a stale dashboard on screen.
-    const subscription = supabase?.auth.onAuthStateChange(() => void refresh());
-    return () => subscription?.data.subscription.unsubscribe();
-  }, [supabase, refresh]);
-
-  if (!supabase) {
+  if (!AUTH_CONFIGURED) {
     return (
       <>
         <h1>Elixia Booker</h1>
         <div className="banner banner-err">
-          Supabase is not configured. Set <code>NEXT_PUBLIC_SUPABASE_URL</code> and{' '}
-          <code>NEXT_PUBLIC_SUPABASE_ANON_KEY</code>, then reload. See <code>SETUP.md</code>.
+          Neon Auth is not configured. Set <code>NEXT_PUBLIC_STACK_PROJECT_ID</code>,{' '}
+          <code>NEXT_PUBLIC_STACK_PUBLISHABLE_CLIENT_KEY</code> and{' '}
+          <code>STACK_SECRET_SERVER_KEY</code>, then reload. See <code>SETUP.md</code>.
         </div>
       </>
     );
   }
 
-  if (loading) return <p className="sub">Loading…</p>;
-  if (!signedIn) return <AuthPanel supabase={supabase} onSignedIn={refresh} />;
-  if (!view) return <p className="sub">Loading your account…</p>;
-
-  return <Dashboard supabase={supabase} view={view} refresh={refresh} />;
+  // useUser() suspends while it resolves the session from the cookie.
+  return (
+    <Suspense fallback={<p className="sub">Loading…</p>}>
+      <Authenticated />
+    </Suspense>
+  );
 }
 
-function AuthPanel({
-  supabase,
-  onSignedIn,
-}: {
-  supabase: SupabaseClient;
-  onSignedIn: () => Promise<void>;
-}) {
-  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
-  const [busy, setBusy] = useState(false);
+function Authenticated() {
+  // Re-renders on its own when the session changes — including in another tab —
+  // so a signed-out session cannot leave a stale dashboard on screen.
+  const user = useUser();
+  const [view, setView] = useState<DashboardView | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const submit = async () => {
-    setError('');
-    setNotice('');
-    setBusy(true);
-    try {
-      if (mode === 'signup') {
-        const { data, error: signUpError } = await supabase.auth.signUp({ email, password });
-        if (signUpError) throw signUpError;
-        // With email confirmation on there is no session yet — say so, rather
-        // than leaving the user staring at an unchanged form.
-        if (!data.session) {
-          setNotice('Check your email to confirm the account, then sign in.');
-          setMode('signin');
-          return;
-        }
-      } else {
-        const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-        if (signInError) throw signInError;
-      }
-      setPassword('');
-      await onSignedIn();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
+  // Keyed on the id, not the user object: the hook is free to hand back a new
+  // object on every render, and depending on that identity would re-create
+  // `refresh`, re-fire the effect, and fetch the dashboard in a loop.
+  const userId = user?.id ?? null;
+
+  const refresh = useCallback(async () => {
+    if (!userId) {
+      setView(null);
+      setLoading(false);
+      return;
     }
-  };
+    try {
+      setView(await api<DashboardView>('/api/me'));
+    } catch {
+      setView(null);
+    }
+    setLoading(false);
+  }, [userId]);
 
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  if (!user) return <AuthPanel />;
+  if (loading) return <p className="sub">Loading…</p>;
+  if (!view) return <p className="sub">Loading your account…</p>;
+
+  return <Dashboard user={user} view={view} refresh={refresh} />;
+}
+
+/**
+ * The sign-in invitation.
+ *
+ * The forms themselves live at /handler/*, served by Neon Auth, which is what
+ * makes email verification and password reset work at all — there is no mail
+ * sender in this app to hand-roll them with.
+ */
+function AuthPanel() {
   return (
     <>
       <h1>Elixia Booker</h1>
       <p className="sub">Books your group fitness classes the moment booking opens.</p>
       <div className="card">
-        <h2>{mode === 'signin' ? 'Sign in' : 'Create an account'}</h2>
-        {error && <div className="banner banner-err">{error}</div>}
-        {notice && <div className="banner banner-warn">{notice}</div>}
-        <div className="row">
-          <div>
-            <label htmlFor="email">Email</label>
-            <input
-              id="email"
-              type="email"
-              autoComplete="username"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-          </div>
-        </div>
-        <div className="row">
-          <div>
-            <label htmlFor="password">Password</label>
-            <input
-              id="password"
-              type="password"
-              autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void submit();
-              }}
-            />
-          </div>
-        </div>
-        <button id="auth-btn" onClick={() => void submit()} disabled={busy}>
-          {busy ? 'Working…' : mode === 'signin' ? 'Sign in' : 'Create account'}
-        </button>{' '}
-        <button
-          className="ghost"
-          id="auth-toggle"
-          onClick={() => {
-            setMode(mode === 'signin' ? 'signup' : 'signin');
-            setError('');
-            setNotice('');
-          }}
-        >
-          {mode === 'signin' ? 'Create an account' : 'I already have an account'}
-        </button>
-        <p className="sub" style={{ margin: '14px 0 0', fontSize: 13 }}>
-          This is your Booker account — separate from your Elixia login. You link the gym
-          account after signing in.
+        <h2>Sign in</h2>
+        <p className="sub" style={{ marginTop: 0 }}>
+          Your Booker account is separate from your Elixia login. You link the gym account
+          after signing in.
         </p>
+        <a className="btn" id="auth-btn" href="/handler/sign-in">
+          Sign in
+        </a>{' '}
+        <a className="btn ghost" id="auth-toggle" href="/handler/sign-up">
+          Create an account
+        </a>
       </div>
     </>
   );
 }
 
 function Dashboard({
-  supabase,
+  user,
   view,
   refresh,
 }: {
-  supabase: SupabaseClient;
+  user: CurrentUser;
   view: DashboardView;
   refresh: () => Promise<void>;
 }) {
@@ -217,16 +154,16 @@ function Dashboard({
             {view.account.elixiaEmail || 'No gym account linked'}
           </p>
         </div>
-        <button
-          className="ghost"
-          id="signout-btn"
-          onClick={async () => {
-            await supabase.auth.signOut();
-            await refresh();
-          }}
-        >
-          Sign out
-        </button>
+        <div>
+          {/* Password changes, email addresses and account deletion all live in
+              Neon Auth's own settings page rather than being reimplemented. */}
+          <a className="btn ghost" id="account-btn" href="/handler/account-settings">
+            Account
+          </a>{' '}
+          <button className="ghost" id="signout-btn" onClick={() => void user.signOut()}>
+            Sign out
+          </button>
+        </div>
       </div>
 
       {view.ephemeralStore && (
