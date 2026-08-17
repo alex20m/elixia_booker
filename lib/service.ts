@@ -14,7 +14,7 @@
 import { API_DISCOVERED, ElixiaClient, type BookingBackend } from './elixia';
 import { MockElixiaClient } from './mock';
 import { importEncryptionKey, decryptJson, encryptJson, DecryptionError } from './auth/crypto';
-import { DuplicateSubscriptionError, type Repo } from './db/repo';
+import { DuplicateSubscriptionError } from './db/repo';
 import { releasesFor, releasesInRange } from './planner';
 import { executeBooking, describeReport } from './booking';
 import { Logger } from './logger';

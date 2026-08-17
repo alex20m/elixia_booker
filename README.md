@@ -137,6 +137,7 @@ Postgres — has never required touching the booking logic.
 ```bash
 npm test           # 236 tests, no services required
 npm run typecheck
+npm run lint
 npm run build
 ```
 
