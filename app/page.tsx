@@ -1,6 +1,7 @@
 'use client';
 
 import { Suspense, useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useUser, type CurrentUser } from '@stackframe/stack';
 import type { DashboardView } from '@/lib/service';
 import type { Weekday } from '@/lib/types';
@@ -37,6 +38,15 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 const titleCase = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** The dashboard, or null if it could not be loaded (signed out, server down). */
+async function loadDashboard(): Promise<DashboardView | null> {
+  try {
+    return await api<DashboardView>('/api/me');
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Inlined at build time, so it is a constant here rather than a lookup.
@@ -80,23 +90,29 @@ function Authenticated() {
   // `refresh`, re-fire the effect, and fetch the dashboard in a loop.
   const userId = user?.id ?? null;
 
+  // Handed to the children, which call it after every mutation.
   const refresh = useCallback(async () => {
-    if (!userId) {
-      setView(null);
-      setLoading(false);
-      return;
-    }
-    try {
-      setView(await api<DashboardView>('/api/me'));
-    } catch {
-      setView(null);
-    }
-    setLoading(false);
-  }, [userId]);
+    setView(await loadDashboard());
+  }, []);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    if (!userId) return;
+
+    // `active` guards against a slow response landing after the signed-in user
+    // changed, which would otherwise show one account another's dashboard. The
+    // state updates live in the continuation rather than the effect body, which
+    // is also what keeps this off React's cascading-render path.
+    let active = true;
+    void loadDashboard().then((next) => {
+      if (!active) return;
+      setView(next);
+      setLoading(false);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [userId]);
 
   if (!user) return <AuthPanel />;
   if (loading) return <p className="sub">Loading…</p>;
@@ -123,12 +139,12 @@ function AuthPanel() {
           Your Booker account is separate from your Elixia login. You link the gym account
           after signing in.
         </p>
-        <a className="btn" id="auth-btn" href="/handler/sign-in">
+        <Link className="btn" id="auth-btn" href="/handler/sign-in">
           Sign in
-        </a>{' '}
-        <a className="btn ghost" id="auth-toggle" href="/handler/sign-up">
+        </Link>{' '}
+        <Link className="btn ghost" id="auth-toggle" href="/handler/sign-up">
           Create an account
-        </a>
+        </Link>
       </div>
     </>
   );
@@ -157,9 +173,9 @@ function Dashboard({
         <div>
           {/* Password changes, email addresses and account deletion all live in
               Neon Auth's own settings page rather than being reimplemented. */}
-          <a className="btn ghost" id="account-btn" href="/handler/account-settings">
+          <Link className="btn ghost" id="account-btn" href="/handler/account-settings">
             Account
-          </a>{' '}
+          </Link>{' '}
           <button className="ghost" id="signout-btn" onClick={() => void user.signOut()}>
             Sign out
           </button>
