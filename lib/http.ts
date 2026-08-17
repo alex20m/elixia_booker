@@ -7,8 +7,9 @@
  */
 
 import { loadAppConfig, ConfigError, type AppConfig } from './appConfig';
-import { createRouteSupabase, createServiceSupabase } from './db/clients';
-import { createSupabaseRepo } from './db/supabaseRepo';
+import { stackServerApp } from './auth/stack';
+import { neonSql } from './db/neon';
+import { createNeonRepo } from './db/neonRepo';
 import { getOrCreateProfile, ServiceError } from './service';
 import type { Profile } from './types';
 
@@ -30,23 +31,30 @@ export interface Session {
  * Resolve the signed-in user, or throw a ServiceError the caller turns into a
  * response. Returning null instead would let a route forget to check.
  *
- * The repo is built from the *request-scoped* Supabase client, so every query
- * carries the user's JWT and row-level security applies. A bug that passed the
- * wrong user id would still return nothing.
+ * This is the boundary that decides whose data a request may touch: everything
+ * downstream works from `profile.id`, and every statement the repo issues is
+ * scoped to it. There is no second line of defence in the database — the
+ * connection belongs to the app, not to the visitor — so this function is the
+ * one place a mistake here would matter.
  */
 export async function requireUser(): Promise<Session> {
-  const supabase = await createRouteSupabase();
-  if (!supabase) {
+  const auth = stackServerApp();
+  if (!auth) {
     throw new ConfigError(
-      'Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.',
+      'Neon Auth is not configured. Set NEXT_PUBLIC_STACK_PROJECT_ID, ' +
+        'NEXT_PUBLIC_STACK_PUBLISHABLE_CLIENT_KEY and STACK_SECRET_SERVER_KEY.',
     );
   }
 
-  const { data, error } = await supabase.auth.getUser();
-  if (error || !data.user) throw new ServiceError('Not signed in', 401);
+  const user = await auth.getUser();
+  if (!user) throw new ServiceError('Not signed in', 401);
 
-  const config = loadAppConfig({ repo: createSupabaseRepo(supabase) });
-  const profile = await getOrCreateProfile(config, data.user.id);
+  // No DATABASE_URL is not fatal here: loadAppConfig falls back to the
+  // in-memory repo, which keeps `npm run dev` usable before Neon exists. The
+  // dashboard warns about it, because that data does not survive.
+  const sql = neonSql();
+  const config = loadAppConfig(sql ? { repo: createNeonRepo(sql) } : {});
+  const profile = await getOrCreateProfile(config, user.id);
 
   return { config, profile, nowMs: Date.now() };
 }
@@ -68,19 +76,20 @@ export async function handle(fn: () => Promise<Response>): Promise<Response> {
 }
 
 /**
- * Config for the cron, backed by the service-role client.
+ * Config for the cron.
  *
- * The cron legitimately acts for every user at once, so it bypasses row-level
- * security. That is precisely why the endpoint is secret-guarded.
+ * The cron has no session — it legitimately acts for every user at once, which
+ * is precisely why the endpoint is secret-guarded rather than merely
+ * unauthenticated. Unlike `requireUser`, it insists on a real database: a tick
+ * that silently booked nothing out of an empty in-memory store would look
+ * healthy in the logs while every class went unbooked.
  */
 export function loadCronConfig(): AppConfig {
-  const supabase = createServiceSupabase();
-  if (!supabase) {
-    throw new ConfigError(
-      'Supabase service role is not configured. Set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.',
-    );
+  const sql = neonSql();
+  if (!sql) {
+    throw new ConfigError('No database is configured. Set DATABASE_URL to your Neon connection string.');
   }
-  return loadAppConfig({ repo: createSupabaseRepo(supabase) });
+  return loadAppConfig({ repo: createNeonRepo(sql) });
 }
 
 /**

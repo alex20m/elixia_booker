@@ -3,7 +3,7 @@ import { assertCronAuthorised } from '../lib/http';
 import { ServiceError } from '../lib/service';
 
 /**
- * The cron endpoints are the one part of the app not protected by Supabase
+ * The cron endpoints are the one part of the app not protected by Neon
  * auth: they run for every user at once, with the service-role key, bypassing
  * row-level security. If the guard were weak, anyone could fire other people's
  * booking attempts at will — or hammer Elixia from the app's address.

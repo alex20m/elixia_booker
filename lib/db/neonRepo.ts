@@ -1,0 +1,321 @@
+/**
+ * Neon Postgres implementation of the Repo.
+ *
+ * Every statement is parameterised and every one of them names the user — reads
+ * and writes alike, including ones already narrowed by a primary key. Under
+ * Supabase that redundancy was belt-and-braces behind row-level security; here
+ * it *is* the isolation, because the app holds a single database role and the
+ * browser never speaks to Postgres at all. See the header of db/schema.sql.
+ *
+ * `date` columns are read through `to_char`. Drivers parse Postgres `date` into
+ * a `Date` at UTC midnight, and a class date that becomes an instant is a class
+ * date that can move a day when it is rendered or compared in another zone.
+ * Classes are calendar-scheduled, so they stay strings from end to end.
+ */
+
+import { DuplicateSubscriptionError, type NewSubscription, type Repo } from './repo';
+import {
+  isInvalidTextRepresentation,
+  isUniqueViolation,
+  toMs,
+  type Sql,
+  type SqlRow,
+  type Statement,
+} from './sql';
+import type {
+  BookingHistoryEntry,
+  DueEntry,
+  ElixiaStatus,
+  Profile,
+  Subscription,
+  Weekday,
+} from '../types';
+
+const PROFILE_COLUMNS = `
+  id, booking_window_days, time_zone, telegram_chat_id,
+  elixia_email, elixia_secret, elixia_status, elixia_checked_at
+`;
+
+const SUBSCRIPTION_COLUMNS = `
+  id, user_id, class_name, center, weekday, start_time,
+  on_full, priority, enabled, booking_window_days, created_at
+`;
+
+const str = (value: unknown): string => String(value);
+const num = (value: unknown): number => Number(value);
+
+const toProfile = (row: SqlRow): Profile => ({
+  id: str(row.id),
+  bookingWindowDays: num(row.booking_window_days),
+  timeZone: str(row.time_zone),
+  ...(row.telegram_chat_id ? { telegramChatId: str(row.telegram_chat_id) } : {}),
+  ...(row.elixia_email ? { elixiaEmail: str(row.elixia_email) } : {}),
+  ...(row.elixia_secret ? { elixiaSecret: str(row.elixia_secret) } : {}),
+  elixiaStatus: str(row.elixia_status) as ElixiaStatus,
+  ...(row.elixia_checked_at ? { elixiaCheckedAtMs: toMs(row.elixia_checked_at) } : {}),
+});
+
+const toSubscription = (row: SqlRow): Subscription => ({
+  id: str(row.id),
+  userId: str(row.user_id),
+  className: str(row.class_name),
+  center: str(row.center),
+  weekday: str(row.weekday) as Weekday,
+  startTime: str(row.start_time),
+  onFull: row.on_full === 'skip' ? 'skip' : 'waitlist',
+  priority: num(row.priority),
+  enabled: Boolean(row.enabled),
+  ...(row.booking_window_days !== null && row.booking_window_days !== undefined
+    ? { bookingWindowDays: num(row.booking_window_days) }
+    : {}),
+  createdAtMs: toMs(row.created_at),
+});
+
+const toDueEntry = (row: SqlRow): DueEntry => ({
+  userId: str(row.user_id),
+  subscriptionId: str(row.subscription_id),
+  releaseEpochMs: toMs(row.release_at),
+  classEpochMs: toMs(row.class_at),
+  classDate: str(row.class_date),
+  ...(row.release_note === 'gap' || row.release_note === 'ambiguous'
+    ? { releaseNote: row.release_note }
+    : {}),
+});
+
+const toHistoryEntry = (row: SqlRow): BookingHistoryEntry => ({
+  atMs: toMs(row.created_at),
+  subscriptionId: row.subscription_id === null ? null : str(row.subscription_id),
+  className: str(row.class_name),
+  classDate: str(row.class_date),
+  startTime: str(row.start_time),
+  outcome: str(row.outcome) as BookingHistoryEntry['outcome'],
+  ...(row.detail ? { detail: str(row.detail) } : {}),
+  attempts: num(row.attempts),
+  firstAttemptOffsetMs:
+    row.first_attempt_offset_ms === null ? null : num(row.first_attempt_offset_ms),
+  dryRun: Boolean(row.dry_run),
+});
+
+const iso = (epochMs: number): string => new Date(epochMs).toISOString();
+
+/**
+ * Rows a bad id cannot match.
+ *
+ * A subscription id arrives from the URL, so it need not be a uuid at all.
+ * Postgres rejects the cast rather than returning nothing, which would surface
+ * as a 500 where the honest answer is "no such class".
+ */
+async function rowsOrNoneForBadId(run: () => Promise<SqlRow[]>): Promise<SqlRow[]> {
+  try {
+    return await run();
+  } catch (err) {
+    if (isInvalidTextRepresentation(err)) return [];
+    throw err;
+  }
+}
+
+export function createNeonRepo(sql: Sql): Repo {
+  return {
+    async getProfile(userId) {
+      const rows = await sql.query(
+        `select ${PROFILE_COLUMNS} from public.profiles where id = $1`,
+        [userId],
+      );
+      return rows[0] ? toProfile(rows[0]) : null;
+    },
+
+    async upsertProfile(profile) {
+      // Every column is written on conflict, not just the ones that happen to
+      // be set: unlinking is an upsert whose whole purpose is to blank the
+      // stored credentials, and a partial update would leave the password
+      // sitting in the row it was supposed to erase.
+      await sql.query(
+        `insert into public.profiles (
+           id, booking_window_days, time_zone, telegram_chat_id,
+           elixia_email, elixia_secret, elixia_status, elixia_checked_at
+         )
+         values ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz)
+         on conflict (id) do update set
+           booking_window_days = excluded.booking_window_days,
+           time_zone = excluded.time_zone,
+           telegram_chat_id = excluded.telegram_chat_id,
+           elixia_email = excluded.elixia_email,
+           elixia_secret = excluded.elixia_secret,
+           elixia_status = excluded.elixia_status,
+           elixia_checked_at = excluded.elixia_checked_at`,
+        [
+          profile.id,
+          profile.bookingWindowDays,
+          profile.timeZone,
+          profile.telegramChatId ?? null,
+          profile.elixiaEmail ?? null,
+          profile.elixiaSecret ?? null,
+          profile.elixiaStatus,
+          profile.elixiaCheckedAtMs ? iso(profile.elixiaCheckedAtMs) : null,
+        ],
+      );
+    },
+
+    async listLinkedProfiles() {
+      const rows = await sql.query(
+        `select ${PROFILE_COLUMNS} from public.profiles where elixia_status = 'ok'`,
+      );
+      return rows.map(toProfile);
+    },
+
+    async listSubscriptions(userId) {
+      const rows = await sql.query(
+        `select ${SUBSCRIPTION_COLUMNS} from public.subscriptions
+         where user_id = $1
+         order by priority asc, created_at asc`,
+        [userId],
+      );
+      return rows.map(toSubscription);
+    },
+
+    async createSubscription(subscription: NewSubscription) {
+      try {
+        const rows = await sql.query(
+          `insert into public.subscriptions (
+             user_id, class_name, center, weekday, start_time, on_full, priority, booking_window_days
+           )
+           values ($1, $2, $3, $4, $5, $6, $7, $8)
+           returning ${SUBSCRIPTION_COLUMNS}`,
+          [
+            subscription.userId,
+            subscription.className,
+            subscription.center,
+            subscription.weekday,
+            subscription.startTime,
+            subscription.onFull,
+            subscription.priority,
+            subscription.bookingWindowDays ?? null,
+          ],
+        );
+        return toSubscription(rows[0]!);
+      } catch (err) {
+        // The unique index is the real guard: it also stops two concurrent
+        // requests from both getting through the app-level check.
+        if (isUniqueViolation(err)) throw new DuplicateSubscriptionError();
+        throw err;
+      }
+    },
+
+    async deleteSubscription(userId, id) {
+      const rows = await rowsOrNoneForBadId(() =>
+        sql.query(
+          `delete from public.subscriptions where user_id = $1 and id = $2::uuid returning id`,
+          [userId, id],
+        ),
+      );
+      return rows.length > 0;
+    },
+
+    async setSubscriptionEnabled(userId, id, enabled) {
+      const rows = await rowsOrNoneForBadId(() =>
+        sql.query(
+          `update public.subscriptions set enabled = $3
+           where user_id = $1 and id = $2::uuid
+           returning id`,
+          [userId, id, enabled],
+        ),
+      );
+      return rows.length > 0;
+    },
+
+    async replaceDueEntries(userId, entries) {
+      const clear: Statement = {
+        text: `delete from public.due_entries where user_id = $1`,
+        params: [userId],
+      };
+
+      if (entries.length === 0) {
+        await sql.query(clear.text, clear.params);
+        return;
+      }
+
+      // Delete-then-insert rather than upsert: a subscription that was paused
+      // or retimed must not leave its old release behind. Both halves go in one
+      // transaction so a failure cannot leave the account unscheduled.
+      const params: unknown[] = [userId];
+      const tuples = entries.map((entry) => {
+        const at = params.length + 1;
+        params.push(
+          entry.subscriptionId,
+          iso(entry.releaseEpochMs),
+          iso(entry.classEpochMs),
+          entry.classDate,
+          entry.releaseNote ?? null,
+        );
+        return `($1, $${at}::uuid, $${at + 1}::timestamptz, $${at + 2}::timestamptz, $${at + 3}::date, $${at + 4})`;
+      });
+
+      await sql.transaction([
+        clear,
+        {
+          text: `insert into public.due_entries (
+                   user_id, subscription_id, release_at, class_at, class_date, release_note
+                 )
+                 values ${tuples.join(', ')}`,
+          params,
+        },
+      ]);
+    },
+
+    async claimDue(fromMs, toMs) {
+      const rows = await sql.query(
+        `select user_id, subscription_id, release_at, class_at,
+                to_char(class_date, 'YYYY-MM-DD') as class_date, release_note
+         from public.due_entries
+         where release_at >= $1::timestamptz and release_at <= $2::timestamptz
+         order by release_at asc`,
+        [iso(fromMs), iso(toMs)],
+      );
+      return rows.map(toDueEntry);
+    },
+
+    async pruneDueEntries(beforeMs) {
+      const rows = await sql.query(
+        `delete from public.due_entries where release_at < $1::timestamptz returning id`,
+        [iso(beforeMs)],
+      );
+      return rows.length;
+    },
+
+    async appendHistory(userId, entry) {
+      await sql.query(
+        `insert into public.booking_history (
+           user_id, subscription_id, class_name, class_date, start_time,
+           outcome, detail, attempts, first_attempt_offset_ms, dry_run, created_at
+         )
+         values ($1, $2::uuid, $3, $4::date, $5, $6, $7, $8, $9, $10, $11::timestamptz)`,
+        [
+          userId,
+          entry.subscriptionId,
+          entry.className,
+          entry.classDate,
+          entry.startTime,
+          entry.outcome,
+          entry.detail ?? null,
+          entry.attempts,
+          entry.firstAttemptOffsetMs,
+          entry.dryRun,
+          iso(entry.atMs),
+        ],
+      );
+    },
+
+    async listHistory(userId, limit = 50) {
+      const rows = await sql.query(
+        `select subscription_id, class_name, to_char(class_date, 'YYYY-MM-DD') as class_date,
+                start_time, outcome, detail, attempts, first_attempt_offset_ms, dry_run, created_at
+         from public.booking_history
+         where user_id = $1
+         order by created_at desc
+         limit $2`,
+        [userId, limit],
+      );
+      return rows.map(toHistoryEntry);
+    },
+  };
+}

@@ -125,7 +125,12 @@ select:focus {
   }
 }
 
-button {
+/* `a.btn` exists because the sign-in and account links navigate to Neon Auth's
+   own pages. Those are navigations, not actions, so they must be anchors —
+   openable in a new tab, and reachable the way every other link is — while
+   still looking like the buttons beside them. */
+button,
+a.btn {
   padding: 9px 16px;
   border: 0;
   border-radius: 7px;
@@ -136,7 +141,13 @@ button {
   cursor: pointer;
 }
 
-button:hover:not(:disabled) {
+a.btn {
+  display: inline-block;
+  text-decoration: none;
+}
+
+button:hover:not(:disabled),
+a.btn:hover {
   filter: brightness(1.08);
 }
 
@@ -145,7 +156,8 @@ button:disabled {
   cursor: default;
 }
 
-button.ghost {
+button.ghost,
+a.btn.ghost {
   background: transparent;
   color: var(--muted);
   border: 1px solid var(--border);

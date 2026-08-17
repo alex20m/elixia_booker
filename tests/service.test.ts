@@ -19,7 +19,7 @@ import type { AppConfig } from '../lib/appConfig';
 import type { Profile, Subscription } from '../lib/types';
 
 /**
- * The application's behaviour without HTTP or Supabase: create a profile, link
+ * The application's behaviour without HTTP or a database: create a profile, link
  * a gym account, manage classes, let the cron book them.
  *
  * The in-memory repo reproduces the constraints the real schema enforces — the

@@ -1,10 +1,10 @@
 /**
- * The application's behaviour, independent of HTTP and of Supabase.
+ * The application's behaviour, independent of HTTP and of the database.
  *
  * Route handlers stay thin: authenticate, call one of these, serialise.
  *
  * Note the separation this version is built around: **who you are in this app**
- * (a Supabase auth user) is decoupled from **your gym account** (Elixia
+ * (a Neon Auth user) is decoupled from **your gym account** (Elixia
  * credentials you link afterwards). That is why `linkElixia` exists as its own
  * operation rather than being folded into sign-in — the app has to stay usable
  * even if Elixia's login turns out to be unreachable from a server, which is

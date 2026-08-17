@@ -3,7 +3,7 @@
  *
  * Everything above this interface is storage-agnostic, which is what let the app
  * move from Workers KV to Redis to Postgres without the booking logic changing.
- * Two implementations exist: Supabase Postgres (production) and in-memory
+ * Two implementations exist: Neon Postgres (production) and in-memory
  * (tests, and local dev before a database is configured).
  *
  * The operations are shaped around what the app actually does. In particular

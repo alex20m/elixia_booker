@@ -3,8 +3,8 @@
 Books your group fitness classes at [Elixia](https://www.elixia.fi) (SATS Group)
 the moment booking opens.
 
-**TypeScript · Next.js · Supabase · Vercel · GitHub Actions** — all on free
-tiers.
+**TypeScript · Next.js · Neon (Postgres + Auth) · Vercel · GitHub Actions** — all
+on free tiers.
 
 You deploy it once. After that anyone you share the URL with creates an account,
 links their gym login, picks their classes, and is done.
@@ -30,19 +30,19 @@ replacing it.
 
 ## Two logins, on purpose
 
-Your **Booker account** (Supabase Auth) is separate from your **Elixia
+Your **Booker account** (Neon Auth) is separate from your **Elixia
 credentials**, which you link afterwards.
 
 That is not ceremony for its own sake. If sign-in went through Elixia directly,
 app access would be hostage to an API nobody has verified: were Elixia's login an
 OAuth redirect, or always 2FA-gated, nobody could sign in at all — not even to
-find out. Separating them means the app works regardless, and Supabase handles
+find out. Separating them means the app works regardless, and Neon Auth handles
 email verification, password reset and session refresh instead of hand-rolled
 cookie code.
 
 ### What is stored, and how
 
-- **Your Booker password** — never seen by this app. Supabase Auth handles it.
+- **Your Booker password** — never seen by this app. Neon Auth handles it.
 - **Your Elixia password** — kept, **encrypted with AES-256-GCM** under a key
   that lives only in the app's environment, never in the database. A database
   dump is inert without it.
@@ -53,9 +53,12 @@ unattended for weeks, and re-authenticating is the only way to survive a session
 finally expiring without emailing you to come and re-link. The UI says so
 plainly, and unlinking erases it.
 
-Row-level security enforces isolation **in the database**, not just in
-application code — a routing bug that passed the wrong user id still cannot
-return another person's rows.
+Isolation between users is enforced by the server, which is the only thing
+holding a database connection: the browser talks to `/api/*`, never to Postgres,
+and every statement the repo issues is scoped to the signed-in user's id. That
+predicate is load-bearing rather than decorative, so `tests/neonRepo.test.ts`
+runs the real schema against real Postgres and checks that one account cannot
+read, pause or delete another's rows.
 
 ---
 
@@ -106,18 +109,20 @@ earlier instant, because being early is recoverable and being late is not).
 ```
 app/                    Next.js App Router
   page.tsx              the dashboard (client component)
+  handler/[...stack]    Neon Auth's own pages: sign in, reset, account settings
   api/…/route.ts        JSON API — thin: authenticate, call a service, serialise
   api/cron/tick         the booking tick, secret-guarded
 lib/
   schedule.ts           DST-correct release-instant maths
   planner.ts            weekly recurrence → concrete releases
-  service.ts            the app's behaviour, independent of HTTP and Supabase
+  service.ts            the app's behaviour, independent of HTTP and Postgres
   booking.ts, retry.ts  the critical path and its bounded retry loop
   auth/crypto.ts        AES-GCM sealing of stored credentials
-  db/                   Repo interface + Supabase and in-memory implementations
+  auth/stack.ts         Neon Auth (Stack) server app
+  db/                   Repo interface + Neon and in-memory implementations
   elixia.ts             ⚠️ the only file with unverified assumptions
   mock.ts               stand-in backend so the app runs before discovery
-supabase/schema.sql     tables, indexes, RLS policies, signup trigger
+db/schema.sql           tables, indexes, constraints, cascades
 .github/workflows/      the every-minute tick and the nightly reindex
 discovery/              local-only Playwright capture (never deployed)
 ```
@@ -130,7 +135,7 @@ Postgres — has never required touching the booking logic.
 ## Tests
 
 ```bash
-npm test           # 215 tests, no services required
+npm test           # 236 tests, no services required
 npm run typecheck
 npm run build
 ```
