@@ -123,7 +123,7 @@ lib/
   elixia.ts             ⚠️ the only file with unverified assumptions
   mock.ts               stand-in backend so the app runs before discovery
 db/migrations/          numbered schema migrations, applied once each
-db/migrate.ts           `npm run migrate` — applies them
+db/migrate.ts           `npm run migrate` — node-pg-migrate, configured
 .github/workflows/      CI/CD, the every-minute tick, the nightly reindex
 discovery/              local-only Playwright capture (never deployed)
 ```

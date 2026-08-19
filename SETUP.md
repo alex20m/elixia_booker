@@ -73,9 +73,10 @@ updates them in place. The app reads `DATABASE_URL` only.
 
 ### Create the tables
 
-The schema lives in [`db/migrations/`](db/migrations) as numbered files that are
-applied once each and recorded in a `schema_migrations` table. Now that Vercel
-holds the connection string, you can apply them from your own machine:
+The schema lives in [`db/migrations/`](db/migrations) as numbered `.sql` files.
+[node-pg-migrate](https://github.com/salsita/node-pg-migrate) applies each one
+once and records it in a `pgmigrations` table. Now that Vercel holds the
+connection string, you can apply them from your own machine:
 
 ```bash
 npx vercel env pull .env.local   # brings DATABASE_URL down from Vercel
@@ -100,10 +101,11 @@ Add a file, never edit one that has run:
 db/migrations/0002_add_waitlist_position.sql
 ```
 
-Four digits, then lower_snake_case. The runner refuses to start if a migration
-it has already applied no longer matches the file — at that point the database
-and the directory describe different schemas, and it cannot know which is
-right.
+Four digits, then lower_snake_case, and the whole file is the migration — no
+`up`/`down` markers, because rolling a live schema back is a restore-from-branch
+decision rather than a script. Applied migrations are tracked **by file name**,
+so editing one that has run changes nothing and renaming one runs it again. A
+new file numbered below one that has already run is refused.
 
 Two rules that keep an automatic migration safe:
 
@@ -111,9 +113,10 @@ Two rules that keep an automatic migration safe:
   run first, so each one has to be compatible with the version already live:
   add nullable columns, and leave renames and drops to a follow-up PR once the
   new code is everywhere.
-- **A migration runs inside one transaction**, so it may not contain `begin`,
-  `commit`, or anything Postgres refuses to run in a transaction (`create index
-  concurrently`). Apply those by hand.
+- **The run happens inside one transaction**, so a migration may not contain
+  `begin`, `commit`, or anything Postgres refuses to run in a transaction
+  (`create index concurrently`). Apply those by hand. `npm test` checks the
+  first part for you.
 
 A pull request's preview deployment uses a Neon branch cut from production
 *before* its migration merged, so a preview that needs a new column will not
@@ -405,10 +408,10 @@ is malformed rather than absent. Re-copy it from the Neon console.
 **Confirmation link points at localhost** — add your deployed URL as a trusted
 domain in Neon Auth (step 7).
 
-**`npm run migrate` says a migration "has changed since it was applied"** — an
-already-applied file was edited. Restore it and put the change in a new
-migration; if the edit was to fix something already deployed, the fix has to be
-a new migration too.
+**A change to a migration had no effect** — migrations are tracked by file
+name, so one that has already run is never applied again, however much you edit
+it. Put the change in a new migration, including when it is a fix for the
+previous one.
 
 **A preview deployment is missing a column the branch adds** — expected. Its
 Neon branch was cut from production before the migration merged. Run
