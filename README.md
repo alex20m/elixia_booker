@@ -122,8 +122,10 @@ lib/
   db/                   Repo interface + Neon and in-memory implementations
   elixia.ts             ⚠️ the only file with unverified assumptions
   mock.ts               stand-in backend so the app runs before discovery
-db/schema.sql           tables, indexes, constraints, cascades
-.github/workflows/      the checks, the every-minute tick, the nightly reindex
+db/migrations/          numbered schema migrations, applied once each
+db/migrate.ts           `npm run migrate` — applies them
+.github/workflows/      the checks and migrations, the every-minute tick, the
+                        nightly reindex
 discovery/              local-only Playwright capture (never deployed)
 ```
 

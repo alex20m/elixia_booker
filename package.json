@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "migrate": "tsx db/migrate.ts",
     "discover": "tsx discovery/capture.ts",
     "discover:headed": "tsx discovery/capture.ts --headed",
     "redact": "tsx discovery/redact.ts"
