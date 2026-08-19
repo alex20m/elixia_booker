@@ -5,12 +5,18 @@ import { parse } from 'yaml';
 
 /**
  * The pipeline is the only reviewer this repo has: nothing else stands between a
- * merged commit and production. That makes the *shape* of the workflow — what
- * runs, and what a deploy is allowed to skip — behaviour worth asserting, not
- * configuration to eyeball. Every check below has a one-line edit to ci.yml that
- * turns it red, which is the point: silently dropping `npm test`, or dropping
- * the `needs:` that makes a deploy wait for it, would otherwise look like a
- * green pipeline right up until it shipped something broken.
+ * merged commit and production. That makes the *shape* of the workflows — what
+ * runs, what a deploy is allowed to skip, and which event is allowed to promote
+ * — behaviour worth asserting, not configuration to eyeball. Every check below
+ * has a one-line edit to a workflow that turns it red, which is the point:
+ * silently dropping `npm test`, or dropping the `needs:` that makes a deploy
+ * wait for it, would otherwise look like a green pipeline right up until it
+ * shipped something broken.
+ *
+ * Pull requests and pushes to `main` are separate workflow files so that one
+ * event can never trigger the other's deploy. The tests treat them as a pair:
+ * the check job is asserted in both, and a deploy job found in either is held
+ * to the same rules.
  */
 
 type Step = { name?: string; run?: string; uses?: string; if?: string };
@@ -28,55 +34,85 @@ type Workflow = {
   jobs: Record<string, Job>;
 };
 
-const workflow = parse(
-  readFileSync(fileURLToPath(new URL('../.github/workflows/ci.yml', import.meta.url)), 'utf8'),
-) as Workflow;
+function load(file: string): Workflow {
+  const path = fileURLToPath(new URL(`../.github/workflows/${file}`, import.meta.url));
+  return parse(readFileSync(path, 'utf8')) as Workflow;
+}
 
-const jobs = workflow.jobs;
+const PULL_REQUEST = 'pull-request.yml';
+const MAIN = 'main.yml';
+
+/** The two workflows that gate a deploy, by file name. */
+const workflows: Record<string, Workflow> = {
+  [PULL_REQUEST]: load(PULL_REQUEST),
+  [MAIN]: load(MAIN),
+};
+
+/** Fails loudly on a renamed file rather than quietly asserting about nothing. */
+function workflowOf(file: string): Workflow {
+  const workflow = workflows[file];
+  if (workflow === undefined) {
+    throw new Error(`no workflow "${file}" (found: ${Object.keys(workflows).join(', ')})`);
+  }
+  return workflow;
+}
 
 /** Fails loudly on a renamed job rather than quietly asserting about nothing. */
-function jobOf(jobId: string): Job {
+function jobOf(file: string, jobId: string): Job {
+  const jobs = workflowOf(file).jobs;
   const job = jobs[jobId];
   if (job === undefined) {
-    throw new Error(`ci.yml has no job "${jobId}" (found: ${Object.keys(jobs).join(', ')})`);
+    throw new Error(`${file} has no job "${jobId}" (found: ${Object.keys(jobs).join(', ')})`);
   }
   return job;
 }
 
 /** Every shell command a job runs, joined, so a check can ask "does it do X?". */
-function commandsOf(jobId: string): string {
-  return (jobOf(jobId).steps ?? []).map((step) => step.run ?? '').join('\n');
+function commandsOf(file: string, jobId: string): string {
+  return (jobOf(file, jobId).steps ?? []).map((step) => step.run ?? '').join('\n');
 }
 
-function needsOf(jobId: string): string[] {
-  const needs = jobOf(jobId).needs;
+function needsOf(file: string, jobId: string): string[] {
+  const needs = jobOf(file, jobId).needs;
   if (needs === undefined) return [];
   return Array.isArray(needs) ? needs : [needs];
 }
 
 /**
- * Job ids that run a Vercel deployment, found by what they do rather than by
- * name, so a deploy job added later is held to the same rules automatically.
+ * Jobs that run a Vercel deployment, across both workflows, found by what they
+ * do rather than by name — so a deploy job added later is held to the same
+ * rules automatically.
  */
-function deployJobIds(): string[] {
-  return Object.keys(jobs).filter((id) =>
-    /\bvercel(?:@\S+)?\s+(?:deploy|build)\b/.test(commandsOf(id)),
+function deployJobs(): { file: string; id: string }[] {
+  return Object.entries(workflows).flatMap(([file, workflow]) =>
+    Object.keys(workflow.jobs)
+      .filter((id) => /\bvercel(?:@\S+)?\s+(?:deploy|build)\b/.test(commandsOf(file, id)))
+      .map((id) => ({ file, id })),
   );
 }
 
-describe('CI/CD workflow triggers', () => {
-  it('runs on pull requests and on pushes to main', () => {
+describe('workflow triggers', () => {
+  it('runs the pull-request workflow only on pull requests', () => {
     // Parsed under YAML 1.2, so the `on:` key stays a string rather than
     // collapsing to the boolean `true` that YAML 1.1 would give.
-    const triggers = workflow.on ?? {};
-    expect(Object.keys(triggers)).toEqual(
-      expect.arrayContaining(['push', 'pull_request']),
-    );
+    expect(Object.keys(workflowOf(PULL_REQUEST).on ?? {})).toEqual(['pull_request']);
+  });
+
+  it('runs the main workflow only on pushes to main and on demand', () => {
+    // A `pull_request` trigger here would deploy a branch to production; a
+    // second push trigger for another branch would do the same from a fork of
+    // main's history.
+    const triggers = workflowOf(MAIN).on ?? {};
+    expect(Object.keys(triggers).sort()).toEqual(['push', 'workflow_dispatch']);
     expect(triggers.push?.branches).toEqual(['main']);
   });
 
-  it('grants the workflow read-only access to the repository by default', () => {
-    expect(workflow.permissions).toEqual({ contents: 'read' });
+  it('grants both workflows read-only access to the repository by default', () => {
+    for (const [file, workflow] of Object.entries(workflows)) {
+      expect(workflow.permissions, `${file} must be read-only by default`).toEqual({
+        contents: 'read',
+      });
+    }
   });
 });
 
@@ -84,45 +120,60 @@ describe('the verify job', () => {
   it('installs from the lockfile rather than resolving fresh versions', () => {
     // `npm install` would let a transitive upgrade land in CI that nobody
     // committed, so the checks would not be testing the tree that deploys.
-    const commands = commandsOf('verify');
-    expect(commands).toContain('npm ci');
-    expect(commands).not.toMatch(/npm install\b/);
+    for (const file of Object.keys(workflows)) {
+      const commands = commandsOf(file, 'verify');
+      expect(commands, `${file} must install from the lockfile`).toContain('npm ci');
+      expect(commands, `${file} must not resolve fresh versions`).not.toMatch(/npm install\b/);
+    }
   });
 
   it('lints, typechecks, tests and builds before anything else can run', () => {
-    const commands = commandsOf('verify');
-    expect(commands).toContain('npm run lint');
-    expect(commands).toContain('npm run typecheck');
-    expect(commands).toContain('npm test');
-    expect(commands).toContain('npm run build');
+    // Both workflows carry the same gate: a pull request and the merge of that
+    // same pull request must be held to identical checks.
+    for (const file of Object.keys(workflows)) {
+      const commands = commandsOf(file, 'verify');
+      expect(commands, `${file} must lint`).toContain('npm run lint');
+      expect(commands, `${file} must typecheck`).toContain('npm run typecheck');
+      expect(commands, `${file} must test`).toContain('npm test');
+      expect(commands, `${file} must build`).toContain('npm run build');
+    }
   });
 
   it('reports every failing check in one run instead of stopping at the first', () => {
     // Without this, a lone typecheck error hides whether the tests also broke,
     // and each fix costs another full round-trip through the pipeline.
-    const later = (jobOf('verify').steps ?? []).filter((step) =>
-      /npm (?:test|run (?:lint|typecheck|build))/.test(step.run ?? ''),
-    );
-    expect(later.length).toBeGreaterThanOrEqual(4);
-    for (const step of later) {
-      expect(step.if).toBe('${{ !cancelled() }}');
+    for (const file of Object.keys(workflows)) {
+      const later = (jobOf(file, 'verify').steps ?? []).filter((step) =>
+        /npm (?:test|run (?:lint|typecheck|build))/.test(step.run ?? ''),
+      );
+      expect(later.length, `${file} must run four checks`).toBeGreaterThanOrEqual(4);
+      for (const step of later) {
+        expect(step.if, `${file}: "${step.name}" must run even after an earlier failure`).toBe(
+          '${{ !cancelled() }}',
+        );
+      }
     }
   });
 });
 
 describe('the deploy jobs', () => {
-  it('has at least one job that deploys', () => {
-    expect(deployJobIds().length).toBeGreaterThan(0);
+  it('deploys a preview from the pull-request workflow and production from main', () => {
+    // Guards the detector itself: if it matched nothing, every loop below would
+    // pass while asserting about no job at all.
+    expect(deployJobs()).toEqual([
+      { file: PULL_REQUEST, id: 'deploy-preview' },
+      { file: MAIN, id: 'deploy-production' },
+    ]);
   });
 
   it('makes every deploy wait for the checks to pass', () => {
-    for (const id of deployJobIds()) {
-      expect(needsOf(id), `job "${id}" must depend on verify`).toContain('verify');
+    for (const { file, id } of deployJobs()) {
+      expect(needsOf(file, id), `${file}: job "${id}" must depend on verify`).toContain('verify');
     }
   });
 
   it('promotes to production only from a push to main', () => {
-    const condition = jobOf('deploy-production').if ?? '';
+    const condition = jobOf(MAIN, 'deploy-production').if ?? '';
     expect(condition).toContain("github.event_name == 'push'");
     expect(condition).toContain("github.ref == 'refs/heads/main'");
   });
@@ -130,27 +181,54 @@ describe('the deploy jobs', () => {
   it('keeps --prod out of every job except the production deploy', () => {
     // A preview deploy that carries --prod would overwrite the live site with
     // an unreviewed branch — the failure this whole gate exists to prevent.
-    for (const id of deployJobIds()) {
+    for (const { file, id } of deployJobs()) {
       if (id === 'deploy-production') continue;
-      expect(commandsOf(id), `job "${id}" must not deploy to production`).not.toContain('--prod');
+      expect(commandsOf(file, id), `${file}: job "${id}" must not deploy to production`).not.toContain(
+        '--prod',
+      );
     }
-    expect(commandsOf('deploy-production')).toContain('--prod');
+    expect(commandsOf(MAIN, 'deploy-production')).toContain('--prod');
   });
 
   it('never cancels a deployment that is already in flight', () => {
     // Cancelling mid-`vercel deploy` can leave the project pointing at a build
     // that never finished, so concurrent pushes queue instead of racing.
-    for (const id of deployJobIds()) {
-      const concurrency = jobOf(id).concurrency;
-      expect(typeof concurrency, `job "${id}" must declare concurrency`).toBe('object');
-      expect((concurrency as { 'cancel-in-progress'?: boolean })['cancel-in-progress']).toBe(false);
+    for (const { file, id } of deployJobs()) {
+      const concurrency = jobOf(file, id).concurrency;
+      expect(typeof concurrency, `${file}: job "${id}" must declare concurrency`).toBe('object');
+      expect(
+        (concurrency as { 'cancel-in-progress'?: boolean })['cancel-in-progress'],
+        `${file}: job "${id}" must queue rather than cancel`,
+      ).toBe(false);
+    }
+  });
+
+  it('fails the run when the Vercel credentials are missing', () => {
+    // These used to skip with a notice, which made a merge that never reached
+    // production look exactly like one that did — the deploy is silent about
+    // its own absence, so a broken secret goes unnoticed for as long as nobody
+    // opens the app. Missing credentials are now a red run.
+    for (const { file, id } of deployJobs()) {
+      const steps = jobOf(file, id).steps ?? [];
+
+      const gate = steps.find((step) => /VERCEL_TOKEN/.test(step.run ?? ''));
+      expect(gate, `${file}: job "${id}" must check its credentials`).toBeDefined();
+      expect(gate?.run, `${file}: missing credentials must fail the job`).toMatch(/exit 1\b/);
+
+      // The old skip guarded every later step on a step output; nothing in a
+      // deploy job may be conditional on the credentials being present again.
+      for (const step of steps) {
+        expect(step.if ?? '', `${file}: "${step.name}" must not be skipped when unconfigured`).not.toMatch(
+          /configured/,
+        );
+      }
     }
   });
 
   it('smoke-tests the deployment it just published', () => {
     // A build can succeed and still boot into a 500 — a missing environment
     // variable is the usual cause — so green here has to mean "it answered".
-    const commands = commandsOf('deploy-production');
+    const commands = commandsOf(MAIN, 'deploy-production');
     expect(commands).toContain('/api/health');
     expect(commands).toMatch(/curl[^\n]*--fail/);
   });

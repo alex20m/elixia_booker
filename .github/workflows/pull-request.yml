@@ -1,0 +1,113 @@
+name: Pull request
+
+# Nothing here is reviewed by a human before it merges, so this workflow is the
+# gate for a pull request: typechecked, tested and built, and only a commit that
+# survived all three gets a preview deployment.
+#
+# Pushes to main are a separate workflow (main.yml) so that no pull-request
+# event can reach the production deploy, and no push can reach the preview one.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+# Superseding a pull request's in-flight run is free — once a new commit is
+# pushed, the previous run's result is already stale.
+concurrency:
+  group: pr-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Matches the Node major Vercel builds with; bump here and in main.yml
+  # together.
+  NODE_VERSION: '22'
+
+jobs:
+  verify:
+    name: Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      # `npm ci` rather than `npm install`: the checks have to run against the
+      # exact tree that deploys, not against whatever resolved today.
+      - name: Install dependencies
+        run: npm ci
+
+      # The four checks below each run even when an earlier one failed, so one
+      # push reports every problem instead of revealing them one round-trip at a
+      # time. The job still fails if any of them do.
+      - name: Lint
+        if: ${{ !cancelled() }}
+        run: npm run lint
+
+      - name: Typecheck
+        if: ${{ !cancelled() }}
+        run: npm run typecheck
+
+      - name: Test
+        if: ${{ !cancelled() }}
+        run: npm test
+
+      # Catches what tsc alone cannot: a route that fails to compile under the
+      # Next build, or a page that throws while being prerendered.
+      - name: Build
+        if: ${{ !cancelled() }}
+        run: npm run build
+
+  deploy-preview:
+    name: Preview deploy
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Queue rather than cancel: interrupting `vercel deploy` can leave a build
+    # half-promoted, and the next push will supersede the URL anyway.
+    concurrency:
+      group: vercel-preview-${{ github.head_ref || github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      # Missing credentials used to skip the deploy with a notice, which made a
+      # run that deployed nothing look exactly like one that did. Fail here
+      # instead, naming what to set — a secret that was never added, or one that
+      # expired, is then visible on the first run rather than whenever someone
+      # next opens the app.
+      - name: Require Vercel credentials
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          missing=''
+          [ -n "$VERCEL_TOKEN" ] || missing="$missing VERCEL_TOKEN"
+          [ -n "$VERCEL_ORG_ID" ] || missing="$missing VERCEL_ORG_ID"
+          [ -n "$VERCEL_PROJECT_ID" ] || missing="$missing VERCEL_PROJECT_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secret(s):$missing — see SETUP.md. A pull request from a fork cannot read them; deploy it from a branch in this repository."
+            exit 1
+          fi
+
+      - name: Deploy preview to Vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          npx --yes vercel@latest pull --yes --environment=preview --token="$VERCEL_TOKEN"
+          npx --yes vercel@latest build --token="$VERCEL_TOKEN"
+          url="$(npx --yes vercel@latest deploy --prebuilt --token="$VERCEL_TOKEN")"
+          echo "Preview deployment: $url" >> "$GITHUB_STEP_SUMMARY"

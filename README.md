@@ -123,7 +123,8 @@ lib/
   elixia.ts             ⚠️ the only file with unverified assumptions
   mock.ts               stand-in backend so the app runs before discovery
 db/schema.sql           tables, indexes, constraints, cascades
-.github/workflows/      CI/CD, the every-minute tick, the nightly reindex
+.github/workflows/      pull-request and main pipelines, the every-minute
+                        tick, the nightly reindex
 discovery/              local-only Playwright capture (never deployed)
 ```
 
@@ -177,20 +178,24 @@ written.
 
 ### The pipeline
 
-`.github/workflows/ci.yml` runs those same four commands on every push and pull
-request, then — only on a green `main` — builds and deploys to Vercel and waits
-for the live `/api/health` to answer before calling the deploy good. Pull
-requests get a preview deployment under the same gate.
+Two workflows run those same four commands, and each ends in its own deploy:
+`.github/workflows/pull-request.yml` builds a preview for every pull request,
+and `.github/workflows/main.yml` builds and deploys production on every push to
+`main`, then waits for the live `/api/health` to answer before calling the
+deploy good. They are separate files so that no pull-request event can reach the
+production deploy — the split is the guarantee, not the job-level `if:`.
 
-Deploying is opt-in: without the `VERCEL_*` secrets those steps skip with a note
-rather than failing, so the checks still protect a fork's pull request. See
-[SETUP.md step 7](SETUP.md#let-ci-deploy-for-you-optional).
+Deploying is not optional: a deploy job whose `VERCEL_*` secrets are missing
+fails the run rather than skipping, so a merge that never reached production
+cannot look like one that did. That also means a pull request from a fork — which
+cannot read secrets — fails at the preview step. See
+[SETUP.md step 7](SETUP.md#let-ci-deploy-for-you).
 
 Because no human reviews these merges, the pipeline's own shape is tested too:
 `tests/workflows.test.ts` asserts that the deploy jobs wait on the checks, that
-only the `main` job carries `--prod`, and that a deploy never cancels mid-flight.
-Those assertions were each confirmed to fail against a workflow edited to break
-them.
+only the `main` workflow carries `--prod`, that missing credentials fail rather
+than skip, and that a deploy never cancels mid-flight. Those assertions were each
+confirmed to fail against a workflow edited to break them.
 
 ---
 

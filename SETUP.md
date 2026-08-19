@@ -210,13 +210,13 @@ domain. Confirmation and password-reset emails link back here; without it they
 point at `localhost` and appear broken to everyone but you. Add your preview
 domain too if you want sign-in to work on preview deployments.
 
-### Let CI deploy for you (optional)
+### Let CI deploy for you
 
-The **CI/CD** workflow lints, typechecks, tests and builds every push and pull
-request.
-Give it three more secrets and it also deploys: a preview for each pull request,
-and production for each push to `main` — but only after those checks pass, and
-only if the deployed app then answers `/api/health`.
+Two workflows lint, typecheck, test and build: **Pull request** on every pull
+request, and **Main** on every push to `main`. Each then deploys what it just
+checked — a preview for the pull request, production for `main` — but only after
+those checks pass, and, for production, only if the deployed app then answers
+`/api/health`.
 
 | Secret | Where to get it |
 | --- | --- |
@@ -225,8 +225,12 @@ only if the deployed app then answers `/api/health`.
 | `VERCEL_PROJECT_ID` | same file |
 
 Add them under **Settings → Secrets and variables → Actions**. Leave any of them
-unset and the deploy steps skip with a note in the run log — the checks still
-run, so a fork's pull request is not blocked by secrets it cannot have.
+unset and the deploy job **fails** with the missing names in the run log — it
+does not skip, because a merge that quietly deployed nothing is
+indistinguishable from one that deployed fine. The consequence to know about:
+a pull request from a fork cannot read repository secrets, so its preview deploy
+fails; check such a contribution out onto a branch in this repository to deploy
+it.
 
 Two things to know before turning it on:
 
@@ -349,8 +353,8 @@ If it succeeds:
 - [ ] `vercel env pull .env.local` works and `npm run dev` comes up configured
 - [ ] `/api/health` reports everything configured
 - [ ] `APP_URL` and `CRON_SECRET` set as GitHub Actions secrets
-- [ ] **CI/CD** workflow green (and, if you want CI to deploy, the three
-      `VERCEL_*` secrets set and Vercel's own auto-deploy turned off)
+- [ ] **Pull request** and **Main** workflows green, with the three `VERCEL_*`
+      secrets set and Vercel's own auto-deploy turned off
 - [ ] **Booking cron** workflow run manually and green
 - [ ] Account created, gym account linked, one class added
 - [ ] Discovery done, `MOCK_ELIXIA=0`, one dry-run window observed
