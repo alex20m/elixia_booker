@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeAll, beforeEach, afterAll } from 'vitest';
+import { readdirSync, readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
-import { loadMigrations, runMigrations } from '@/lib/db/migrations';
 import { createNeonRepo } from '@/lib/db/neonRepo';
 import { DuplicateSubscriptionError, type Repo } from '@/lib/db/repo';
 import type { Sql, SqlRow } from '@/lib/db/sql';
@@ -56,19 +56,14 @@ const addClass = (userId: string, className: string, startTime = '09:00') =>
 beforeAll(async () => {
   db = new PGlite();
 
-  // Built by the migration runner rather than from a schema dump, so every
-  // migration is exercised by this whole file: one that leaves the schema
-  // different from what the repo's SQL expects fails here, not in production.
-  await runMigrations(
-    {
-      exec: async (script) => {
-        await db.exec(script);
-      },
-      rows: async (text, params = []) =>
-        (await db.query(text, params)).rows as Record<string, unknown>[],
-    },
-    await loadMigrations(),
-  );
+  // Built from db/migrations rather than from a schema dump, so every migration
+  // is exercised by this whole file: one that leaves the schema different from
+  // what the repo's SQL expects fails here, not in production. Applied the same
+  // way node-pg-migrate applies them — in file order, whole file, no `down`.
+  const dir = new URL('../db/migrations/', import.meta.url);
+  for (const name of readdirSync(dir).filter((file) => file.endsWith('.sql')).sort()) {
+    await db.exec(readFileSync(new URL(name, dir), 'utf8'));
+  }
 
   const sql: Sql = {
     query: async (text, params = []) => (await db.query(text, params)).rows as SqlRow[],
