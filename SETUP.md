@@ -2,14 +2,21 @@
 
 Everything needed to get Elixia Booker running, in order. Roughly 20 minutes.
 
-All four services have free tiers that comfortably cover this: **Neon**
-(Postgres + Neon Auth), **Vercel** (hosting), **GitHub Actions** (the
-every-minute cron), and optionally **Telegram** (notifications).
+This guide assumes **Neon is connected through Vercel** — you add Postgres from
+your Vercel project's Storage tab, and Vercel keeps the connection details in
+sync as environment variables. That means there are no connection strings to
+copy by hand, and Vercel is the single place your configuration lives, including
+for local development.
+
+All the services have free tiers that comfortably cover this: **Vercel**
+(hosting, and where Neon is provisioned), **Neon** (Postgres + Neon Auth),
+**GitHub Actions** (the every-minute cron), and optionally **Telegram**
+(notifications).
 
 > **Before you start, know the one gap:** Elixia's API has never been observed,
 > so the code that talks to it is a placeholder. The app runs today against a
 > built-in mock, which is enough to set everything up and see it work end to
-> end. [Step 8](#8-replace-the-mock-with-the-real-elixia-api) covers replacing
+> end. [Step 10](#10-replace-the-mock-with-the-real-elixia-api) covers replacing
 > it. Until then, leave `MOCK_ELIXIA=1`.
 
 ---
@@ -20,7 +27,7 @@ every-minute cron), and optionally **Telegram** (notifications).
 git clone https://github.com/<you>/elixia_booker.git
 cd elixia_booker
 npm install
-npm test          # 236 tests, no services needed
+npm test          # 248 tests, no services needed
 ```
 
 If the tests pass, the toolchain is fine and anything that breaks later is
@@ -28,34 +35,74 @@ configuration rather than code.
 
 ---
 
-## 2. Create the Neon project
+## 2. Create the Vercel project
 
-1. Sign up at [neon.tech](https://neon.tech) and create a project. Pick a region
-   near you — every booking request makes a round trip to it, and at T-0 that
-   latency is on the critical path.
-2. Copy the **pooled** connection string it offers you (it contains `-pooler`).
-   That is `DATABASE_URL`. The unpooled one works too, but the pooled endpoint is
-   what a serverless deployment wants.
-3. Create the tables, either by pasting
-   [`db/schema.sql`](db/schema.sql) into the Neon console's SQL editor, or:
+The Vercel project comes first here, because it is what you attach Neon to.
 
-   ```bash
-   psql "$DATABASE_URL" -f db/schema.sql
-   ```
+```bash
+npx vercel login
+npx vercel link     # creates the project and .vercel/project.json
+```
 
-   That creates four tables with their indexes and cascades. It is safe to
-   re-run.
+Or import the repo at [vercel.com/new](https://vercel.com/new).
+
+You can deploy right away if you like — nothing is configured yet, so the app
+will come up and say so rather than crash. Missing configuration is reported on
+the page and by `/api/health`, never by a failed build.
+
+---
+
+## 3. Add Neon Postgres from Vercel
+
+In the Vercel dashboard: **your project → Storage → Create Database → Neon**
+(under Marketplace Database Providers). Pick a region near you — every booking
+request makes a round trip to it, and at T-0 that latency is on the critical
+path.
+
+Vercel provisions the Neon project and writes its connection details into your
+project's environment variables for **Production, Preview and Development**:
+
+| Variable | What it is |
+| --- | --- |
+| `DATABASE_URL` | pooled connection string — **the one this app uses** |
+| `DATABASE_URL_UNPOOLED` | direct connection, for tools that need a session |
+| `POSTGRES_*`, `PG*` | aliases for other frameworks; this app ignores them |
+
+Nothing to copy, and nothing to re-paste when Neon rotates a password — Vercel
+updates them in place. The app reads `DATABASE_URL` only.
+
+### Create the tables
+
+From **Storage → your database**, open the Neon console and paste
+[`db/schema.sql`](db/schema.sql) into its SQL editor. Or, once you have pulled
+the variables locally in [step 6](#6-run-it-locally):
+
+```bash
+psql "$DATABASE_URL" -f db/schema.sql
+```
+
+That creates four tables with their indexes and cascades. It is safe to re-run.
+
+You only run this against the production branch. Neon branches copy their
+parent's schema, so the per-deployment branch each Vercel preview gets already
+has these tables — and writes from a preview never touch your real data.
 
 ### Turn on Neon Auth
 
-In your Neon project, open **Auth** and enable it. Neon provisions a Stack Auth
-project wired to this database and shows you three values:
+In the Neon console for that database, open **Auth** and enable it. Neon
+provisions a Stack Auth project wired to this database and — because the project
+is connected to Vercel — pushes three more variables into the same Vercel
+project:
 
 | Neon calls it | You'll use it as |
 | --- | --- |
 | Project ID | `NEXT_PUBLIC_STACK_PROJECT_ID` |
 | Publishable client key | `NEXT_PUBLIC_STACK_PUBLISHABLE_CLIENT_KEY` |
 | Secret server key | `STACK_SECRET_SERVER_KEY` |
+
+Check they landed under **Vercel → Project → Settings → Environment Variables**.
+If they didn't, copy them across from the Neon console by hand — the rest of the
+setup is identical either way.
 
 > ⚠️ The **secret server key acts for every user.** It belongs only in
 > server-side environment variables. Never give it a `NEXT_PUBLIC_` prefix and
@@ -71,7 +118,7 @@ itself at `/handler/*`, which is why this app has no password form of its own.
 
 ---
 
-## 3. Generate your secrets
+## 4. Generate your secrets
 
 ```bash
 openssl rand -base64 32   # ENCRYPTION_KEY
@@ -88,24 +135,43 @@ Keep both. What they do:
 
 ---
 
-## 4. Run it locally
+## 5. Add the remaining variables in Vercel
+
+Neon supplied the database and auth variables. These are the ones only you can
+supply — add them under **Project → Settings → Environment Variables**, ticking
+**Production, Preview *and* Development** on each:
+
+| Variable | Value |
+| --- | --- |
+| `ENCRYPTION_KEY` | from step 4 |
+| `CRON_SECRET` | from step 4 |
+| `MOCK_ELIXIA` | `1` for now |
+| `DRY_RUN` | `1` at first |
+| `DEFAULT_BOOKING_WINDOW_DAYS` | `7` or `14` |
+| `DEFAULT_TIMEZONE` | `Europe/Helsinki` |
+
+Ticking Development matters: that is the set `vercel env pull` gives you in the
+next step, so the same values serve local dev without a second copy to maintain.
+
+Redeploy after adding them — Vercel does not apply new variables to an existing
+build.
+
+---
+
+## 6. Run it locally
 
 ```bash
-cat > .env.local <<'EOF'
-DATABASE_URL=postgresql://…@ep-….neon.tech/neondb?sslmode=require
-NEXT_PUBLIC_STACK_PROJECT_ID=…
-NEXT_PUBLIC_STACK_PUBLISHABLE_CLIENT_KEY=pck_…
-STACK_SECRET_SERVER_KEY=ssk_…
-ENCRYPTION_KEY=<from step 3>
-CRON_SECRET=<from step 3>
-MOCK_ELIXIA=1
-DRY_RUN=1
-DEFAULT_BOOKING_WINDOW_DAYS=7
-DEFAULT_TIMEZONE=Europe/Helsinki
-EOF
-
+npx vercel env pull .env.local
 npm run dev
 ```
+
+`vercel env pull` writes the **Development** values — database, auth, and
+everything from step 5 — into `.env.local`, which is gitignored. Re-run it
+whenever a variable changes in Vercel; nothing here is edited by hand.
+
+By default the Development `DATABASE_URL` points at the same Neon branch as
+production. If you'd rather local dev didn't write to real data, create a branch
+in the Neon console and point the Development variable at it, then pull again.
 
 Open <http://localhost:3000>:
 
@@ -121,37 +187,13 @@ curl -X POST http://localhost:3000/api/cron/tick \
   -H "Authorization: Bearer <your CRON_SECRET>"
 ```
 
-`.env.local` is gitignored.
-
 ---
 
-## 5. Deploy to Vercel
+## 7. Deploy to production
 
 ```bash
-npx vercel          # link the project
 npx vercel deploy --prod
 ```
-
-Or import the repo at [vercel.com/new](https://vercel.com/new).
-
-Then add the environment variables under **Project → Settings → Environment
-Variables** (Production *and* Preview):
-
-| Variable | Value |
-| --- | --- |
-| `DATABASE_URL` | from step 2 |
-| `NEXT_PUBLIC_STACK_PROJECT_ID` | from step 2 |
-| `NEXT_PUBLIC_STACK_PUBLISHABLE_CLIENT_KEY` | from step 2 |
-| `STACK_SECRET_SERVER_KEY` | from step 2 |
-| `ENCRYPTION_KEY` | from step 3 |
-| `CRON_SECRET` | from step 3 |
-| `MOCK_ELIXIA` | `1` for now |
-| `DRY_RUN` | `1` at first |
-| `DEFAULT_BOOKING_WINDOW_DAYS` | `7` or `14` |
-| `DEFAULT_TIMEZONE` | `Europe/Helsinki` |
-
-Redeploy after adding them — Vercel does not apply new variables to an existing
-build.
 
 Check it came up:
 
@@ -159,13 +201,14 @@ Check it came up:
 curl https://<your-app>.vercel.app/api/health
 ```
 
-Every field should read `true` except `apiDiscovered` (see step 8).
+Every field should read `true` except `apiDiscovered` (see step 10).
 
 ### Add your app URL to Neon Auth
 
 In the Neon console under **Auth → Domains**, add your Vercel URL as a trusted
 domain. Confirmation and password-reset emails link back here; without it they
-point at `localhost` and appear broken to everyone but you.
+point at `localhost` and appear broken to everyone but you. Add your preview
+domain too if you want sign-in to work on preview deployments.
 
 ### Let CI deploy for you (optional)
 
@@ -178,7 +221,7 @@ only if the deployed app then answers `/api/health`.
 | Secret | Where to get it |
 | --- | --- |
 | `VERCEL_TOKEN` | Vercel → **Account Settings → Tokens** |
-| `VERCEL_ORG_ID` | `.vercel/project.json` after `npx vercel link` |
+| `VERCEL_ORG_ID` | `.vercel/project.json` from `npx vercel link` (step 2) |
 | `VERCEL_PROJECT_ID` | same file |
 
 Add them under **Settings → Secrets and variables → Actions**. Leave any of them
@@ -192,15 +235,16 @@ Two things to know before turning it on:
   automatic deploys off under **Project → Settings → Git** and let the workflow
   be the only route to production.
 - **The deploy uses Vercel's environment variables, not GitHub's.** The workflow
-  runs `vercel pull` before building, so the table above stays the single place
-  those values live.
+  runs `vercel pull` before building, which is also how a preview deployment
+  picks up the Neon branch Vercel created for it. Neon's variables never need to
+  be duplicated as GitHub secrets.
 
-If `APP_URL` is set (step 6), the post-deploy check uses it rather than the
+If `APP_URL` is set (step 8), the post-deploy check uses it rather than the
 one-off deployment URL, which can sit behind Vercel's deployment protection.
 
 ---
 
-## 6. Set up the cron (GitHub Actions)
+## 8. Set up the cron (GitHub Actions)
 
 Vercel's Hobby plan runs cron jobs **once a day**, which is useless for booking
 that opens at an exact minute. GitHub Actions has minute granularity and is free
@@ -213,7 +257,7 @@ secret**, add two:
 | Secret | Value |
 | --- | --- |
 | `APP_URL` | `https://<your-app>.vercel.app` (no trailing slash) |
-| `CRON_SECRET` | the same value you gave Vercel |
+| `CRON_SECRET` | the same value you put in Vercel in step 5 |
 
 Then **Actions** → enable workflows if prompted → open **Booking cron** → **Run
 workflow** to test it immediately rather than waiting.
@@ -235,7 +279,7 @@ Vercel Pro, whose own cron then works via the `crons` field in `vercel.json`.
 
 ---
 
-## 7. Telegram notifications (optional)
+## 9. Telegram notifications (optional)
 
 1. Message [@BotFather](https://t.me/BotFather) → `/newbot` → copy the token.
 2. Add `TELEGRAM_BOT_TOKEN` to Vercel and redeploy.
@@ -248,7 +292,7 @@ still books and logs — it just can't tell you about it.
 
 ---
 
-## 8. Replace the mock with the real Elixia API
+## 10. Replace the mock with the real Elixia API
 
 Everything above works today against `lib/mock.ts`. This is the step that makes
 it book real classes, and it has to happen on your own machine: the app needs to
@@ -294,9 +338,15 @@ If it succeeds:
 ## Checklist
 
 - [ ] `npm test` passes locally
+- [ ] Vercel project created and linked (`npx vercel link`)
+- [ ] Neon added from Vercel's Storage tab, and `DATABASE_URL` visible in the
+      project's environment variables
 - [ ] `db/schema.sql` run against the Neon database
-- [ ] Neon Auth enabled, and your app URL added as a trusted domain
-- [ ] All environment variables set in Vercel, then redeployed
+- [ ] Neon Auth enabled, its three variables present in Vercel, and your app URL
+      added as a trusted domain
+- [ ] `ENCRYPTION_KEY`, `CRON_SECRET` and the app settings added in Vercel for
+      Production, Preview and Development, then redeployed
+- [ ] `vercel env pull .env.local` works and `npm run dev` comes up configured
 - [ ] `/api/health` reports everything configured
 - [ ] `APP_URL` and `CRON_SECRET` set as GitHub Actions secrets
 - [ ] **CI/CD** workflow green (and, if you want CI to deploy, the three
@@ -310,15 +360,25 @@ If it succeeds:
 
 ## Troubleshooting
 
-**"Neon Auth is not configured"** — `NEXT_PUBLIC_*` variables are missing.
-They're baked in at build time, so you must **redeploy** after adding them;
+**"Neon Auth is not configured"** — the `NEXT_PUBLIC_*` variables are missing.
+Enabling Neon Auth pushes them into Vercel, but only into the project the Neon
+database is attached to; check they are there, and add them by hand if not.
+They're baked in at build time, so you must **redeploy** after they appear —
 setting them on an existing deployment does nothing.
 
 **The build fails with "Invalid project ID"** — `NEXT_PUBLIC_STACK_PROJECT_ID`
 is malformed rather than absent. Re-copy it from the Neon console.
 
 **Confirmation link points at localhost** — add your deployed URL as a trusted
-domain in Neon Auth (step 5).
+domain in Neon Auth (step 7).
+
+**Local dev can't reach the database** — `.env.local` is stale, or was pulled
+before the variables existed. Re-run `npx vercel env pull .env.local`. If it
+comes back without `DATABASE_URL`, the Neon variables aren't ticked for the
+Development environment in Vercel.
+
+**A preview deployment has no data** — expected. Each preview gets its own Neon
+branch, with your schema but not your rows.
 
 **The cron workflow fails with 401** — `CRON_SECRET` differs between GitHub and
 Vercel. They must match exactly; re-paste both.
