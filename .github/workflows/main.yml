@@ -1,29 +1,29 @@
 name: Main
 
-# Nothing here is reviewed by a human before it merges, so this workflow is the
-# gate for main: every push is typechecked, tested and built, and only a commit
-# that survived all three is allowed to reach production.
-#
-# Pull requests are a separate workflow (pull-request.yml) so that no
-# pull-request event can reach the production deploy below.
+# Vercel's Git integration deploys every push to main by itself, so this
+# workflow does not gate production — it is the record of whether what landed is
+# sound. A red run here means main is broken *and already deployed*; the gate
+# that actually holds is the identical check on the pull request, before the
+# merge (pull-request.yml).
 on:
   push:
     branches: [main]
-  # Redeploy the current main without pushing — after adding a missing secret,
-  # or to reproduce a deploy that failed for reasons outside the commit.
+  # Re-run the checks against the current main without pushing a commit.
   workflow_dispatch: {}
 
 permissions:
   contents: read
 
-# Runs here deploy, and a half-finished deploy is worse than a slow one, so a
-# second push queues behind the first rather than cancelling it.
+# Every commit on main gets its own verdict, so a later push queues rather than
+# cancelling the run that was still checking the earlier one — cancelled runs
+# would leave commits on main with no result at all.
 concurrency:
   group: main
   cancel-in-progress: false
 
 env:
-  # Matches the Node major Vercel builds with; bump here and in
+  # Matches the Node major Vercel builds with, so a version-specific failure
+  # shows up here rather than in the deployment; bump here and in
   # pull-request.yml together.
   NODE_VERSION: '22'
 
@@ -65,95 +65,3 @@ jobs:
       - name: Build
         if: ${{ !cancelled() }}
         run: npm run build
-
-  deploy-production:
-    name: Production deploy
-    needs: verify
-    # workflow_dispatch can be started from any branch, so the ref — not the
-    # event — is what keeps promotion to production limited to main.
-    if: >-
-      github.ref == 'refs/heads/main' &&
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    concurrency:
-      group: vercel-production
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-
-      # Missing credentials used to skip the deploy with a notice, which made a
-      # merge that never reached production look exactly like one that did.
-      # Fail here instead, naming what to set — a secret that was never added,
-      # or one that expired, is then visible on the merge that needed it rather
-      # than whenever someone next opens the app.
-      - name: Require Vercel credentials
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-        run: |
-          missing=''
-          [ -n "$VERCEL_TOKEN" ] || missing="$missing VERCEL_TOKEN"
-          [ -n "$VERCEL_ORG_ID" ] || missing="$missing VERCEL_ORG_ID"
-          [ -n "$VERCEL_PROJECT_ID" ] || missing="$missing VERCEL_PROJECT_ID"
-          if [ -n "$missing" ]; then
-            echo "::error::Missing repository secret(s):$missing — set them under Settings → Secrets and variables → Actions. See SETUP.md."
-            exit 1
-          fi
-
-      - name: Deploy to production
-        id: deploy
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-        run: |
-          set -euo pipefail
-          # `pull` fetches the project's production environment variables, so
-          # the build here is the same one Vercel would have produced itself.
-          npx --yes vercel@latest pull --yes --environment=production --token="$VERCEL_TOKEN"
-          npx --yes vercel@latest build --prod --token="$VERCEL_TOKEN"
-          url="$(npx --yes vercel@latest deploy --prebuilt --prod --token="$VERCEL_TOKEN")"
-          echo "url=$url" >> "$GITHUB_OUTPUT"
-          echo "Production deployment: $url" >> "$GITHUB_STEP_SUMMARY"
-
-      # A build can succeed and still boot into a 500 — a missing environment
-      # variable is the usual cause — so the pipeline only calls a deploy good
-      # once the live instance has answered.
-      - name: Smoke-test the deployment
-        env:
-          # Prefer the stable alias when it is known: the fresh deployment URL
-          # can 401 behind Vercel's deployment protection.
-          APP_URL: ${{ secrets.APP_URL }}
-          DEPLOY_URL: ${{ steps.deploy.outputs.url }}
-        run: |
-          set -euo pipefail
-          target="${APP_URL:-$DEPLOY_URL}"
-          echo "Checking $target/api/health"
-
-          # Retries cover the seconds between the deploy returning and the first
-          # request actually being served.
-          body="$(curl --fail-with-body --silent --show-error --max-time 30 \
-            --retry 5 --retry-delay 5 --retry-connrefused \
-            "$target/api/health")"
-          echo "$body"
-
-          case "$body" in
-            *'"ok":true'*) ;;
-            *) echo "::error::/api/health did not report ok"; exit 1 ;;
-          esac
-
-          # Not fatal: the app answers, but booking cannot work until these are
-          # set, and a silent pass would let that ship unnoticed.
-          case "$body" in
-            *'"databaseConfigured":false'*) echo '::warning::DATABASE_URL is not set on the deployment' ;;
-          esac
-          case "$body" in
-            *'"cronConfigured":false'*) echo '::warning::CRON_SECRET is not set on the deployment' ;;
-          esac

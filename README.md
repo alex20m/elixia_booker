@@ -123,8 +123,7 @@ lib/
   elixia.ts             ⚠️ the only file with unverified assumptions
   mock.ts               stand-in backend so the app runs before discovery
 db/schema.sql           tables, indexes, constraints, cascades
-.github/workflows/      pull-request and main pipelines, the every-minute
-                        tick, the nightly reindex
+.github/workflows/      the checks, the every-minute tick, the nightly reindex
 discovery/              local-only Playwright capture (never deployed)
 ```
 
@@ -178,24 +177,24 @@ written.
 
 ### The pipeline
 
-Two workflows run those same four commands, and each ends in its own deploy:
-`.github/workflows/pull-request.yml` builds a preview for every pull request,
-and `.github/workflows/main.yml` builds and deploys production on every push to
-`main`, then waits for the live `/api/health` to answer before calling the
-deploy good. They are separate files so that no pull-request event can reach the
-production deploy — the split is the guarantee, not the job-level `if:`.
+Two workflows run those same four commands: `.github/workflows/pull-request.yml`
+on every pull request, and `.github/workflows/main.yml` on every push to `main`.
+Neither deploys — **Vercel's Git integration is the only route to production**,
+building each pull request as a preview and each push to `main` as production,
+on its own. See [SETUP.md step 7](SETUP.md#how-deploying-works).
 
-Deploying is not optional: a deploy job whose `VERCEL_*` secrets are missing
-fails the run rather than skipping, so a merge that never reached production
-cannot look like one that did. That also means a pull request from a fork — which
-cannot read secrets — fails at the preview step. See
-[SETUP.md step 7](SETUP.md#let-ci-deploy-for-you).
+That makes the pull-request run the gate that actually holds: by the time
+`main.yml` goes red, Vercel has already deployed the commit. Merge on green, and
+read the `main` run as the record of what landed rather than as a barrier.
 
 Because no human reviews these merges, the pipeline's own shape is tested too:
-`tests/workflows.test.ts` asserts that the deploy jobs wait on the checks, that
-only the `main` workflow carries `--prod`, that missing credentials fail rather
-than skip, and that a deploy never cancels mid-flight. Those assertions were each
-confirmed to fail against a workflow edited to break them.
+`tests/workflows.test.ts` asserts that both workflows install from the lockfile
+and run all four checks, that each triggers on its own event alone, and that
+neither deploys or carries deploy credentials — a second route to production
+would race Vercel's and silently undo a rollback. That last pair matches nothing
+by design, so a further test proves the detector still fires against a workflow
+that *does* deploy. Each assertion was confirmed to fail against a workflow
+edited to break it.
 
 ---
 

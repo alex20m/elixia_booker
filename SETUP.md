@@ -210,41 +210,33 @@ domain. Confirmation and password-reset emails link back here; without it they
 point at `localhost` and appear broken to everyone but you. Add your preview
 domain too if you want sign-in to work on preview deployments.
 
-### Let CI deploy for you
+### How deploying works
 
-Two workflows lint, typecheck, test and build: **Pull request** on every pull
-request, and **Main** on every push to `main`. Each then deploys what it just
-checked — a preview for the pull request, production for `main` — but only after
-those checks pass, and, for production, only if the deployed app then answers
-`/api/health`.
+**Vercel's Git integration deploys; GitHub Actions only checks.** Once the
+project is linked to the repository (step 2), Vercel builds every pull request
+as a preview and every push to `main` as production — no secrets, no
+configuration on the GitHub side. Leave it enabled and there is nothing to set
+up here.
 
-| Secret | Where to get it |
-| --- | --- |
-| `VERCEL_TOKEN` | Vercel → **Account Settings → Tokens** |
-| `VERCEL_ORG_ID` | `.vercel/project.json` from `npx vercel link` (step 2) |
-| `VERCEL_PROJECT_ID` | same file |
+Two workflows run alongside it and lint, typecheck, test and build: **Pull
+request** on every pull request, and **Main** on every push to `main`. Neither
+deploys.
 
-Add them under **Settings → Secrets and variables → Actions**. Leave any of them
-unset and the deploy job **fails** with the missing names in the run log — it
-does not skip, because a merge that quietly deployed nothing is
-indistinguishable from one that deployed fine. The consequence to know about:
-a pull request from a fork cannot read repository secrets, so its preview deploy
-fails; check such a contribution out onto a branch in this repository to deploy
-it.
+Two things that follow from that:
 
-Two things to know before turning it on:
+- **The pull-request run is the real gate.** A red **Main** run means the commit
+  is broken *and already live*, because Vercel deployed it the moment it landed.
+  Merge on green, and treat **Main** as the record of what landed.
+- **Do not add a deploy step to the workflows.** A second route to production
+  makes every merge deploy twice, racing itself, and a rollback made in Vercel
+  is silently undone by the next Actions deploy. `tests/workflows.test.ts` fails
+  if one appears.
 
-- **Vercel's own Git integration also deploys**, so with both enabled every push
-  deploys twice. Pick one: either skip these secrets, or turn the integration's
-  automatic deploys off under **Project → Settings → Git** and let the workflow
-  be the only route to production.
-- **The deploy uses Vercel's environment variables, not GitHub's.** The workflow
-  runs `vercel pull` before building, which is also how a preview deployment
-  picks up the Neon branch Vercel created for it. Neon's variables never need to
-  be duplicated as GitHub secrets.
-
-If `APP_URL` is set (step 8), the post-deploy check uses it rather than the
-one-off deployment URL, which can sit behind Vercel's deployment protection.
+Deployments use the environment variables set in Vercel (step 6), which is also
+how a preview picks up the Neon branch Vercel created for it. Nothing there
+needs duplicating as a GitHub secret — the two GitHub secrets this repo does
+use, `APP_URL` and `CRON_SECRET`, are for the booking cron in step 8, not for
+deploying.
 
 ---
 
@@ -353,8 +345,8 @@ If it succeeds:
 - [ ] `vercel env pull .env.local` works and `npm run dev` comes up configured
 - [ ] `/api/health` reports everything configured
 - [ ] `APP_URL` and `CRON_SECRET` set as GitHub Actions secrets
-- [ ] **Pull request** and **Main** workflows green, with the three `VERCEL_*`
-      secrets set and Vercel's own auto-deploy turned off
+- [ ] **Pull request** and **Main** workflows green, and Vercel's automatic Git
+      deploys left enabled
 - [ ] **Booking cron** workflow run manually and green
 - [ ] Account created, gym account linked, one class added
 - [ ] Discovery done, `MOCK_ELIXIA=0`, one dry-run window observed
