@@ -1,10 +1,9 @@
--- Elixia Booker schema (Neon Postgres).
+-- Elixia Booker schema (Neon Postgres) — the first migration.
 --
--- Run this once against your Neon database (see SETUP.md):
---
---   psql "$DATABASE_URL" -f db/schema.sql
---
--- It is idempotent, so re-running it after a change is safe.
+-- Applied by `npm run migrate`, and automatically on every merge to main. Do
+-- not edit it once it has run anywhere: the runner compares each applied
+-- migration against its file and refuses to continue when they differ. Schema
+-- changes go in a new numbered file beside this one (see SETUP.md).
 --
 -- Three things shape it:
 --

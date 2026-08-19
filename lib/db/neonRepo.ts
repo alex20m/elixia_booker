@@ -5,7 +5,7 @@
  * and writes alike, including ones already narrowed by a primary key. Under
  * Supabase that redundancy was belt-and-braces behind row-level security; here
  * it *is* the isolation, because the app holds a single database role and the
- * browser never speaks to Postgres at all. See the header of db/schema.sql.
+ * browser never speaks to Postgres at all. See the header of db/migrations/0001_initial_schema.sql.
  *
  * `date` columns are read through `to_char`. Drivers parse Postgres `date` into
  * a `Date` at UTC midnight, and a class date that becomes an instant is a class

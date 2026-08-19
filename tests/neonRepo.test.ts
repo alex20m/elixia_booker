@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeAll, beforeEach, afterAll } from 'vitest';
-import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
+import { loadMigrations, runMigrations } from '@/lib/db/migrations';
 import { createNeonRepo } from '@/lib/db/neonRepo';
 import { DuplicateSubscriptionError, type Repo } from '@/lib/db/repo';
 import type { Sql, SqlRow } from '@/lib/db/sql';
@@ -10,7 +10,7 @@ import type { Profile } from '@/lib/types';
  * The Postgres-backed repo, exercised against real Postgres.
  *
  * PGlite is the same engine compiled to WebAssembly, running the same
- * `db/schema.sql` the deployment does, so the constraints under test here — the
+ * `db/migrations` the deployment does, so the constraints under test here — the
  * duplicate-class unique index, the delete cascades, `date` formatting — are
  * the production ones rather than a fake's imitation of them. That matters
  * most for the isolation checks: with row-level security gone (see the schema
@@ -22,8 +22,6 @@ import type { Profile } from '@/lib/types';
  * same, so what is *not* covered here is the connection string plumbing in
  * lib/db/neon.ts.
  */
-
-const SCHEMA = readFileSync(new URL('../db/schema.sql', import.meta.url), 'utf8');
 
 const ALICE = 'user_alice';
 const BOB = 'user_bob';
@@ -57,7 +55,20 @@ const addClass = (userId: string, className: string, startTime = '09:00') =>
 // connected, not to switch to a per-test database.
 beforeAll(async () => {
   db = new PGlite();
-  await db.exec(SCHEMA);
+
+  // Built by the migration runner rather than from a schema dump, so every
+  // migration is exercised by this whole file: one that leaves the schema
+  // different from what the repo's SQL expects fails here, not in production.
+  await runMigrations(
+    {
+      exec: async (script) => {
+        await db.exec(script);
+      },
+      rows: async (text, params = []) =>
+        (await db.query(text, params)).rows as Record<string, unknown>[],
+    },
+    await loadMigrations(),
+  );
 
   const sql: Sql = {
     query: async (text, params = []) => (await db.query(text, params)).rows as SqlRow[],
