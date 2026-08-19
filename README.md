@@ -23,7 +23,7 @@ So `lib/elixia.ts` is a placeholder. **It is the only file containing guesses.**
 Until it is filled in, the app runs against a built-in mock (`MOCK_ELIXIA=1`),
 which makes every other layer — accounts, encryption, scheduling, cron,
 notifications, history — fully usable and testable today.
-[SETUP.md step 8](SETUP.md#8-replace-the-mock-with-the-real-elixia-api) covers
+[SETUP.md step 10](SETUP.md#10-replace-the-mock-with-the-real-elixia-api) covers
 replacing it.
 
 ---
@@ -184,7 +184,7 @@ requests get a preview deployment under the same gate.
 
 Deploying is opt-in: without the `VERCEL_*` secrets those steps skip with a note
 rather than failing, so the checks still protect a fork's pull request. See
-[SETUP.md step 5](SETUP.md#let-ci-deploy-for-you-optional).
+[SETUP.md step 7](SETUP.md#let-ci-deploy-for-you-optional).
 
 Because no human reviews these merges, the pipeline's own shape is tested too:
 `tests/workflows.test.ts` asserts that the deploy jobs wait on the checks, that
