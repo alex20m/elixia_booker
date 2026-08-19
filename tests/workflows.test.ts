@@ -64,6 +64,11 @@ function deployJobIds(): string[] {
   );
 }
 
+/** Job ids that apply schema migrations, found the same way. */
+function migrateJobIds(): string[] {
+  return Object.keys(jobs).filter((id) => /\bnpm run migrate\b/.test(commandsOf(id)));
+}
+
 describe('CI/CD workflow triggers', () => {
   it('runs on pull requests and on pushes to main', () => {
     // Parsed under YAML 1.2, so the `on:` key stays a string rather than
@@ -153,6 +158,56 @@ describe('the deploy jobs', () => {
     const commands = commandsOf('deploy-production');
     expect(commands).toContain('/api/health');
     expect(commands).toMatch(/curl[^\n]*--fail/);
+  });
+});
+
+describe('the migration job', () => {
+  it('applies migrations somewhere in the pipeline', () => {
+    expect(migrateJobIds()).toEqual(['migrate-production']);
+  });
+
+  it('runs migrations only on a push to main', () => {
+    // A migration is the one step of a deploy that cannot be rolled back, so it
+    // must never run from a pull request — including one from a fork, whose
+    // branch could carry any SQL at all.
+    for (const id of migrateJobIds()) {
+      const condition = jobOf(id).if ?? '';
+      expect(condition, `job "${id}" must be gated to main`).toContain("github.event_name == 'push'");
+      expect(condition, `job "${id}" must be gated to main`).toContain(
+        "github.ref == 'refs/heads/main'",
+      );
+    }
+  });
+
+  it('makes migrations wait for the checks to pass', () => {
+    for (const id of migrateJobIds()) {
+      expect(needsOf(id), `job "${id}" must depend on verify`).toContain('verify');
+    }
+  });
+
+  it('applies the schema before the code that needs it is deployed', () => {
+    // The other order ships code that queries a column the database does not
+    // have yet, for however long the migration takes to follow.
+    expect(needsOf('deploy-production')).toContain('migrate-production');
+  });
+
+  it('never runs two migration jobs at once', () => {
+    // Two merges landing together would otherwise race for the same schema.
+    for (const id of migrateJobIds()) {
+      const concurrency = jobOf(id).concurrency;
+      expect(typeof concurrency, `job "${id}" must declare concurrency`).toBe('object');
+      expect((concurrency as { 'cancel-in-progress'?: boolean })['cancel-in-progress']).toBe(false);
+    }
+  });
+
+  it('fails rather than migrating whatever DATABASE_URL happens to be in scope', () => {
+    // The connection string comes from `vercel pull`. If it is not there, the
+    // job has no business guessing — an empty DATABASE_URL and a stray one are
+    // both worse than a red pipeline.
+    const commands = commandsOf('migrate-production');
+    expect(commands).toMatch(/vercel(?:@\S+)?\s+pull/);
+    expect(commands).toContain('DATABASE_URL');
+    expect(commands).toMatch(/::error::/);
   });
 });
 

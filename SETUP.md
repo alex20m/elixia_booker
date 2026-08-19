@@ -73,19 +73,52 @@ updates them in place. The app reads `DATABASE_URL` only.
 
 ### Create the tables
 
-From **Storage → your database**, open the Neon console and paste
-[`db/schema.sql`](db/schema.sql) into its SQL editor. Or, once you have pulled
-the variables locally in [step 6](#6-run-it-locally):
+The schema lives in [`db/migrations/`](db/migrations) as numbered files that are
+applied once each and recorded in a `schema_migrations` table. Now that Vercel
+holds the connection string, you can apply them from your own machine:
 
 ```bash
-psql "$DATABASE_URL" -f db/schema.sql
+npx vercel env pull .env.local   # brings DATABASE_URL down from Vercel
+npm run migrate
 ```
 
-That creates four tables with their indexes and cascades. It is safe to re-run.
+That creates four tables with their indexes and cascades. Re-running it applies
+nothing and says so.
 
-You only run this against the production branch. Neon branches copy their
-parent's schema, so the per-deployment branch each Vercel preview gets already
-has these tables — and writes from a preview never touch your real data.
+You only do this once by hand — from here on, **merging to `main` migrates
+production automatically**, as part of the same pipeline that deploys (step 7).
+
+Neon branches copy their parent's schema, so the per-deployment branch each
+Vercel preview gets already has these tables, and writes from a preview never
+touch your real data.
+
+### Changing the schema later
+
+Add a file, never edit one that has run:
+
+```bash
+db/migrations/0002_add_waitlist_position.sql
+```
+
+Four digits, then lower_snake_case. The runner refuses to start if a migration
+it has already applied no longer matches the file — at that point the database
+and the directory describe different schemas, and it cannot know which is
+right.
+
+Two rules that keep an automatic migration safe:
+
+- **The old code keeps serving while the new code rolls out**, and migrations
+  run first, so each one has to be compatible with the version already live:
+  add nullable columns, and leave renames and drops to a follow-up PR once the
+  new code is everywhere.
+- **A migration runs inside one transaction**, so it may not contain `begin`,
+  `commit`, or anything Postgres refuses to run in a transaction (`create index
+  concurrently`). Apply those by hand.
+
+A pull request's preview deployment uses a Neon branch cut from production
+*before* its migration merged, so a preview that needs a new column will not
+have it. Run `npm run migrate` against that branch's connection string if you
+need the preview to be complete.
 
 ### Turn on Neon Auth
 
@@ -341,7 +374,7 @@ If it succeeds:
 - [ ] Vercel project created and linked (`npx vercel link`)
 - [ ] Neon added from Vercel's Storage tab, and `DATABASE_URL` visible in the
       project's environment variables
-- [ ] `db/schema.sql` run against the Neon database
+- [ ] `npm run migrate` run against the Neon database
 - [ ] Neon Auth enabled, its three variables present in Vercel, and your app URL
       added as a trusted domain
 - [ ] `ENCRYPTION_KEY`, `CRON_SECRET` and the app settings added in Vercel for
@@ -371,6 +404,15 @@ is malformed rather than absent. Re-copy it from the Neon console.
 
 **Confirmation link points at localhost** — add your deployed URL as a trusted
 domain in Neon Auth (step 7).
+
+**`npm run migrate` says a migration "has changed since it was applied"** — an
+already-applied file was edited. Restore it and put the change in a new
+migration; if the edit was to fix something already deployed, the fix has to be
+a new migration too.
+
+**A preview deployment is missing a column the branch adds** — expected. Its
+Neon branch was cut from production before the migration merged. Run
+`npm run migrate` against the preview branch, or merge.
 
 **Local dev can't reach the database** — `.env.local` is stale, or was pulled
 before the variables existed. Re-run `npx vercel env pull .env.local`. If it
