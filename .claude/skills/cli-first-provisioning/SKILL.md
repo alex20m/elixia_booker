@@ -222,6 +222,16 @@ npx vercel deploy                               # a one-off preview, by hand
 - **`vercel deploy` is for a one-off, not for production.** Production comes
   from pushing to the default branch. Reaching for `--prod` by hand promotes a
   build the checks never saw.
+- **Always pass `--project <name>` explicitly, especially in a fresh worktree.**
+  `vercel link --yes` with no `.vercel/project.json` on disk and no `--project`
+  does not fail or prompt — it silently *creates a new project* named after the
+  current directory. A parallel-task worktree (its directory is never the
+  repo's name — see `isolated-task-branch`) is exactly the situation with no
+  cached link, so this fires every time unless named explicitly. If it happens
+  anyway, `npx vercel project ls` shows the stray project and `npx vercel
+  project rm <name>` (needs a piped `y`, or `--non-interactive` plus the
+  --yes-equivalent flag your CLI version supports) removes it — safe as long as
+  it has no deployments or data yet.
 - `vercel env pull` is what keeps local development from being a second copy of
   the configuration. Re-run it whenever a variable changes; never hand-edit
   `.env.local`.
