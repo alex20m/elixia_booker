@@ -22,6 +22,72 @@ All work must be isolated, reproducible, and branch-based:
 Do not stop after planning. Start implementing immediately, and only ask if
 blocked.
 
+## New App Projects: Stack Defaults
+
+These are the defaults for a **new project that is an app**. They are not a
+mandate to rewrite an existing one — a project already built on another stack
+keeps it until there is a reason of its own to move.
+
+- **Next.js, in TypeScript.** No new JavaScript-only app code.
+- **Hosted on Vercel.**
+- **Neon for Postgres**, when the app needs a database — and only then. Add it
+  as a **Vercel Marketplace integration**, not as a separate Neon account wired
+  up by hand, so the connection details arrive as Vercel-managed environment
+  variables and stay in sync when they rotate.
+- **Neon Auth for accounts**, when Neon is already the database and the app
+  needs sign-in. Today's Neon Auth is **managed Better Auth**: identity lives in
+  the `neon_auth` schema of your own database, so users are queryable in SQL and
+  a database branch carries its own users. It is *not* the older Stack Auth
+  integration (`@stackframe/stack`, the `NEXT_PUBLIC_STACK_*` variables) — that
+  one is closed to new projects, and most tutorials still describe it.
+- **A different auth provider is a fine choice** when it suits the app better —
+  Neon Auth is the default, not a requirement. Decide deliberately, say why in
+  `SETUP.md`, and set it up by CLI like everything else.
+- **Custom domains come from Cloudflare**, with DNS records pointed at Vercel
+  and the proxy (orange cloud) **off**.
+- **Deploys come from Vercel's own Git integration** — always. Every push gets a
+  preview, every merge to `main` goes to production, and no workflow of ours
+  does the deploying. Two routes to production race each other and deploy
+  everything twice.
+- **CI/CD exists from the first commit**, as at most two workflows:
+  - **checks** — on every pull request and push: install from the lockfile,
+    lint, typecheck, test, build. Nothing merges without it.
+  - **deploy-time work** — only if something genuinely has to happen around a
+    deploy that Vercel does not do, which in practice means database
+    migrations. Never a job that deploys.
+- **Database migrations run through `node-pg-migrate`** and its own CLI, called
+  from that workflow. Not a hand-written runner: ledgers, checksums and locking
+  are solved problems, and a bespoke one is code nobody reviews and everything
+  depends on. The same preference holds generally — reach for the maintained
+  package before writing the mechanism yourself.
+- Because Vercel's deploy does not wait for that workflow, **every migration
+  must be compatible with the code already running**: add, backfill, and only
+  remove in a later change.
+- **Anything else the app genuinely needs is fair game** — pick it deliberately,
+  and document its setup along with the rest.
+
+### Every app project ships a `SETUP.md`
+
+Not optional, and not a summary: it is the setup, written so that **someone
+holding the tokens — or an agent — can run it top to bottom without opening a
+browser.** Keep it current in the same MR as any change that alters setup.
+
+### CLI over dashboard, always
+
+Every step that can be a command must be a command: a provider CLI subcommand
+first, the provider's REST API with `curl` and a scoped token second, and the
+dashboard only where a provider genuinely gates the step on a human (minting
+the first token, billing, accepting terms). Collect those few in one "has to be
+done by hand" section of `SETUP.md` so the manual surface stays visible and
+keeps shrinking.
+
+**Use the `cli-first-provisioning` skill** for how to do this — the order the
+pieces have to be created in, driving the provider CLIs non-interactively, the
+traps that fail quietly (variables that need a redeploy, proxied DNS records,
+auth redirect domains), and what `SETUP.md` must contain. **Use the `deploy-gate`
+skill** for the workflows themselves — what to assert about a pipeline so its
+gates cannot be silently removed.
+
 ---
 
 ## Write Down What You Worked Out

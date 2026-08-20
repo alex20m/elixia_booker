@@ -2,11 +2,16 @@
 
 Everything needed to get Elixia Booker running, in order. Roughly 20 minutes.
 
-This guide assumes **Neon is connected through Vercel** — you add Postgres from
-your Vercel project's Storage tab, and Vercel keeps the connection details in
-sync as environment variables. That means there are no connection strings to
-copy by hand, and Vercel is the single place your configuration lives, including
-for local development.
+This guide assumes **Neon is connected through Vercel** — Postgres is
+provisioned as a Vercel Marketplace integration, and Vercel keeps the connection
+details in sync as environment variables. That means there are no connection
+strings to copy by hand, and Vercel is the single place your configuration
+lives, including for local development.
+
+**Everything here is a command.** The few things that genuinely cannot be done
+from a terminal are collected under [Has to be done by
+hand](#has-to-be-done-by-hand); the rest of this guide runs top to bottom for
+anyone — or any agent — holding the tokens.
 
 All the services have free tiers that comfortably cover this: **Vercel**
 (hosting, and where Neon is provisioned), **Neon** (Postgres + Neon Auth),
@@ -40,11 +45,14 @@ configuration rather than code.
 The Vercel project comes first here, because it is what you attach Neon to.
 
 ```bash
-npx vercel login
-npx vercel link     # creates the project and .vercel/project.json
+npx vercel login                # browser device flow, once
+npx vercel link --yes           # creates the project and .vercel/project.json
 ```
 
-Or import the repo at [vercel.com/new](https://vercel.com/new).
+`--yes` accepts the defaults; add `--project <name> --team <slug>` to link an
+existing project without any prompts. Once you have a token from **Account
+Settings → Tokens**, `export VERCEL_TOKEN=…` replaces the login step and every
+`vercel` command below runs unattended.
 
 You can deploy right away if you like — nothing is configured yet, so the app
 will come up and say so rather than crash. Missing configuration is reported on
@@ -54,10 +62,24 @@ the page and by `/api/health`, never by a failed build.
 
 ## 3. Add Neon Postgres from Vercel
 
-In the Vercel dashboard: **your project → Storage → Create Database → Neon**
-(under Marketplace Database Providers). Pick a region near you — every booking
-request makes a round trip to it, and at T-0 that latency is on the critical
-path.
+```bash
+npx vercel integration add neon --name elixia-db
+```
+
+One command installs the Marketplace integration, provisions the database,
+connects it to the linked project and pulls the new variables into
+`.env.local`. Pick a region near you — every booking request makes a round trip
+to it, and at T-0 that latency is on the critical path:
+
+```bash
+npx vercel integration add neon --help                    # regions and plans
+npx vercel integration add neon --metadata region=<slug>
+```
+
+> If it stops and asks you to accept the integration's terms, that one step
+> needs a human at a real terminal: `npx vercel integration accept-terms neon`,
+> then re-run. Creating the database from **Project → Storage → Create Database
+> → Neon** in the dashboard is equivalent.
 
 Vercel provisions the Neon project and writes its connection details into your
 project's environment variables for **Production, Preview and Development**:
@@ -122,6 +144,15 @@ need the preview to be complete.
 
 ### Turn on Neon Auth
 
+> ⚠️ **This app is on _legacy_ Neon Auth**, the Stack Auth-based one
+> (`@stackframe/stack`, the `NEXT_PUBLIC_STACK_*` variables below). Neon has
+> since replaced Neon Auth with a managed Better Auth that keeps identity in the
+> database's own `neon_auth` schema — a different SDK and different variables.
+> `neonctl neon-auth enable` provisions **that** one, which this app does not
+> speak yet, so enable auth from the console until the app is migrated. Legacy
+> Neon Auth stays supported for existing projects but is closed to new ones, so
+> a brand-new Neon project may not be able to offer it at all.
+
 In the Neon console for that database, open **Auth** and enable it. Neon
 provisions a Stack Auth project wired to this database and — because the project
 is connected to Vercel — pushes three more variables into the same Vercel
@@ -133,9 +164,12 @@ project:
 | Publishable client key | `NEXT_PUBLIC_STACK_PUBLISHABLE_CLIENT_KEY` |
 | Secret server key | `STACK_SECRET_SERVER_KEY` |
 
-Check they landed under **Vercel → Project → Settings → Environment Variables**.
-If they didn't, copy them across from the Neon console by hand — the rest of the
-setup is identical either way.
+Check they landed with `npx vercel env ls`. If they didn't, read them out of
+`neon-auth status --output json` and add them with `vercel env add` as in
+[step 5](#5-add-the-remaining-variables-in-vercel) — the rest of the setup is
+identical either way. Take the names from that output rather than assuming
+them: they are what the app imports, and a wrong guess builds fine and fails at
+sign-in.
 
 > ⚠️ The **secret server key acts for every user.** It belongs only in
 > server-side environment variables. Never give it a `NEXT_PUBLIC_` prefix and
@@ -154,11 +188,12 @@ itself at `/handler/*`, which is why this app has no password form of its own.
 ## 4. Generate your secrets
 
 ```bash
-openssl rand -base64 32   # ENCRYPTION_KEY
-openssl rand -base64 32   # CRON_SECRET
+ENCRYPTION_KEY=$(openssl rand -base64 32)
+CRON_SECRET=$(openssl rand -base64 32)
 ```
 
-Keep both. What they do:
+Keep both — the next steps and GitHub Actions need the same values. What they
+do:
 
 - **`ENCRYPTION_KEY`** seals every stored Elixia credential. It is the only
   thing that makes a leaked database dump inert. **If you lose or change it,
@@ -171,8 +206,20 @@ Keep both. What they do:
 ## 5. Add the remaining variables in Vercel
 
 Neon supplied the database and auth variables. These are the ones only you can
-supply — add them under **Project → Settings → Environment Variables**, ticking
-**Production, Preview *and* Development** on each:
+supply. `vercel env add` takes the value on stdin, so each is one line:
+
+```bash
+add() { printf '%s' "$2" | npx vercel env add "$1" production,preview,development; }
+
+add ENCRYPTION_KEY               "$ENCRYPTION_KEY"
+add CRON_SECRET                  "$CRON_SECRET"
+add MOCK_ELIXIA                  1
+add DRY_RUN                      1
+add DEFAULT_BOOKING_WINDOW_DAYS  7
+add DEFAULT_TIMEZONE             Europe/Helsinki
+```
+
+What each one is:
 
 | Variable | Value |
 | --- | --- |
@@ -183,8 +230,9 @@ supply — add them under **Project → Settings → Environment Variables**, ti
 | `DEFAULT_BOOKING_WINDOW_DAYS` | `7` or `14` |
 | `DEFAULT_TIMEZONE` | `Europe/Helsinki` |
 
-Ticking Development matters: that is the set `vercel env pull` gives you in the
-next step, so the same values serve local dev without a second copy to maintain.
+Including `development` matters: that is the set `vercel env pull` gives you in
+the next step, so the same values serve local dev without a second copy to
+maintain. Confirm with `npx vercel env ls`.
 
 Redeploy after adding them — Vercel does not apply new variables to an existing
 build.
@@ -239,9 +287,56 @@ Every field should read `true` except `apiDiscovered` (see step 10).
 ### Add your app URL to Neon Auth
 
 In the Neon console under **Auth → Domains**, add your Vercel URL as a trusted
-domain. Confirmation and password-reset emails link back here; without it they
-point at `localhost` and appear broken to everyone but you. Add your preview
-domain too if you want sign-in to work on preview deployments.
+domain. (`neonctl neon-auth domain add` does this from the CLI, but for the new
+Neon Auth rather than the legacy one this app uses — see the warning in step 3.)
+
+Confirmation and password-reset emails link back here; without it they point at
+`localhost` and appear broken to everyone but you. Add your preview domain too
+if you want sign-in to work on preview deployments.
+
+### Point a custom domain at it (optional)
+
+Domain registered at Cloudflare, DNS at Cloudflare, app on Vercel. Attach the
+domain first, then ask Vercel which record it wants — the target changes, so
+read it rather than hardcoding it:
+
+```bash
+npx vercel domains add booker.example.com elixia_booker
+npx vercel domains inspect booker.example.com     # the record to create
+```
+
+Cloudflare has no CLI for DNS records, so this part goes through its API with a
+token scoped to **Zone → DNS → Edit** on that one zone (**My Profile → API
+Tokens → Create Token**):
+
+```bash
+export CLOUDFLARE_API_TOKEN=<scoped token>
+ZONE=$(curl -s "https://api.cloudflare.com/client/v4/zones?name=example.com" \
+  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" | jq -r '.result[0].id')
+
+curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE/dns_records" \
+  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"type":"CNAME","name":"booker","content":"<target from inspect>",
+           "ttl":1,"proxied":false}'
+
+npx vercel domains verify booker.example.com
+```
+
+Two things to get right:
+
+- **`"proxied": false`.** Orange-clouding the record puts Cloudflare's proxy in
+  front of a host that already terminates TLS, and the symptoms — a certificate
+  that never issues, or a redirect loop — do not point back at the toggle.
+  Leave it grey.
+- **Re-running the `POST` fails** rather than updating. Look the record up by
+  name and `PATCH` it if it already exists, otherwise a second run of your
+  setup dies halfway.
+
+Then point `APP_URL` (step 8) at the custom domain, and add it as a Neon Auth
+trusted domain exactly as you did for the `vercel.app` URL. Verification depends
+on DNS propagation, so `verify` failing right afterwards is normal — re-run it
+in a few minutes.
 
 ### Let CI deploy for you (optional)
 
@@ -257,9 +352,15 @@ only if the deployed app then answers `/api/health`.
 | `VERCEL_ORG_ID` | `.vercel/project.json` from `npx vercel link` (step 2) |
 | `VERCEL_PROJECT_ID` | same file |
 
-Add them under **Settings → Secrets and variables → Actions**. Leave any of them
-unset and the deploy steps skip with a note in the run log — the checks still
-run, so a fork's pull request is not blocked by secrets it cannot have.
+```bash
+gh secret set VERCEL_TOKEN      --body "$VERCEL_TOKEN"
+gh secret set VERCEL_ORG_ID     --body "$(jq -r .orgId     .vercel/project.json)"
+gh secret set VERCEL_PROJECT_ID --body "$(jq -r .projectId .vercel/project.json)"
+```
+
+Leave any of them unset and the deploy steps skip with a note in the run log —
+the checks still run, so a fork's pull request is not blocked by secrets it
+cannot have.
 
 Two things to know before turning it on:
 
@@ -284,16 +385,22 @@ that opens at an exact minute. GitHub Actions has minute granularity and is free
 for public repositories, so it drives the tick instead. The workflows are already
 in [`.github/workflows/`](.github/workflows/).
 
-In your repo: **Settings → Secrets and variables → Actions → New repository
-secret**, add two:
+```bash
+gh secret set APP_URL     --body "https://<your-app>.vercel.app"
+gh secret set CRON_SECRET --body "$CRON_SECRET"
+```
 
 | Secret | Value |
 | --- | --- |
 | `APP_URL` | `https://<your-app>.vercel.app` (no trailing slash) |
 | `CRON_SECRET` | the same value you put in Vercel in step 5 |
 
-Then **Actions** → enable workflows if prompted → open **Booking cron** → **Run
-workflow** to test it immediately rather than waiting.
+Then trigger it once rather than waiting for the schedule:
+
+```bash
+gh workflow run "Booking cron"
+gh run watch
+```
 
 Two things worth knowing:
 
@@ -368,19 +475,48 @@ If it succeeds:
 
 ---
 
+## Has to be done by hand
+
+Everything else above is a command. These are the exceptions, and each is here
+because the provider gates it on a human rather than because a CLI is missing:
+
+- **`npx vercel login`, or minting a Vercel token** — a browser device flow,
+  once per machine. After that, everything else on Vercel is scriptable.
+- **Minting `NEON_API_KEY` and `CLOUDFLARE_API_TOKEN`** — a token cannot create
+  itself, so the first one of each comes from that provider's console.
+- **Accepting a Marketplace integration's legal terms**, if the CLI asks:
+  `vercel integration accept-terms` requires an interactive terminal and human
+  confirmation by design.
+- **Enabling legacy Neon Auth and its trusted domains** (step 3). The CLI
+  manages the current Neon Auth, not the Stack Auth-based one this app still
+  uses; migrating the app removes this entry.
+- **Registering the domain and pointing its nameservers at Cloudflare**, if you
+  want a custom domain.
+- **Turning off Vercel's own Git auto-deploy** (step 7), if you let CI deploy
+  instead.
+- **Creating the Telegram bot** — BotFather is a chat, and your chat ID only
+  exists once you have messaged the bot.
+- **Elixia discovery (step 10)** — a real login with real 2FA in a headed
+  browser is the entire point of that step.
+
+---
+
 ## Checklist
 
 - [ ] `npm test` passes locally
 - [ ] Vercel project created and linked (`npx vercel link`)
-- [ ] Neon added from Vercel's Storage tab, and `DATABASE_URL` visible in the
-      project's environment variables
+- [ ] Neon provisioned (`npx vercel integration add neon`) and `DATABASE_URL`
+      visible in `npx vercel env ls`
 - [ ] `npm run migrate` run against the Neon database
-- [ ] Neon Auth enabled, its three variables present in Vercel, and your app URL
-      added as a trusted domain
+- [ ] Neon Auth enabled (`neonctl neon-auth enable`), its three variables
+      present in Vercel, and your app URL added with `neonctl neon-auth domain
+      add`
 - [ ] `ENCRYPTION_KEY`, `CRON_SECRET` and the app settings added in Vercel for
       Production, Preview and Development, then redeployed
 - [ ] `vercel env pull .env.local` works and `npm run dev` comes up configured
 - [ ] `/api/health` reports everything configured
+- [ ] Custom domain added and `npx vercel domains verify` clean, if you want
+      one, with the Cloudflare record left unproxied
 - [ ] `APP_URL` and `CRON_SECRET` set as GitHub Actions secrets
 - [ ] **CI/CD** workflow green (and, if you want CI to deploy, the three
       `VERCEL_*` secrets set and Vercel's own auto-deploy turned off)
