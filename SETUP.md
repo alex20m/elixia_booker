@@ -95,9 +95,10 @@ updates them in place. The app reads `DATABASE_URL` only.
 
 ### Create the tables
 
-The schema lives in [`db/migrations/`](db/migrations) as numbered files that are
-applied once each and recorded in a `schema_migrations` table. Now that Vercel
-holds the connection string, you can apply them from your own machine:
+The schema lives in [`db/migrations/`](db/migrations) as numbered `.sql` files.
+[node-pg-migrate](https://github.com/salsita/node-pg-migrate) applies each one
+once and records it in a `pgmigrations` table. Now that Vercel holds the
+connection string, you can apply them from your own machine:
 
 ```bash
 npx vercel env pull .env.local   # brings DATABASE_URL down from Vercel
@@ -108,7 +109,8 @@ That creates four tables with their indexes and cascades. Re-running it applies
 nothing and says so.
 
 You only do this once by hand — from here on, **merging to `main` migrates
-production automatically**, as part of the same pipeline that deploys (step 7).
+production automatically** — the **Main** workflow applies them on every push
+(step 7).
 
 Neon branches copy their parent's schema, so the per-deployment branch each
 Vercel preview gets already has these tables, and writes from a preview never
@@ -122,20 +124,23 @@ Add a file, never edit one that has run:
 db/migrations/0002_add_waitlist_position.sql
 ```
 
-Four digits, then lower_snake_case. The runner refuses to start if a migration
-it has already applied no longer matches the file — at that point the database
-and the directory describe different schemas, and it cannot know which is
-right.
+Four digits, then lower_snake_case, and the whole file is the migration — no
+`up`/`down` markers, because rolling a live schema back is a restore-from-branch
+decision rather than a script. Applied migrations are tracked **by file name**,
+so editing one that has run changes nothing and renaming one runs it again. A
+new file numbered below one that has already run is refused.
 
 Two rules that keep an automatic migration safe:
 
-- **The old code keeps serving while the new code rolls out**, and migrations
-  run first, so each one has to be compatible with the version already live:
-  add nullable columns, and leave renames and drops to a follow-up PR once the
-  new code is everywhere.
-- **A migration runs inside one transaction**, so it may not contain `begin`,
-  `commit`, or anything Postgres refuses to run in a transaction (`create index
-  concurrently`). Apply those by hand.
+- **Each migration has to be compatible with the code already live, and with
+  the code arriving.** Vercel deploys the merge as soon as it lands, while the
+  migration runs in Actions alongside it, so for a few seconds either version
+  may be serving against either schema. Add nullable columns; leave renames and
+  drops to a follow-up PR merged once the new code is everywhere.
+- **The run happens inside one transaction**, so a migration may not contain
+  `begin`, `commit`, or anything Postgres refuses to run in a transaction
+  (`create index concurrently`). Apply those by hand. `npm test` checks the
+  first part for you.
 
 A pull request's preview deployment uses a Neon branch cut from production
 *before* its migration merged, so a preview that needs a new column will not
@@ -338,43 +343,33 @@ trusted domain exactly as you did for the `vercel.app` URL. Verification depends
 on DNS propagation, so `verify` failing right afterwards is normal — re-run it
 in a few minutes.
 
-### Let CI deploy for you (optional)
+### How deploying works
 
-The **CI/CD** workflow lints, typechecks, tests and builds every push and pull
-request.
-Give it three more secrets and it also deploys: a preview for each pull request,
-and production for each push to `main` — but only after those checks pass, and
-only if the deployed app then answers `/api/health`.
+**Vercel's Git integration deploys; GitHub Actions only checks.** Once the
+project is linked to the repository (step 2), Vercel builds every pull request
+as a preview and every push to `main` as production — no secrets, no
+configuration on the GitHub side. Leave it enabled and there is nothing to set
+up here.
 
-| Secret | Where to get it |
-| --- | --- |
-| `VERCEL_TOKEN` | Vercel → **Account Settings → Tokens** |
-| `VERCEL_ORG_ID` | `.vercel/project.json` from `npx vercel link` (step 2) |
-| `VERCEL_PROJECT_ID` | same file |
+Two workflows run alongside it and lint, typecheck, test and build: **Pull
+request** on every pull request, and **Main** on every push to `main`. Neither
+deploys.
 
-```bash
-gh secret set VERCEL_TOKEN      --body "$VERCEL_TOKEN"
-gh secret set VERCEL_ORG_ID     --body "$(jq -r .orgId     .vercel/project.json)"
-gh secret set VERCEL_PROJECT_ID --body "$(jq -r .projectId .vercel/project.json)"
-```
+Two things that follow from that:
 
-Leave any of them unset and the deploy steps skip with a note in the run log —
-the checks still run, so a fork's pull request is not blocked by secrets it
-cannot have.
+- **The pull-request run is the real gate.** A red **Main** run means the commit
+  is broken *and already live*, because Vercel deployed it the moment it landed.
+  Merge on green, and treat **Main** as the record of what landed.
+- **Do not add a deploy step to the workflows.** A second route to production
+  makes every merge deploy twice, racing itself, and a rollback made in Vercel
+  is silently undone by the next Actions deploy. `tests/workflows.test.ts` fails
+  if one appears.
 
-Two things to know before turning it on:
-
-- **Vercel's own Git integration also deploys**, so with both enabled every push
-  deploys twice. Pick one: either skip these secrets, or turn the integration's
-  automatic deploys off under **Project → Settings → Git** and let the workflow
-  be the only route to production.
-- **The deploy uses Vercel's environment variables, not GitHub's.** The workflow
-  runs `vercel pull` before building, which is also how a preview deployment
-  picks up the Neon branch Vercel created for it. Neon's variables never need to
-  be duplicated as GitHub secrets.
-
-If `APP_URL` is set (step 8), the post-deploy check uses it rather than the
-one-off deployment URL, which can sit behind Vercel's deployment protection.
+Deployments use the environment variables set in Vercel (step 6), which is also
+how a preview picks up the Neon branch Vercel created for it. Nothing there
+needs duplicating as a GitHub secret — the two GitHub secrets this repo does
+use, `APP_URL` and `CRON_SECRET`, are for the booking cron in step 8, not for
+deploying.
 
 ---
 
@@ -492,8 +487,6 @@ because the provider gates it on a human rather than because a CLI is missing:
   uses; migrating the app removes this entry.
 - **Registering the domain and pointing its nameservers at Cloudflare**, if you
   want a custom domain.
-- **Turning off Vercel's own Git auto-deploy** (step 7), if you let CI deploy
-  instead.
 - **Creating the Telegram bot** — BotFather is a chat, and your chat ID only
   exists once you have messaged the bot.
 - **Elixia discovery (step 10)** — a real login with real 2FA in a headed
@@ -508,9 +501,8 @@ because the provider gates it on a human rather than because a CLI is missing:
 - [ ] Neon provisioned (`npx vercel integration add neon`) and `DATABASE_URL`
       visible in `npx vercel env ls`
 - [ ] `npm run migrate` run against the Neon database
-- [ ] Neon Auth enabled (`neonctl neon-auth enable`), its three variables
-      present in Vercel, and your app URL added with `neonctl neon-auth domain
-      add`
+- [ ] Legacy Neon Auth enabled from the Neon console, its three variables
+      present in Vercel, and your app URL added as a trusted domain
 - [ ] `ENCRYPTION_KEY`, `CRON_SECRET` and the app settings added in Vercel for
       Production, Preview and Development, then redeployed
 - [ ] `vercel env pull .env.local` works and `npm run dev` comes up configured
@@ -518,8 +510,8 @@ because the provider gates it on a human rather than because a CLI is missing:
 - [ ] Custom domain added and `npx vercel domains verify` clean, if you want
       one, with the Cloudflare record left unproxied
 - [ ] `APP_URL` and `CRON_SECRET` set as GitHub Actions secrets
-- [ ] **CI/CD** workflow green (and, if you want CI to deploy, the three
-      `VERCEL_*` secrets set and Vercel's own auto-deploy turned off)
+- [ ] **Pull request** and **Main** workflows green, and Vercel's automatic Git
+      deploys left enabled
 - [ ] **Booking cron** workflow run manually and green
 - [ ] Account created, gym account linked, one class added
 - [ ] Discovery done, `MOCK_ELIXIA=0`, one dry-run window observed
@@ -541,10 +533,10 @@ is malformed rather than absent. Re-copy it from the Neon console.
 **Confirmation link points at localhost** — add your deployed URL as a trusted
 domain in Neon Auth (step 7).
 
-**`npm run migrate` says a migration "has changed since it was applied"** — an
-already-applied file was edited. Restore it and put the change in a new
-migration; if the edit was to fix something already deployed, the fix has to be
-a new migration too.
+**A change to a migration had no effect** — migrations are tracked by file
+name, so one that has already run is never applied again, however much you edit
+it. Put the change in a new migration, including when it is a fix for the
+previous one.
 
 **A preview deployment is missing a column the branch adds** — expected. Its
 Neon branch was cut from production before the migration merged. Run
