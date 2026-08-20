@@ -94,5 +94,17 @@ Two details that bite:
 ## Before adding a deploy workflow at all
 
 Check whether the hosting platform's own git integration is already deploying
-on push. Both enabled means every merge deploys twice, racing each other. Pick
-one route to production and say in the setup docs which it is.
+on push. Both enabled means every merge deploys twice, racing each other — so
+there is one route to production, and on Vercel it is the platform's, always.
+
+That leaves CI two jobs, and everything above still applies to them:
+
+- **The checks workflow** on every pull request and push. It gates merging
+  rather than deploying, so what protects production is the branch's required
+  check, not a `needs:` — assert that the workflow runs the full set
+  (lockfile-exact install, lint, typecheck, test, build), because a check
+  quietly dropped from it is the same failure this skill exists to catch.
+- **A deploy-adjacent workflow**, where one is needed — usually migrations.
+  It is not a deploy, but it touches production, so the credential-degrades-to-
+  a-skip pattern and the smoke test still apply, and it must be safe to re-run:
+  the platform's deploy is not waiting for it.
