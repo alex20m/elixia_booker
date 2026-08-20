@@ -3,6 +3,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { authClient } from '@/lib/auth/client';
+import {
+  apiRequest as api,
+  dashboardScreen,
+  loadDashboard,
+  type DashboardLoad,
+} from '@/lib/dashboardState';
 import type { DashboardView } from '@/lib/service';
 import type { Weekday } from '@/lib/types';
 
@@ -27,26 +33,7 @@ const OUTCOME_LABELS: Record<string, [string, string]> = {
   error: ['pill-err', 'Error'],
 };
 
-async function api<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    headers: { 'content-type': 'application/json' },
-    ...options,
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.error ?? `Request failed: ${response.status}`);
-  return body as T;
-}
-
 const titleCase = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
-
-/** The dashboard, or null if it could not be loaded (signed out, server down). */
-async function loadDashboard(): Promise<DashboardView | null> {
-  try {
-    return await api<DashboardView>('/api/me');
-  } catch {
-    return null;
-  }
-}
 
 export default function DashboardApp() {
   // Re-renders on its own when the session changes — including in another tab —
@@ -57,8 +44,10 @@ export default function DashboardApp() {
 function Authenticated() {
   const session = authClient.useSession();
   const user = session.data?.user ?? null;
-  const [view, setView] = useState<DashboardView | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Tagged with the account it belongs to, and null until the first request
+  // settles. Every other outcome — including failure — is a value, so nothing
+  // can silently look like "still loading".
+  const [load, setLoad] = useState<{ userId: string; result: DashboardLoad } | null>(null);
 
   // Keyed on the id, not the user object: the hook is free to hand back a new
   // object on every render, and depending on that identity would re-create
@@ -67,21 +56,20 @@ function Authenticated() {
 
   // Handed to the children, which call it after every mutation.
   const refresh = useCallback(async () => {
-    setView(await loadDashboard());
-  }, []);
+    if (!userId) return;
+    setLoad({ userId, result: await loadDashboard() });
+  }, [userId]);
 
   useEffect(() => {
     if (!userId) return;
 
     // `active` guards against a slow response landing after the signed-in user
     // changed, which would otherwise show one account another's dashboard. The
-    // state updates live in the continuation rather than the effect body, which
+    // state update lives in the continuation rather than the effect body, which
     // is also what keeps this off React's cascading-render path.
     let active = true;
-    void loadDashboard().then((next) => {
-      if (!active) return;
-      setView(next);
-      setLoading(false);
+    void loadDashboard().then((result) => {
+      if (active) setLoad({ userId, result });
     });
 
     return () => {
@@ -89,21 +77,72 @@ function Authenticated() {
     };
   }, [userId]);
 
-  if (session.isPending) return <p className="sub">Loading…</p>;
-  if (!user) return <AuthPanel />;
-  if (loading) return <p className="sub">Loading…</p>;
-  if (!view) return <p className="sub">Loading your account…</p>;
+  // Tagging rather than clearing on sign-out: a result belonging to a previous
+  // account reads as "not loaded yet", so signing straight back in as someone
+  // else cannot flash their predecessor's dashboard — and the effect stays free
+  // of the synchronous setState that would cascade renders.
+  const current = load && load.userId === userId ? load.result : null;
 
-  return <Dashboard view={view} refresh={refresh} />;
+  const screen = dashboardScreen({
+    sessionPending: session.isPending,
+    signedIn: Boolean(user),
+    load: current,
+  });
+
+  switch (screen.kind) {
+    case 'loading':
+      return <p className="sub">Loading your account…</p>;
+    case 'signed-out':
+      return <AuthPanel />;
+    case 'error':
+      return <LoadFailed message={screen.message} retry={refresh} />;
+    case 'dashboard':
+      return <Dashboard view={screen.view} refresh={refresh} />;
+  }
 }
 
 /**
- * The sign-in invitation.
+ * The dashboard could not be loaded.
  *
- * The forms themselves live at /auth/*, served by Neon Auth, which is what
- * makes email verification and password reset work at all — there is no mail
- * sender in this app to hand-roll them with.
+ * Shows the server's own message: the ones that reach here are deliberate and
+ * actionable ("ENCRYPTION_KEY is not set…"), and anything unexpected has
+ * already been flattened to "Something went wrong" server-side. Sign out is
+ * offered alongside retry because a session the server keeps refusing is the
+ * one failure the visitor can clear themselves.
  */
+function LoadFailed({ message, retry }: { message: string; retry: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <>
+      <h1>Elixia Booker</h1>
+      <div className="card">
+        <h2>Could not load your account</h2>
+        <div className="banner banner-err" id="load-error">
+          {message}
+        </div>
+        <button
+          id="retry-btn"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await retry();
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? 'Retrying…' : 'Try again'}
+        </button>{' '}
+        <button className="ghost" onClick={() => void authClient.signOut()}>
+          Sign out
+        </button>
+      </div>
+    </>
+  );
+}
+
 function AuthPanel() {
   return (
     <>

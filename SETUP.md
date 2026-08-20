@@ -546,6 +546,13 @@ add whichever is missing, and **redeploy**. Locally, re-run `npx vercel env
 pull .env.local` and restart `npm run dev`; both are read at request time, not
 baked in at build time, so a stale `.env.local` is the usual cause.
 
+**"Could not load your account" after signing in** — the sign-in worked and
+`/api/me` did not. The message on screen is the server's own; act on that. By
+far the most common one is `ENCRYPTION_KEY is not set`, because unlike the Neon
+variables it is never provisioned for you (step 4) — set it with `npx vercel env
+add`, then **redeploy**, or locally re-run `npx vercel env pull .env.local` and
+restart `npm run dev`.
+
 **Confirmation link points at localhost** — add your deployed URL as a trusted
 domain in Neon Auth (step 7).
 
