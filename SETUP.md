@@ -11,7 +11,8 @@ configuration lives, including for local development. Nothing below asks you to
 copy a connection string.
 
 Free tiers cover all of it: **Vercel** (hosting), **Neon** (Postgres + auth),
-**GitHub Actions** (the every-minute cron), optionally **Telegram**.
+**GitHub Actions** (the booking watcher, plus an every-minute cron as a safety
+net), optionally **Telegram**.
 
 > **The one gap:** Elixia's API has never been observed, so the code that talks
 > to it is a placeholder. Everything below works today against a built-in mock.
@@ -286,19 +287,34 @@ trusted domain exactly as above.
 
 Vercel's Hobby plan runs cron jobs once a day, which is useless for booking that
 opens at an exact minute. GitHub Actions has minute granularity and is free for
-public repositories. The workflows are already in
-[`.github/workflows/`](.github/workflows/) — **Booking cron** every minute, and
-**Nightly reindex**, which reprojects upcoming releases so the tick stays a
-single indexed scan. Both use the same two secrets:
+public repositories — but GitHub documents scheduled workflows as *queued, not
+punctual*, and under load a trigger can arrive late enough to miss a release
+outright rather than just fire it late. The workflows are already in
+[`.github/workflows/`](.github/workflows/):
+
+- **Booking watcher** — the one that makes timing exact. A single long-running
+  job starts a few hours ahead of the next release (its own start time can be
+  minutes late and it would not matter) and sleeps, using the runner's own
+  clock, to the exact instant before firing the tick. GitHub's scheduler is off
+  the critical path for precision entirely; it only has to start the job
+  sometime before the next release.
+- **Booking cron** every minute — a safety net, not the timing mechanism. If the
+  watcher's job ever dies, this still catches releases (just with up to
+  a-minute-ish precision, as before).
+- **Nightly reindex**, which reprojects upcoming releases so both of the above
+  stay a single indexed scan.
+
+All three use the same two secrets:
 
 ```bash
 gh secret set APP_URL     --body "https://<your-app>.vercel.app"   # no trailing slash
 gh secret set CRON_SECRET --body "$CRON_SECRET"                    # same value as Vercel
 
+gh workflow run "Booking watcher" && gh run watch
 gh workflow run "Booking cron" && gh run watch
 ```
 
-**Run it once rather than trusting the list.** `gh secret list` shows a secret
+**Run each once rather than trusting the list.** `gh secret list` shows a secret
 that exists, not one that has a value — setting one from an empty variable
 stores an empty string that lists identically, and the failure surfaces later as
 every scheduled run failing with `APP_URL and CRON_SECRET repository secrets
@@ -306,15 +322,17 @@ must be set`.
 
 Two things worth knowing:
 
-- **Scheduled workflows are queued, not punctual**, and GitHub can delay them by
-  minutes under load. The handler claims a release from a minute either side of
-  now and sleeps to the exact instant, so a slightly late trigger still books on
-  time. Every attempt logs its offset from T-0.
+- **The watcher and the safety-net cron can both see the same release** —
+  `claimDue` claims one atomically, so only one of them ever fires it (see
+  `CLAIM_LEASE_MS` in `lib/db/repo.ts` for what happens if a claimant crashes
+  mid-attempt instead of finishing).
 - **Scheduled workflows are disabled after 60 days** of repository inactivity.
-  Any commit re-enables them.
+  Any commit re-enables them — both workflows.
 
-Alternatives that work unchanged: [cron-job.org](https://cron-job.org), or
-Vercel Pro, whose own cron then works via `crons` in `vercel.json`.
+Alternatives that work unchanged for the safety-net cron: [cron-job.org](https://cron-job.org),
+or Vercel Pro, whose own cron then works via `crons` in `vercel.json`. Neither
+replaces the watcher, since neither offers a way to sleep to a sub-minute
+instant — the watcher's long-running job is what does that.
 
 ---
 
@@ -403,7 +421,8 @@ Everything else is a command. These are gated on a human by the provider:
 - [ ] `/api/health` reports everything `true` but `apiDiscovered`,
       `encryptionConfigured` included
 - [ ] `vercel env pull .env.local` works and `npm run dev` comes up configured
-- [ ] `APP_URL` and `CRON_SECRET` set on GitHub, **verified by a manual run**
+- [ ] `APP_URL` and `CRON_SECRET` set on GitHub, **both workflows verified by a
+      manual run**
 - [ ] **Pull request** and **Main** green, Vercel's Git deploys left enabled
 - [ ] Account created, gym account linked, one class added
 - [ ] Discovery done, `MOCK_ELIXIA=0`, one dry-run window observed
@@ -428,7 +447,7 @@ was built before you added it. Redeploy. Nothing applies a new variable to an
 existing build, and locally nothing updates a `.env.local` you have not
 re-pulled.
 
-**The cron workflow fails**, by message:
+**The cron or watcher workflow fails**, by message:
 
 | Message | Cause |
 | --- | --- |

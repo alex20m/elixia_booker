@@ -4,11 +4,15 @@ name: Booking cron
 # that opens at an exact minute. GitHub Actions has minute granularity and is
 # free for public repositories, so it drives the tick instead.
 #
-# Note GitHub's own caveat: scheduled workflows are queued, not guaranteed
-# punctual, and can be delayed by minutes under load. The handler is built for
-# that — it claims a release from a minute either side of now and then sleeps to
-# the exact instant, so a slightly late trigger still books on time. A very late
-# one is logged with its offset from T-0 rather than silently missing.
+# This workflow is the safety net, not the timing mechanism: see watch.yml for
+# that. GitHub's own caveat is that scheduled workflows are queued, not
+# guaranteed punctual, and can be delayed by minutes under load — badly enough
+# that a release can fall outside even this handler's claim window and be
+# missed entirely rather than merely late. watch.yml exists precisely because
+# that caveat makes this workflow alone unsuitable as the primary mechanism; it
+# keeps running here only in case that job ever dies. When it does catch
+# something, it claims a release from a minute either side of now and sleeps to
+# the exact instant, logging its offset from T-0.
 on:
   schedule:
     - cron: '* * * * *'

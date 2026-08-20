@@ -13,7 +13,7 @@
  * Classes are calendar-scheduled, so they stay strings from end to end.
  */
 
-import { DuplicateSubscriptionError, type NewSubscription, type Repo } from './repo';
+import { CLAIM_LEASE_MS, DuplicateSubscriptionError, type NewSubscription, type Repo } from './repo';
 import {
   isInvalidTextRepresentation,
   isUniqueViolation,
@@ -262,16 +262,40 @@ export function createNeonRepo(sql: Sql): Repo {
       ]);
     },
 
-    async claimDue(fromMs, toMs) {
+    async claimDue(fromMs, toMs, nowMs = Date.now()) {
+      // A CTE selects the claimable rows — unclaimed, or whose claim expired
+      // — and locks them (`skip locked` so a concurrent caller does not block
+      // behind this one), then the UPDATE stamps and returns exactly those.
+      // One statement, so two overlapping callers can never both claim the
+      // same row: see CLAIM_LEASE_MS.
       const rows = await sql.query(
-        `select user_id, subscription_id, release_at, class_at,
-                to_char(class_date, 'YYYY-MM-DD') as class_date, release_note
-         from public.due_entries
-         where release_at >= $1::timestamptz and release_at <= $2::timestamptz
-         order by release_at asc`,
-        [iso(fromMs), iso(toMs)],
+        `with claimable as (
+           select id from public.due_entries
+           where (claimed_at is null or claimed_at < $4::timestamptz)
+             and release_at >= $1::timestamptz and release_at <= $2::timestamptz
+           for update skip locked
+         )
+         update public.due_entries d
+         set claimed_at = $3::timestamptz
+         from claimable
+         where d.id = claimable.id
+         returning d.user_id, d.subscription_id, d.release_at, d.class_at,
+                   to_char(d.class_date, 'YYYY-MM-DD') as class_date, d.release_note`,
+        [iso(fromMs), iso(toMs), iso(nowMs), iso(nowMs - CLAIM_LEASE_MS)],
       );
-      return rows.map(toDueEntry);
+      return rows.map(toDueEntry).sort((a, b) => a.releaseEpochMs - b.releaseEpochMs);
+    },
+
+    async peekNextRelease(afterMs, nowMs = Date.now()) {
+      const rows = await sql.query(
+        `select release_at from public.due_entries
+         where (claimed_at is null or claimed_at < $2::timestamptz)
+           and release_at >= $1::timestamptz
+         order by release_at asc
+         limit 1`,
+        [iso(afterMs), iso(nowMs - CLAIM_LEASE_MS)],
+      );
+      return rows[0] ? toMs(rows[0].release_at) : null;
     },
 
     async pruneDueEntries(beforeMs) {

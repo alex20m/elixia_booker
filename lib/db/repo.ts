@@ -18,6 +18,22 @@ import type {
   Subscription,
 } from '../types';
 
+/**
+ * How long a claim holds before it is treated as abandoned and becomes
+ * reclaimable.
+ *
+ * Two callers can legitimately race for the same release: the per-minute
+ * safety-net tick (cron.yml) and the high-precision watcher (watch.yml) both
+ * end up asking for "what's due right now" within seconds of each other.
+ * `claimDue` hands a release to only one of them — but if that caller then
+ * crashes or is killed mid-attempt (a serverless invocation hitting its own
+ * `maxDuration`, at most 300s on Vercel Pro), the release must not stay
+ * claimed forever with nobody ever retrying it. Comfortably above that ceiling
+ * so a claim is never reclaimed out from under an attempt still legitimately
+ * in flight.
+ */
+export const CLAIM_LEASE_MS = 6 * 60_000;
+
 /** A subscription as submitted by the UI, before it has an id. */
 export interface NewSubscription {
   userId: string;
@@ -51,8 +67,17 @@ export interface Repo {
 
   /** Replace a user's scheduled releases with a freshly computed set. */
   replaceDueEntries(userId: string, entries: DueEntry[]): Promise<void>;
-  /** Releases falling inside [fromMs, toMs]. One index scan. */
-  claimDue(fromMs: number, toMs: number): Promise<DueEntry[]>;
+  /**
+   * Releases falling inside [fromMs, toMs], claimed atomically so each one is
+   * handed to exactly one caller — see `CLAIM_LEASE_MS`. One index scan.
+   */
+  claimDue(fromMs: number, toMs: number, nowMs?: number): Promise<DueEntry[]>;
+  /**
+   * The earliest unclaimed release at or after `afterMs`, or null if nothing
+   * is scheduled that far out. A read, not a claim — for the watcher to sleep
+   * to the exact instant using its own clock, without taking the release.
+   */
+  peekNextRelease(afterMs: number, nowMs?: number): Promise<number | null>;
   /** Housekeeping: drop entries whose release is long past. */
   pruneDueEntries(beforeMs: number): Promise<number>;
 

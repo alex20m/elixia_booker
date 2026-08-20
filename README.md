@@ -64,7 +64,9 @@ read, pause or delete another's rows.
 
 ## How the booking works
 
-GitHub Actions fires the tick every minute:
+The booking watcher (`.github/workflows/watch.yml`) fires the tick precisely,
+and a per-minute cron (`.github/workflows/cron.yml`) fires it as a safety net.
+Either way, one tick does:
 
 1. **Look up.** One indexed range scan over precomputed release instants.
    Nothing due → immediate exit.
@@ -84,11 +86,22 @@ A nightly job reprojects every account's releases and prunes old ones.
 ### Why GitHub Actions rather than Vercel Cron
 
 Vercel's Hobby plan runs cron jobs **once a day**, which is useless for booking
-that opens at an exact minute. GitHub Actions has minute granularity and is free.
-Its schedules are queued rather than punctual, so the handler claims a release
-from a minute either side of now and then sleeps to the exact instant — a
-slightly late trigger still books on time, and every attempt logs its offset from
-T-0 so a genuinely late one is visible rather than a mystery.
+that opens at an exact minute. GitHub Actions has minute granularity and is
+free — but its own schedules are documented as *queued, not punctual*, and
+under load a trigger can land late enough that a release falls outside even a
+generous claim window and is simply missed, not just fired late.
+
+That is why timing does not actually depend on the per-minute trigger landing
+on time. **The booking watcher** (`watch.yml`) is one long-running job, started
+by a coarse 3-hourly schedule — its own punctuality is irrelevant, since it
+only has to start sometime before the next release. Once running, it asks
+`/api/cron/next` for the next unclaimed release and sleeps to it using the
+runner's own accurate clock, not GitHub's scheduler. The per-minute **Booking
+cron** (`cron.yml`) stays as a safety net in case the watcher's job ever dies.
+`claimDue` claims a release atomically (`CLAIM_LEASE_MS` in `lib/db/repo.ts`),
+so whichever of the two gets there first is the only one that fires it, and a
+claim that is never finished — a crashed invocation — becomes reclaimable
+rather than lost. Every attempt still logs its offset from T-0.
 
 ### The timing detail that matters
 
@@ -112,6 +125,7 @@ app/                    Next.js App Router
   handler/[...stack]    Neon Auth's own pages: sign in, reset, account settings
   api/…/route.ts        JSON API — thin: authenticate, call a service, serialise
   api/cron/tick         the booking tick, secret-guarded
+  api/cron/next         peeks the next unclaimed release, for the watcher to sleep to
 lib/
   schedule.ts           DST-correct release-instant maths
   planner.ts            weekly recurrence → concrete releases

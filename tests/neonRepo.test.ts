@@ -2,7 +2,7 @@ import { describe, expect, it, beforeAll, beforeEach, afterAll } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import { createNeonRepo } from '@/lib/db/neonRepo';
-import { DuplicateSubscriptionError, type Repo } from '@/lib/db/repo';
+import { CLAIM_LEASE_MS, DuplicateSubscriptionError, type Repo } from '@/lib/db/repo';
 import type { Sql, SqlRow } from '@/lib/db/sql';
 import type { Profile } from '@/lib/types';
 
@@ -294,6 +294,84 @@ describe('due entries', () => {
     ]);
 
     expect((await repo.claimDue(from, to)).map((e) => e.releaseEpochMs)).toEqual([from, to]);
+  });
+
+  it('claims a release only once, until the claim expires', async () => {
+    // Two overlapping schedulers — the per-minute safety net and the
+    // high-precision watcher — can both ask "what's due right now" within
+    // seconds of each other. The second must get nothing, or the class gets
+    // booked twice.
+    const alices = await addClass(ALICE, 'Bodypump');
+    const release = Date.UTC(2026, 3, 1, 5, 0);
+    await repo.replaceDueEntries(ALICE, [entry(ALICE, alices.id, release)]);
+
+    const claimedAt = Date.UTC(2026, 3, 1, 4, 59);
+    const first = await repo.claimDue(release - 60_000, release + 60_000, claimedAt);
+    expect(first.map((e) => e.releaseEpochMs)).toEqual([release]);
+
+    const secondCaller = await repo.claimDue(release - 60_000, release + 60_000, claimedAt + 1_000);
+    expect(secondCaller).toEqual([]);
+  });
+
+  it('reclaims a release once its claim is old enough to be abandoned', async () => {
+    // A caller that claimed a release and then crashed — a killed serverless
+    // invocation, a network drop — must not take the release out of
+    // circulation forever. It becomes reclaimable once its claim is older
+    // than any invocation should legitimately still be running.
+    const alices = await addClass(ALICE, 'Bodypump');
+    const release = Date.UTC(2026, 3, 1, 5, 0);
+    await repo.replaceDueEntries(ALICE, [entry(ALICE, alices.id, release)]);
+
+    const claimedAt = Date.UTC(2026, 3, 1, 4, 59);
+    await repo.claimDue(release - 60_000, release + 60_000, claimedAt);
+
+    const stillLeased = await repo.claimDue(
+      release - 60_000,
+      release + 60_000,
+      claimedAt + CLAIM_LEASE_MS - 1,
+    );
+    expect(stillLeased).toEqual([]);
+
+    const afterLeaseExpires = await repo.claimDue(
+      release - 60_000,
+      release + 60_000,
+      claimedAt + CLAIM_LEASE_MS + 1,
+    );
+    expect(afterLeaseExpires.map((e) => e.releaseEpochMs)).toEqual([release]);
+  });
+
+  it('peeks the earliest unclaimed release without claiming it', async () => {
+    const alices = await addClass(ALICE, 'Bodypump');
+    const sooner = Date.UTC(2026, 3, 1, 5, 0);
+    const later = Date.UTC(2026, 3, 8, 5, 0);
+    await repo.replaceDueEntries(ALICE, [
+      entry(ALICE, alices.id, later),
+      entry(ALICE, alices.id, sooner),
+    ]);
+
+    expect(await repo.peekNextRelease(0)).toBe(sooner);
+    // Peeking must not have claimed it: it is still there to actually claim.
+    expect((await repo.claimDue(sooner, sooner)).map((e) => e.releaseEpochMs)).toEqual([sooner]);
+  });
+
+  it('respects the floor, and reports nothing scheduled that far out', async () => {
+    const alices = await addClass(ALICE, 'Bodypump');
+    const release = Date.UTC(2026, 3, 1, 5, 0);
+    await repo.replaceDueEntries(ALICE, [entry(ALICE, alices.id, release)]);
+
+    expect(await repo.peekNextRelease(release + 1)).toBeNull();
+  });
+
+  it('peek skips a claimed release until its claim expires', async () => {
+    const alices = await addClass(ALICE, 'Bodypump');
+    const release = Date.UTC(2026, 3, 1, 5, 0);
+    await repo.replaceDueEntries(ALICE, [entry(ALICE, alices.id, release)]);
+
+    const claimedAt = Date.UTC(2026, 3, 1, 4, 59);
+    await repo.claimDue(release, release, claimedAt);
+
+    expect(await repo.peekNextRelease(0, claimedAt + CLAIM_LEASE_MS - 1)).toBeNull();
+    expect(await repo.peekNextRelease(0, claimedAt + CLAIM_LEASE_MS + 1)).toBe(release);
   });
 
   it('prunes only the releases older than the cutoff, and says how many', async () => {
