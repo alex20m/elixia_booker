@@ -1,0 +1,114 @@
+name: Booking watcher
+
+# cron.yml's per-minute trigger stays as a safety net, but it is no longer
+# what makes booking exact. GitHub documents scheduled workflows as queued,
+# not punctual — under load a trigger can arrive late enough that a release
+# falls outside the tick's own claim window and is missed outright, not just
+# fired late.
+#
+# This workflow removes the scheduler from that critical path. Instead of
+# being invoked once per release and racing GitHub's queue, one job starts
+# well ahead of the next release — its own start time can be off by many
+# minutes and it costs nothing — and then sleeps, using the runner's own
+# accurate clock, to the exact instant before calling the tick endpoint. The
+# tick still does its own millisecond-precise sleep once inside the request
+# (see lib/booking.ts); this workflow's job is only to make sure that request
+# goes out on time, which no longer depends on the schedule trigger's
+# punctuality at all — only on the job having started at some point before.
+on:
+  schedule:
+    # Only has to start a watcher sometime before the next release, so a
+    # jittery trigger costs nothing. Every 3 hours leaves wide overlap against
+    # the job's own budget below, so the next watcher is already running well
+    # before the previous one's deadline.
+    - cron: '0 */3 * * *'
+  workflow_dispatch: {}
+
+# A new watcher must never race the one already running for the same release.
+# GitHub queues the next scheduled trigger behind this group and starts it the
+# moment the current job exits.
+concurrency:
+  group: booking-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    # Comfortably under GitHub's 6-hour hard ceiling for a single job — the
+    # loop below stops itself well inside this so it always exits cleanly.
+    timeout-minutes: 355
+    steps:
+      - name: Sleep to each release and fire the booking tick
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -uo pipefail
+
+          if [ -z "$APP_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "::error::APP_URL and CRON_SECRET repository secrets must be set"
+            exit 1
+          fi
+
+          # Stop well inside the job's own timeout so it always exits on its
+          # own terms rather than being killed mid-sleep — the next scheduled
+          # trigger (or the queued one waiting on the concurrency group)
+          # starts immediately after.
+          budget_seconds=$((340 * 60))
+          deadline=$(( $(date +%s) + budget_seconds ))
+
+          # How long to wait before rechecking when nothing is due yet, or
+          # when the next release is too far out to sleep straight through —
+          # rechecking lets a nearer release (added or edited meanwhile) be
+          # noticed instead of waited past.
+          poll_seconds=120
+
+          # Wake this many ms before the release: enough for the tick's own
+          # handler to refresh a session and resolve the class id before its
+          # precise sleep to T-0 (see lib/booking.ts), while leaving most of
+          # the request's time budget for that sleep and the retry loop after.
+          lead_ms=20000
+
+          fetch_next_ms() {
+            local body
+            body=$(curl --fail-with-body --silent --show-error --max-time 30 \
+              -H "Authorization: Bearer $CRON_SECRET" \
+              "$APP_URL/api/cron/next") || return 1
+            echo "$body" | jq -er '.nextReleaseEpochMs // empty'
+          }
+
+          fire_tick() {
+            echo "Firing tick at $(date -u +%FT%TZ) for release at $1"
+            curl --fail-with-body --silent --show-error \
+              --max-time 90 --retry 2 --retry-delay 2 --retry-connrefused \
+              -X POST "$APP_URL/api/cron/tick" \
+              -H "Authorization: Bearer $CRON_SECRET"
+            echo
+          }
+
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            next_ms=$(fetch_next_ms) || {
+              echo "::warning::could not reach $APP_URL/api/cron/next, retrying"
+              sleep "$poll_seconds"
+              continue
+            }
+
+            if [ -z "$next_ms" ]; then
+              sleep "$poll_seconds"
+              continue
+            fi
+
+            now_ms=$(( $(date +%s) * 1000 ))
+            wait_ms=$(( next_ms - now_ms - lead_ms ))
+
+            if [ "$wait_ms" -gt $((poll_seconds * 1000)) ]; then
+              sleep "$poll_seconds"
+              continue
+            fi
+
+            if [ "$wait_ms" -gt 0 ]; then
+              sleep "$(awk "BEGIN { printf \"%.3f\", $wait_ms / 1000 }")"
+            fi
+
+            fire_tick "$next_ms" || echo "::warning::tick request failed, will be retried on lease expiry"
+          done

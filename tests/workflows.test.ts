@@ -252,10 +252,49 @@ describe('migrations', () => {
 describe('the scheduled workflows', () => {
   it('leaves the booking tick on a per-minute schedule', () => {
     // The tick is the product: a pipeline change that quietly altered its
-    // cadence would break booking without failing anything.
+    // cadence would break booking without failing anything. It stays as the
+    // safety net even now that watch.yml drives the precise timing — see that
+    // workflow's own tests below.
     const cron = parse(
       readFileSync(fileURLToPath(new URL('../.github/workflows/cron.yml', import.meta.url)), 'utf8'),
     ) as { on?: { schedule?: { cron: string }[] } };
     expect(cron.on?.schedule?.[0]?.cron).toBe('* * * * *');
+  });
+
+  describe('the booking watcher', () => {
+    const watch = parse(
+      readFileSync(fileURLToPath(new URL('../.github/workflows/watch.yml', import.meta.url)), 'utf8'),
+    ) as Workflow & { jobs: Record<string, Job & { 'timeout-minutes'?: number }> };
+
+    it('starts on a schedule loose enough that trigger jitter cannot matter', () => {
+      // The whole point: the trigger only has to land sometime before the
+      // next release, not on it, so GitHub queueing the schedule is no
+      // longer on the critical path for timing.
+      const schedule = (watch.on as { schedule?: { cron: string }[] } | undefined)?.schedule;
+      expect(schedule?.[0]?.cron).not.toBe('* * * * *');
+    });
+
+    it('never lets two watchers race for the same release', () => {
+      const text = readFileSync(
+        fileURLToPath(new URL('../.github/workflows/watch.yml', import.meta.url)),
+        'utf8',
+      );
+      expect(text).toMatch(/cancel-in-progress:\s*false/);
+    });
+
+    it('stops itself comfortably inside GitHub’s 6-hour job ceiling', () => {
+      // A job GitHub kills mid-sleep exits with nothing recorded; one that
+      // stops on its own terms lets the queued next run take over cleanly.
+      const timeout = watch.jobs.watch?.['timeout-minutes'];
+      expect(timeout).toBeGreaterThan(0);
+      expect(timeout).toBeLessThan(360);
+    });
+
+    it('polls the peek endpoint rather than claiming a release just to check on it', () => {
+      // /api/cron/next only reads; claiming early would take the release away
+      // from whichever caller is actually meant to fire it.
+      const commands = commandsOf(watch, 'watch');
+      expect(commands).toMatch(/\/api\/cron\/next/);
+    });
   });
 });
