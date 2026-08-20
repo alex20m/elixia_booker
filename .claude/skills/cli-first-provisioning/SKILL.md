@@ -354,7 +354,7 @@ Client side, `createAuthClient()` from `@neondatabase/auth/next`, and the vanill
 client takes the auth URL directly. A React SPA installs `@neondatabase/neon-js`
 instead and reads `VITE_NEON_AUTH_URL`.
 
-Six things that bite:
+Seven things that bite:
 
 - **The catch-all segment must be `[...path]`.** The handler reads `params.path`,
   so any other name routes nothing. The package's own JSDoc example says
@@ -375,6 +375,21 @@ Six things that bite:
 - **Server components that touch `auth` need `export const dynamic =
   'force-dynamic'`.** Sessions come from cookies, which only exist at request
   time; without it the page is prerendered and the user is always logged out.
+- **`@neondatabase/auth-ui`'s provider themes the whole document**, so the root
+  layout needs `suppressHydrationWarning` on `<html>`. `NeonAuthUIProvider`
+  wraps its children in next-themes' `ThemeProvider` (`attribute: "class"`,
+  `enableSystem`), and next-themes ships a blocking script that stamps
+  `class="dark"` and `style="color-scheme: dark"` onto `document.documentElement`
+  before React hydrates. The server markup can never carry those — the theme
+  lives in `localStorage` and the OS setting — so every dark-mode visitor gets a
+  hydration mismatch on `<html>`. The symptom accuses the layout, which is
+  innocent; the cause is a transitive dependency of a provider mounted deep in
+  the body, and no amount of reading the layout reveals it. Verified against
+  `@neondatabase/auth-ui@0.3.0-beta`. `suppressHydrationWarning` applies to the
+  one element it is set on and **not** its subtree, so real mismatches inside the
+  page are still reported — which is why it belongs on `<html>` and nowhere else.
+  The same holds for any provider that themes the document rather than its own
+  subtree.
 - **Add the deployed URL as a trusted domain** as soon as the app has one.
   Skipping it is a delayed failure: sign-up works, but confirmation and
   password-reset links point at localhost, and only the developer fails to

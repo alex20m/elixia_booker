@@ -82,6 +82,29 @@ This applies to every fix, however small. A one-line fix still gets a test. The
 only exception is a change with no observable behaviour — pure formatting,
 comments, renames — and then say in the PR why no test was added.
 
+### Hydration mismatches are unit-testable
+
+A hydration mismatch — the server's HTML disagreeing with the DOM React finds
+when it hydrates — reads like a browser-only bug, so it tends to ship with no
+test at all. It is reachable from a DOM-environment unit test, because the bug is
+three ordered steps and the report is a `console.error`:
+
+1. Server-render the tree the framework would ship and parse it into the test
+   document (`document.write`), so the root element's own attributes exist.
+2. Apply by hand whatever mutates the DOM before React runs — a theme provider's
+   blocking script, a browser extension's shim.
+3. Hydrate the same tree into that document and assert nothing
+   hydration-related reached `console.error`.
+
+The order *is* the test: mutating before hydrating reproduces the bug, mutating
+after it reproduces nothing.
+
+A test shaped like that can pass vacuously in several ways at once, so pair it
+with a control that hydrates an equivalent tree **without** the fix and asserts
+the mismatch *is* reported. Without the control, a console spy that never
+attached, a hydrate call that silently did nothing, and a suppression accidentally
+covering a whole subtree all read as a pass.
+
 ## Every test must be able to fail
 
 Before committing a test, ask: **what realistic bug would turn this red?** If
