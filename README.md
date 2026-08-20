@@ -124,7 +124,8 @@ lib/
   mock.ts               stand-in backend so the app runs before discovery
 db/migrations/          numbered schema migrations, applied once each
 db/migrate.ts           `npm run migrate` — node-pg-migrate, configured
-.github/workflows/      CI/CD, the every-minute tick, the nightly reindex
+.github/workflows/      the checks and migrations, the every-minute tick, the
+                        nightly reindex
 discovery/              local-only Playwright capture (never deployed)
 ```
 
@@ -178,20 +179,24 @@ written.
 
 ### The pipeline
 
-`.github/workflows/ci.yml` runs those same four commands on every push and pull
-request, then — only on a green `main` — builds and deploys to Vercel and waits
-for the live `/api/health` to answer before calling the deploy good. Pull
-requests get a preview deployment under the same gate.
+Two workflows run those same four commands: `.github/workflows/pull-request.yml`
+on every pull request, and `.github/workflows/main.yml` on every push to `main`.
+Neither deploys — **Vercel's Git integration is the only route to production**,
+building each pull request as a preview and each push to `main` as production,
+on its own. See [SETUP.md step 7](SETUP.md#how-deploying-works).
 
-Deploying is opt-in: without the `VERCEL_*` secrets those steps skip with a note
-rather than failing, so the checks still protect a fork's pull request. See
-[SETUP.md step 7](SETUP.md#let-ci-deploy-for-you-optional).
+That makes the pull-request run the gate that actually holds: by the time
+`main.yml` goes red, Vercel has already deployed the commit. Merge on green, and
+read the `main` run as the record of what landed rather than as a barrier.
 
 Because no human reviews these merges, the pipeline's own shape is tested too:
-`tests/workflows.test.ts` asserts that the deploy jobs wait on the checks, that
-only the `main` job carries `--prod`, and that a deploy never cancels mid-flight.
-Those assertions were each confirmed to fail against a workflow edited to break
-them.
+`tests/workflows.test.ts` asserts that both workflows install from the lockfile
+and run all four checks, that each triggers on its own event alone, and that
+neither deploys or carries deploy credentials — a second route to production
+would race Vercel's and silently undo a rollback. That last pair matches nothing
+by design, so a further test proves the detector still fires against a workflow
+that *does* deploy. Each assertion was confirmed to fail against a workflow
+edited to break it.
 
 ---
 
