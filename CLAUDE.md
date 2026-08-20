@@ -118,6 +118,21 @@ share memory: an approach that is not written down is discovered fresh every
 time, differently each time, and that is exactly how the same mistake gets made
 twice.
 
+**Anything a project discovers that is not already in this file or in a skill
+goes to two places, in the same task: this repo, and `app_skeleton`.** The
+skeleton is what every new app is copied from, so it is the only place a
+*future* project reads — a discovery landed only where it was found protects one
+codebase, and landed in the skeleton it protects every app that starts after
+today. Where the discovery changes what good code looks like rather than only
+what to know, change the skeleton's code too, so the next project starts in that
+shape without having to read anything.
+
+**Use the `capture-a-discovery` skill** for how: deciding whether it is a
+standing rule here or a procedure in a skill, copying rather than retyping so
+the copies cannot drift, diffing them before you commit, and what to record
+about a fact that can move (the version you verified it against, and the
+attractive wrong path).
+
 Worth extracting when it has a **procedure** — an order that matters, a check
 that is easy to skip, a trap with a non-obvious cause, a decision rule for
 choosing between options. Not worth extracting when it is a single command, a
@@ -135,11 +150,12 @@ To keep a skill worth having:
 - **Say what you are unsure about.** A skill that marks its own soft spots gets
   corrected; one that states everything with equal confidence gets trusted where
   it should not be.
-- **Add it to both repos** when it is general enough to apply to both, and keep
-  the copies identical so they do not drift.
+- **Add it to `app_skeleton` always**, and to any sibling repo carrying the same
+  skill, keeping every copy byte-identical so they cannot drift.
 
 Existing skills follow this: `merge-on-green`, `test-first`,
-`isolated-task-branch`. Improve one rather than writing a near-duplicate — if a
+`isolated-task-branch`, `cli-first-provisioning`, `deploy-gate`,
+`capture-a-discovery`. Improve one rather than writing a near-duplicate — if a
 new situation is a variation on something already covered, extend that skill.
 
 ---

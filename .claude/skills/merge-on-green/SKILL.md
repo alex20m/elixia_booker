@@ -160,6 +160,16 @@ still running.
 routinely. `cancelled` is the one that reads like a pass and is not — a killed
 run produced no verdict, so re-run it or push a fix rather than counting it.
 
+**Expect these reads to lag, sometimes by many minutes.** A check run can report
+`in_progress`, and the job's own step list can show a step still running, long
+after both actually finished — the completion timestamp you eventually get back
+is earlier than the moment you asked. So a job that looks stuck is usually a
+stale read, not a hung runner. Before concluding anything is wrong, check the
+job's `completed_at` against the wall clock rather than against how long you
+have been waiting, and re-poll once. Do not re-run a job, cancel it, or start
+debugging a "hang" on the strength of one stale-looking read — and do not tell
+the user something is stuck until a fresh read at a known time still says so.
+
 ### 4. Know what the field cannot tell you
 
 `mergeable_state` is a rollup over the checks that **exist**. It does not predict
