@@ -183,74 +183,69 @@ describe('deploying', () => {
     }
   });
 
-  it('keeps Vercel credentials to the job that reads the database URL', () => {
-    // The migration job needs them for `vercel pull`; nothing else has any
-    // business holding a Vercel token, and a stray one is how a deploy step
-    // comes back "because the secret is already there".
-    expect(sources[PULL_REQUEST], `${PULL_REQUEST} needs no Vercel credentials`).not.toMatch(
-      /VERCEL_(?:TOKEN|ORG_ID|PROJECT_ID)/,
-    );
-
-    const main = workflowOf(MAIN);
-    const holders = Object.keys(main.jobs).filter((id) =>
-      /VERCEL_(?:TOKEN|ORG_ID|PROJECT_ID)/.test(
-        JSON.stringify(main.jobs[id]?.steps ?? []),
-      ),
-    );
-    expect(holders).toEqual(['migrate-production']);
+  it('keeps Vercel credentials out of the workflows entirely', () => {
+    // Nothing in Actions deploys or migrates any more, so nothing needs a
+    // Vercel token. A stray one is how a second route to production returns
+    // — "the secret is already there".
+    for (const [file, text] of Object.entries(sources)) {
+      expect(text, `${file} must not reference Vercel credentials`).not.toMatch(
+        /VERCEL_(?:TOKEN|ORG_ID|PROJECT_ID)/,
+      );
+    }
   });
 });
 
-describe('the migration job', () => {
-  it('applies migrations from the main workflow only', () => {
-    // A migration is the one step of a release that cannot be rolled back, so
-    // it must never run from a pull request — including one from a fork, whose
-    // branch could carry any SQL at all.
-    expect(migratingJobIds(workflowOf(MAIN))).toEqual(['migrate-production']);
-    expect(migratingJobIds(workflowOf(PULL_REQUEST))).toEqual([]);
+describe('migrations', () => {
+  it('runs migrations as part of the Vercel build, before anything is served', () => {
+    // This is the ordering guarantee. Vercel builds a deployment and only
+    // promotes it if the build exits 0, so putting the migration inside the
+    // build means the schema is in place before the new code takes a single
+    // request — and a failed migration leaves the previous deployment serving
+    // rather than promoting code its schema cannot support.
+    const config = JSON.parse(
+      readFileSync(fileURLToPath(new URL('../vercel.json', import.meta.url)), 'utf8'),
+    ) as { buildCommand?: string };
+
+    // `&&` and not `;`: with a semicolon the build would proceed over a failed
+    // migration, which is the exact failure this arrangement exists to prevent.
+    expect(config.buildCommand).toMatch(/npm run migrate\s*&&\s*(?:npm run build|next build)/);
   });
 
-  it('runs migrations only on a push to main', () => {
-    for (const id of migratingJobIds(workflowOf(MAIN))) {
-      const condition = jobOf(MAIN, id).if ?? '';
-      expect(condition, `job "${id}" must be gated to main`).toContain(
-        "github.event_name == 'push'",
-      );
-      expect(condition, `job "${id}" must be gated to main`).toContain(
-        "github.ref == 'refs/heads/main'",
-      );
+  it('keeps the migration out of `npm run build`', () => {
+    // The checks run `npm run build`, and they have no database. A migrate
+    // folded into that script would make CI need one — and would migrate from
+    // a developer's laptop on every local build.
+    const pkg = JSON.parse(
+      readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),
+    ) as { scripts: Record<string, string> };
+
+    expect(pkg.scripts.build).not.toMatch(/migrate/);
+    expect(pkg.scripts.migrate, 'the build command above invokes this').toBeDefined();
+  });
+
+  it('recognises a job that applies migrations', () => {
+    // The assertion below matches nothing by design; this proves the detector
+    // it relies on still fires.
+    const fixture = parse(
+      [
+        'jobs:',
+        '  schema:',
+        '    steps:',
+        '      - run: npm run migrate',
+        '  checks:',
+        '    steps:',
+        '      - run: npm test',
+      ].join('\n'),
+    ) as Workflow;
+    expect(migratingJobIds(fixture)).toEqual(['schema']);
+  });
+
+  it('no longer migrates from a workflow', () => {
+    // Two migrators is one more than the schema needs, and the workflow one
+    // could only ever run after Vercel had already deployed the new code.
+    for (const [file, workflow] of Object.entries(workflows)) {
+      expect(migratingJobIds(workflow), `${file} must leave migrating to the build`).toEqual([]);
     }
-  });
-
-  it('makes migrations wait for the checks to pass', () => {
-    for (const id of migratingJobIds(workflowOf(MAIN))) {
-      const needs = jobOf(MAIN, id).needs;
-      expect(
-        Array.isArray(needs) ? needs : [needs],
-        `job "${id}" must depend on verify`,
-      ).toContain('verify');
-    }
-  });
-
-  it('never runs two migration jobs at once', () => {
-    // Two merges landing together would otherwise race for the same schema.
-    for (const id of migratingJobIds(workflowOf(MAIN))) {
-      const concurrency = (jobOf(MAIN, id) as { concurrency?: unknown }).concurrency;
-      expect(typeof concurrency, `job "${id}" must declare concurrency`).toBe('object');
-      expect(
-        (concurrency as { 'cancel-in-progress'?: boolean })['cancel-in-progress'],
-      ).toBe(false);
-    }
-  });
-
-  it('fails rather than migrating whatever DATABASE_URL happens to be in scope', () => {
-    // The connection string comes from `vercel pull`. If it is not there, the
-    // job has no business guessing — an empty DATABASE_URL and a stray one are
-    // both worse than a red pipeline.
-    const commands = commandsOf(workflowOf(MAIN), 'migrate-production');
-    expect(commands).toMatch(/vercel(?:@\S+)?\s+pull/);
-    expect(commands).toContain('DATABASE_URL');
-    expect(commands).toMatch(/::error::/);
   });
 });
 

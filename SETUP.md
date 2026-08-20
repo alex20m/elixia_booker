@@ -108,13 +108,16 @@ npm run migrate
 That creates four tables with their indexes and cascades. Re-running it applies
 nothing and says so.
 
-You only do this once by hand — from here on, **merging to `main` migrates
-production automatically** — the **Main** workflow applies them on every push
-(step 7).
+You only do this once by hand — from here on, **every Vercel build migrates
+before it deploys**. `vercel.json` sets the build command to `npm run migrate &&
+next build`, so the schema is in place before the new code serves a single
+request, and a migration that fails fails the build: the previous deployment
+keeps serving rather than being replaced by code its schema cannot support.
 
 Neon branches copy their parent's schema, so the per-deployment branch each
 Vercel preview gets already has these tables, and writes from a preview never
-touch your real data.
+touch your real data. Because the preview's build migrates that branch too, a
+pull request that adds a column gets it in its own preview.
 
 ### Changing the schema later
 
@@ -132,20 +135,22 @@ new file numbered below one that has already run is refused.
 
 Two rules that keep an automatic migration safe:
 
-- **Each migration has to be compatible with the code already live, and with
-  the code arriving.** Vercel deploys the merge as soon as it lands, while the
-  migration runs in Actions alongside it, so for a few seconds either version
-  may be serving against either schema. Add nullable columns; leave renames and
-  drops to a follow-up PR merged once the new code is everywhere.
+- **Each migration has to be compatible with the code already live.** The
+  migration runs during the build, while the *previous* deployment is still
+  serving every request, and it is still serving for as long as the build takes
+  after that. New code never meets an old schema, but old code does meet the new
+  one. Add nullable columns; leave renames and drops to a follow-up PR merged
+  once the new code is everywhere.
 - **The run happens inside one transaction**, so a migration may not contain
   `begin`, `commit`, or anything Postgres refuses to run in a transaction
   (`create index concurrently`). Apply those by hand. `npm test` checks the
   first part for you.
 
-A pull request's preview deployment uses a Neon branch cut from production
-*before* its migration merged, so a preview that needs a new column will not
-have it. Run `npm run migrate` against that branch's connection string if you
-need the preview to be complete.
+Two consequences of migrating in the build worth knowing: the database has to be
+reachable for a deploy to succeed at all, and rolling a deployment back in
+Vercel does not roll the schema back — `node-pg-migrate up` only ever applies
+what is outstanding. That is the same restore-from-branch decision as before,
+just worth saying out loud.
 
 ### Turn on Neon Auth
 
@@ -353,9 +358,11 @@ up here.
 
 Two workflows run alongside it and lint, typecheck, test and build: **Pull
 request** on every pull request, and **Main** on every push to `main`. Neither
-deploys.
+deploys, and neither migrates — `vercel.json` makes the build itself
+`npm run migrate && next build`, so the schema lands before the deployment that
+needs it serves anything (step 3).
 
-Two things that follow from that:
+Three things that follow from that:
 
 - **The pull-request run is the real gate.** A red **Main** run means the commit
   is broken *and already live*, because Vercel deployed it the moment it landed.
@@ -364,12 +371,17 @@ Two things that follow from that:
   makes every merge deploy twice, racing itself, and a rollback made in Vercel
   is silently undone by the next Actions deploy. `tests/workflows.test.ts` fails
   if one appears.
+- **Do not move migrations back into a workflow.** A workflow and the deploy
+  both start from the same push, so nothing orders them — the point of putting
+  the migration in the build is that Vercel promotes a deployment only if its
+  build succeeded. The same test fails if a workflow starts migrating.
 
 Deployments use the environment variables set in Vercel (step 6), which is also
-how a preview picks up the Neon branch Vercel created for it. Nothing there
-needs duplicating as a GitHub secret — the two GitHub secrets this repo does
-use, `APP_URL` and `CRON_SECRET`, are for the booking cron in step 8, not for
-deploying.
+how the build reaches the database to migrate it, and how a preview picks up the
+Neon branch Vercel created for it. Nothing there needs duplicating as a GitHub
+secret — no `VERCEL_*` token is needed anywhere, and the two GitHub secrets this
+repo does use, `APP_URL` and `CRON_SECRET`, are for the booking cron in step 8,
+not for deploying.
 
 ---
 
@@ -539,8 +551,8 @@ it. Put the change in a new migration, including when it is a fix for the
 previous one.
 
 **A preview deployment is missing a column the branch adds** — expected. Its
-Neon branch was cut from production before the migration merged. Run
-`npm run migrate` against the preview branch, or merge.
+Neon branch was cut from production before the migration merged, and the
+preview build applies migrations to it — so redeploy the preview to pick it up.
 
 **Local dev can't reach the database** — `.env.local` is stale, or was pulled
 before the variables existed. Re-run `npx vercel env pull .env.local`. If it

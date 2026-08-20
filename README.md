@@ -124,7 +124,7 @@ lib/
   mock.ts               stand-in backend so the app runs before discovery
 db/migrations/          numbered schema migrations, applied once each
 db/migrate.ts           `npm run migrate` — node-pg-migrate, configured
-.github/workflows/      the checks and migrations, the every-minute tick, the
+.github/workflows/      the checks, the every-minute tick, the
                         nightly reindex
 discovery/              local-only Playwright capture (never deployed)
 ```
@@ -189,14 +189,22 @@ That makes the pull-request run the gate that actually holds: by the time
 `main.yml` goes red, Vercel has already deployed the commit. Merge on green, and
 read the `main` run as the record of what landed rather than as a barrier.
 
+Schema migrations ride the deploy rather than racing it. `vercel.json` sets the
+build command to `npm run migrate && next build`, so every deployment migrates
+before it serves anything, and a failed migration fails the build and leaves the
+previous deployment in place. Nothing in Actions migrates, which is also why no
+workflow needs a Vercel token.
+
 Because no human reviews these merges, the pipeline's own shape is tested too:
 `tests/workflows.test.ts` asserts that both workflows install from the lockfile
 and run all four checks, that each triggers on its own event alone, and that
-neither deploys or carries deploy credentials — a second route to production
-would race Vercel's and silently undo a rollback. That last pair matches nothing
-by design, so a further test proves the detector still fires against a workflow
-that *does* deploy. Each assertion was confirmed to fail against a workflow
-edited to break it.
+neither deploys, migrates, nor carries Vercel credentials — a second route to
+production would race Vercel's and silently undo a rollback. It also asserts the
+ordering itself: that the build command runs the migration first and joins the
+two with `&&` rather than `;`, so a failed migration cannot be built over. Those
+no-op assertions match nothing by design, so further tests prove each detector
+still fires against a workflow that *does* deploy or migrate. Every assertion was
+confirmed to fail against a workflow or config edited to break it.
 
 ---
 
