@@ -164,6 +164,31 @@ badly and tedious to test, and they are exactly what the package already did.
 "scripts": { "migrate": "node-pg-migrate up", "migrate:new": "node-pg-migrate create" }
 ```
 
+**If your migrations are plain `.sql` files, you need v9 and one option.** The
+default loader imports each migration as a module, which is right for `.ts`
+migrations and nonsense for SQL — it needs `migrationLoaderStrategies`, which
+does not exist before `node-pg-migrate@9`. Pinning v7 from memory typechecks
+as "unknown property" and is easy to misread as your config being wrong. Driving
+the runner from a small script rather than the bare CLI is what lets you set it,
+along with the two options worth having:
+
+```ts
+await runner({
+  databaseUrl,                 // the UNPOOLED url — see below
+  dir: 'db/migrations',
+  direction: 'up',
+  migrationLoaderStrategies: [{ extensions: ['.sql'], loader: 'legacySql' }],
+  checkOrder: true,            // refuse a migration numbered below one already applied
+  advisoryLockMode: 'wait',    // queue behind a run in flight rather than failing
+});
+```
+
+`checkOrder` catches the shape a merge conflict takes when two branches each add
+"the next" migration; `advisoryLockMode: 'wait'` is what makes two deploys
+landing together serialise instead of one losing. That is still configuration,
+not a runner of your own — the moment the wrapper grows retries or a ledger, the
+wrong tool was picked.
+
 ```bash
 npm run migrate:new -- add_waitlist_position   # writes a timestamped file
 npm run migrate                                 # applies what is outstanding
@@ -219,9 +244,6 @@ npx vercel env pull .env.local                  # development values, gitignored
 npx vercel deploy                               # a one-off preview, by hand
 ```
 
-- **`vercel deploy` is for a one-off, not for production.** Production comes
-  from pushing to the default branch. Reaching for `--prod` by hand promotes a
-  build the checks never saw.
 - **Always pass `--project <name>` explicitly, especially in a fresh worktree.**
   `vercel link --yes` with no `.vercel/project.json` on disk and no `--project`
   does not fail or prompt — it silently *creates a new project* named after the
@@ -232,6 +254,9 @@ npx vercel deploy                               # a one-off preview, by hand
   project rm <name>` (needs a piped `y`, or `--non-interactive` plus the
   --yes-equivalent flag your CLI version supports) removes it — safe as long as
   it has no deployments or data yet.
+- **`vercel deploy` is for a one-off, not for production.** Production comes
+  from pushing to the default branch. Reaching for `--prod` by hand promotes a
+  build the checks never saw.
 - `vercel env pull` is what keeps local development from being a second copy of
   the configuration. Re-run it whenever a variable changes; never hand-edit
   `.env.local`.
@@ -284,47 +309,91 @@ security to, there is no webhook syncing an external user store into yours, and
 because it is in the database, **a Neon branch carries its own users** — a
 preview environment gets an isolated set of accounts for free.
 
-```bash
-npx neonctl neon-auth enable  --project-id <id> --branch <branch>
-npx neonctl neon-auth status  --project-id <id> --output json
-npx neonctl neon-auth domain add https://<your-app-url> --project-id <id>
-npx neonctl neon-auth oauth-provider add --project-id <id>     # google, github, …
-npx neonctl neon-auth config email-password --project-id <id>
-```
-
-App side, for Next.js:
+**Verified against `@neondatabase/auth@0.5.0-beta`**, published 2026-08-11.
+Check the version before trusting the surface below — it is pre-1.0 and
+beta-tagged, its dependency on `better-auth` is pinned to an exact version, and
+the package ships its own `llms.txt`, which is the fastest primary source there
+is. When the provider's docs site is unreachable, `npm pack @neondatabase/auth`
+and read `package/llms.txt` out of the tarball: that is the README the version
+you are actually installing ships with, which beats any search result.
 
 ```bash
-npm install @neondatabase/auth@latest @neondatabase/auth-ui
+npm install @neondatabase/auth        # add @neondatabase/auth-ui for prebuilt components
 ```
+
+Two variables, both required:
+
+```bash
+NEON_AUTH_BASE_URL=https://<your-project>.neon.tech
+NEON_AUTH_COOKIE_SECRET=<at least 32 characters>     # openssl rand -base64 32
+```
+
+Server side, one instance is the entry point for everything:
 
 ```ts
+// lib/auth/server.ts
+import { createNeonAuth } from '@neondatabase/auth/next/server';
+
 export const auth = createNeonAuth({
   baseUrl: process.env.NEON_AUTH_BASE_URL!,
   cookies: { secret: process.env.NEON_AUTH_COOKIE_SECRET! },
 });
+
+// app/api/auth/[...path]/route.ts
+export const { GET, POST } = auth.handler();
+
+// middleware.ts
+export default auth.middleware({ loginUrl: '/auth/sign-in' });
+
+// a server component
+export const dynamic = 'force-dynamic';
+const { data: session } = await auth.getSession();
 ```
 
-One `createNeonAuth()` gives you `auth.getSession()`, `auth.handler()` and
-`auth.middleware()`. A React SPA installs `@neondatabase/neon-js` instead and
-reads `VITE_NEON_AUTH_URL`.
+Client side, `createAuthClient()` from `@neondatabase/auth/next`, and the vanilla
+client takes the auth URL directly. A React SPA installs `@neondatabase/neon-js`
+instead and reads `VITE_NEON_AUTH_URL`.
 
-Four things that bite:
+Six things that bite:
 
-- **`NEON_AUTH_COOKIE_SECRET` is yours to generate**, unlike the other
-  variables: `openssl rand -base64 32`, at least 32 characters, and it must be
-  set or sessions cannot be signed. Add it with `vercel env add` alongside your
-  other secrets.
+- **The catch-all segment must be `[...path]`.** The handler reads `params.path`,
+  so any other name routes nothing. The package's own JSDoc example says
+  `[...all]` while its types say `path` — the types are what runs.
+- **`NEON_AUTH_COOKIE_SECRET` is yours to generate**, unlike the variables the
+  integration supplies, and `createNeonAuth` **throws** below 32 characters.
+  That throw is why you should build the instance lazily rather than at module
+  scope: at module scope it fails the *build* of a project that has not
+  provisioned auth yet, instead of failing the request that needed it.
+- **Importing the SDK pulls in `next/headers`**, which exists only inside a Next
+  runtime — so anything importing it cannot be unit-tested under a plain node
+  test environment. Keep the logic worth testing (mapping their session onto
+  yours, reading the variables) in a module that does *not* import the SDK, and
+  let the SDK module be thin wiring.
+- **An anonymous caller is `{ session: null, user: null }`**, an explicit null
+  rather than an absent field. Treating "no `user` key" as signed-out makes a
+  malformed response indistinguishable from a signed-out visitor.
 - **Server components that touch `auth` need `export const dynamic =
   'force-dynamic'`.** Sessions come from cookies, which only exist at request
   time; without it the page is prerendered and the user is always logged out.
-- **Read the variable names back from `neon-auth status --output json`** rather
-  than assuming them. They are what the app imports, and a wrong guess builds
-  clean and fails at sign-in.
 - **Add the deployed URL as a trusted domain** as soon as the app has one.
   Skipping it is a delayed failure: sign-up works, but confirmation and
   password-reset links point at localhost, and only the developer fails to
   notice.
+
+Managed Better Auth is documented as **AWS regions only** (no Azure), and as not
+supporting projects with IP Allow or Private Networking enabled. Confirm against
+your project before designing around it.
+
+```bash
+npx neonctl neon-auth enable  --project-id <id> --branch <branch>
+npx neonctl neon-auth status  --project-id <id> --output json    # read variable names back
+npx neonctl neon-auth domain add https://<your-app-url> --project-id <id>
+npx neonctl neon-auth oauth-provider add --project-id <id>       # google, github, …
+```
+
+Read the variable names back from `status --output json` rather than assuming
+them. They are what the app imports, and a wrong guess builds clean and fails at
+sign-in.
 
 ### When to use something else
 
@@ -423,11 +492,11 @@ written that way, that is precisely the signal it belongs in the manual list.
 
 ## Where this is least certain
 
-- **Neon Auth is moving.** It was rebuilt on Better Auth, the SDK is young
-  (`@neondatabase/auth` was still pre-1.0 when this was written), and the
-  package, variable and component names above are the ones that changed last
-  time. Treat them as a starting point and check `neon-auth status` and the
-  package's own README before wiring an app to them.
+- **Neon Auth is moving.** The surface above was read out of
+  `@neondatabase/auth@0.5.0-beta` itself rather than from documentation, so it
+  was accurate for that version — but pre-1.0 and beta-tagged means it can move
+  again. Check the installed version's own `llms.txt` before wiring an app to
+  it, and `neon-auth status --output json` for the variable names.
 - **Environment variable names supplied by an integration** are set by the
   provider and have changed before. Read them back from the CLI instead of
   copying them from here.
