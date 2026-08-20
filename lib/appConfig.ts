@@ -53,6 +53,17 @@ export interface LoadOptions {
   repo?: Repo;
 }
 
+/**
+ * Whether the app can serve a signed-in request.
+ *
+ * Unlike the database and auth variables, nothing provisions ENCRYPTION_KEY —
+ * so this is the check most likely to be false on a deployment that otherwise
+ * looks healthy. /api/health reports it for exactly that reason.
+ */
+export function encryptionConfigured(): boolean {
+  return Boolean(process.env.ENCRYPTION_KEY);
+}
+
 export function loadAppConfig(options: LoadOptions = {}): AppConfig {
   const encryptionKey = process.env.ENCRYPTION_KEY ?? '';
 
