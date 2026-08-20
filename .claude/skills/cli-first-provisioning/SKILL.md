@@ -95,8 +95,8 @@ out of order does not fail loudly — it half-works, which is worse.
    something running to point a domain at, and it surfaces build problems while
    the surface is still small.
 6. **The custom domain**, pointed at the production deployment.
-7. **The checks workflow**, plus a migration workflow if the app has a
-   database.
+7. **The checks workflow.** Migrations belong in the build command (above),
+   not in a workflow of their own.
 
 ## Let the platform deploy; let CI check
 
@@ -112,14 +112,34 @@ So the split is fixed:
   lockfile-exact install, lint, typecheck, test, build. It is what makes a
   merge safe, and it is enforced as a required check rather than by the deploy
   waiting for it.
-- **A second workflow only for what the deploy cannot do** — in practice,
-  migrations.
+- **Migrations go in the build, not in a workflow.** A migration workflow
+  cannot be ordered against a deploy the platform owns: both start from the
+  same push, so new code can be serving before the schema it needs exists.
+  Putting the migration inside the build command instead makes the ordering a
+  dependency rather than a race — the platform promotes a deployment only if
+  its build exited 0, so a failed migration leaves the previous deployment
+  serving. On Vercel that is `buildCommand` in `vercel.json`, which also beats
+  a Build Command set in the dashboard:
 
-The consequence to design around: **the deploy is not waiting for your
-migration workflow.** Old code and new schema overlap for a moment either way,
-so migrations have to be additive — add a nullable column now, backfill, and
-drop the old one in a later change once nothing reads it. That constraint comes
-from the platform owning the deploy, not from the migration tool.
+  ```json
+  { "buildCommand": "npm run migrate && next build" }
+  ```
+
+  `&&` and not `;` — with a semicolon the build proceeds over a failed
+  migration, which is the whole failure being designed out. Keep the migration
+  out of the plain `build` script, or CI's build check needs a database too.
+
+The consequence to design around: **old code meets the new schema.** The
+migration runs while the previous deployment is still serving, and that
+deployment keeps serving until the build finishes, so migrations still have to
+be additive — add a nullable column now, backfill, and drop the old one in a
+later change once nothing reads it. Migrating in the build removes the reverse
+overlap (new code, old schema); it cannot remove this one, and no arrangement
+that keeps the site up can.
+
+Two costs to accept knowingly: the database must be reachable for a deploy to
+succeed, and rolling a deployment back does not roll the schema back — `up`
+only applies what is outstanding.
 
 See the `deploy-gate` skill for what to assert about these workflows so their
 gates cannot quietly disappear.
@@ -151,9 +171,10 @@ Three things to get right when wiring it up:
   platform-provisioned database that is usually a second variable
   (`DATABASE_URL_UNPOOLED` or similar) — point `DATABASE_URL` at it for the
   migration step only.
-- **Migrations are not gated on the deploy, so they must be re-runnable and
-  additive.** `node-pg-migrate up` is idempotent by design; your SQL has to be
-  too.
+- **The build runs migrations on every deployment, so they must be re-runnable
+  and additive.** `node-pg-migrate up` is idempotent by design; your SQL has to
+  be too. Preview builds migrate their own database branch, which is what makes
+  a preview of a schema change actually testable.
 - **Prefer plain SQL migration files** unless you need the JS API. They are
   reviewable by anyone, and they survive changing the tool.
 
