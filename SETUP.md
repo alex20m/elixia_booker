@@ -1,28 +1,21 @@
 # Setup
 
-Everything needed to get Elixia Booker running, in order. Roughly 20 minutes.
+Everything needed to get Elixia Booker running, in order. About 20 minutes.
 
-This guide assumes **Neon is connected through Vercel** — Postgres is
-provisioned as a Vercel Marketplace integration, and Vercel keeps the connection
-details in sync as environment variables. That means there are no connection
-strings to copy by hand, and Vercel is the single place your configuration
-lives, including for local development.
+**Every step here is a command.** The handful of things a provider gates on a
+human are collected under [Has to be done by hand](#has-to-be-done-by-hand), so
+the rest runs top to bottom for anyone — or any agent — holding the tokens.
 
-**Everything here is a command.** The few things that genuinely cannot be done
-from a terminal are collected under [Has to be done by
-hand](#has-to-be-done-by-hand); the rest of this guide runs top to bottom for
-anyone — or any agent — holding the tokens.
+Neon is provisioned **through Vercel**, so Vercel is the single place your
+configuration lives, including for local development. Nothing below asks you to
+copy a connection string.
 
-All the services have free tiers that comfortably cover this: **Vercel**
-(hosting, and where Neon is provisioned), **Neon** (Postgres + Neon Auth),
-**GitHub Actions** (the every-minute cron), and optionally **Telegram**
-(notifications).
+Free tiers cover all of it: **Vercel** (hosting), **Neon** (Postgres + auth),
+**GitHub Actions** (the every-minute cron), optionally **Telegram**.
 
-> **Before you start, know the one gap:** Elixia's API has never been observed,
-> so the code that talks to it is a placeholder. The app runs today against a
-> built-in mock, which is enough to set everything up and see it work end to
-> end. [Step 10](#10-replace-the-mock-with-the-real-elixia-api) covers replacing
-> it. Until then, leave `MOCK_ELIXIA=1`.
+> **The one gap:** Elixia's API has never been observed, so the code that talks
+> to it is a placeholder. Everything below works today against a built-in mock.
+> [Step 10](#10-replace-the-mock) replaces it. Until then leave `MOCK_ELIXIA=1`.
 
 ---
 
@@ -32,133 +25,89 @@ All the services have free tiers that comfortably cover this: **Vercel**
 git clone https://github.com/<you>/elixia_booker.git
 cd elixia_booker
 npm install
-npm test          # 248 tests, no services needed
+npm test          # no services needed
 ```
 
-If the tests pass, the toolchain is fine and anything that breaks later is
-configuration rather than code.
+If the tests pass, anything that breaks later is configuration, not code.
 
 ---
 
 ## 2. Create the Vercel project
-
-The Vercel project comes first here, because it is what you attach Neon to.
 
 ```bash
 npx vercel login                # browser device flow, once
 npx vercel link --yes           # creates the project and .vercel/project.json
 ```
 
-`--yes` accepts the defaults; add `--project <name> --team <slug>` to link an
-existing project without any prompts. Once you have a token from **Account
-Settings → Tokens**, `export VERCEL_TOKEN=…` replaces the login step and every
-`vercel` command below runs unattended.
+`--yes` accepts the defaults. To attach an **existing** project, name it:
+`npx vercel link --yes --project <name> --team <slug>` — `--yes` on its own
+silently creates a *new* project from the directory name rather than finding the
+one you meant, and the first sign that happened is a deployment with none of
+your variables.
 
-You can deploy right away if you like — nothing is configured yet, so the app
-will come up and say so rather than crash. Missing configuration is reported on
-the page and by `/api/health`, never by a failed build.
+A token from **Account Settings → Tokens** (`export VERCEL_TOKEN=…`) replaces
+the login step and makes every `vercel` command below unattended.
+
+You can deploy now if you like. Nothing is configured yet, so the app comes up
+and says so rather than crashing — missing configuration is reported on the page
+and by `/api/health`, never by a failed build.
 
 ---
 
-## 3. Add Neon Postgres from Vercel
+## 3. Add Neon Postgres
 
 ```bash
 npx vercel integration add neon --name elixia-db
 ```
 
 One command installs the Marketplace integration, provisions the database,
-connects it to the linked project and pulls the new variables into
-`.env.local`. Pick a region near you — every booking request makes a round trip
-to it, and at T-0 that latency is on the critical path:
+connects it to the linked project and pulls the variables into `.env.local`.
+Pick a region near you — every booking makes a round trip to it, and at T-0 that
+latency is on the critical path:
 
 ```bash
 npx vercel integration add neon --help                    # regions and plans
 npx vercel integration add neon --metadata region=<slug>
 ```
 
-> If it stops and asks you to accept the integration's terms, that one step
-> needs a human at a real terminal: `npx vercel integration accept-terms neon`,
-> then re-run. Creating the database from **Project → Storage → Create Database
-> → Neon** in the dashboard is equivalent.
+> If it stops to ask you to accept the integration's terms, that step needs a
+> human: `npx vercel integration accept-terms neon`, then re-run.
 
-Vercel provisions the Neon project and writes its connection details into your
-project's environment variables for **Production, Preview and Development**:
-
-| Variable | What it is |
-| --- | --- |
-| `DATABASE_URL` | pooled connection string — **the one this app uses** |
-| `DATABASE_URL_UNPOOLED` | direct connection, for tools that need a session |
-| `POSTGRES_*`, `PG*` | aliases for other frameworks; this app ignores them |
-
-Nothing to copy, and nothing to re-paste when Neon rotates a password — Vercel
-updates them in place. The app reads `DATABASE_URL` only.
+Vercel writes the connection details into Production, Preview **and**
+Development. The app reads `DATABASE_URL` (pooled) only; `DATABASE_URL_UNPOOLED`
+and the `POSTGRES_*`/`PG*` aliases are for other tools. Nothing to re-paste when
+Neon rotates a password — Vercel updates them in place.
 
 ### Create the tables
-
-The schema lives in [`db/migrations/`](db/migrations) as numbered `.sql` files.
-[node-pg-migrate](https://github.com/salsita/node-pg-migrate) applies each one
-once and records it in a `pgmigrations` table. Now that Vercel holds the
-connection string, you can apply them from your own machine:
 
 ```bash
 npx vercel env pull .env.local   # brings DATABASE_URL down from Vercel
 npm run migrate
 ```
 
-That creates four tables with their indexes and cascades. Re-running it applies
-nothing and says so.
-
-You only do this once by hand — from here on, **every Vercel build migrates
-before it deploys**. `vercel.json` sets the build command to `npm run migrate &&
-next build`, so the schema is in place before the new code serves a single
-request, and a migration that fails fails the build: the previous deployment
-keeps serving rather than being replaced by code its schema cannot support.
-
-Neon branches copy their parent's schema, so the per-deployment branch each
-Vercel preview gets already has these tables, and writes from a preview never
-touch your real data. Because the preview's build migrates that branch too, a
-pull request that adds a column gets it in its own preview.
+That is the only time you migrate by hand. From here on **every Vercel build
+migrates before it deploys** — `vercel.json` sets the build command to
+`npm run migrate && next build`, so a failed migration fails the build and the
+previous deployment keeps serving. Preview deployments get their own Neon
+branch, and their build migrates that branch too.
 
 ### Changing the schema later
 
-Add a file, never edit one that has run:
+Add a file — `db/migrations/0002_add_waitlist_position.sql` — and never edit one
+that has run. Migrations are tracked **by file name**, so editing an applied one
+changes nothing and renaming it runs it again. Two constraints `npm test`
+checks for you:
 
-```bash
-db/migrations/0002_add_waitlist_position.sql
-```
+- **Compatible with the code already live.** The migration runs while the
+  *previous* deployment is still serving. Add nullable columns; leave renames
+  and drops to a follow-up PR.
+- **One transaction**, so no `begin`/`commit` and nothing Postgres refuses
+  inside one (`create index concurrently`) — apply those by hand.
 
-Four digits, then lower_snake_case, and the whole file is the migration — no
-`up`/`down` markers, because rolling a live schema back is a restore-from-branch
-decision rather than a script. Applied migrations are tracked **by file name**,
-so editing one that has run changes nothing and renaming one runs it again. A
-new file numbered below one that has already run is refused.
-
-Two rules that keep an automatic migration safe:
-
-- **Each migration has to be compatible with the code already live.** The
-  migration runs during the build, while the *previous* deployment is still
-  serving every request, and it is still serving for as long as the build takes
-  after that. New code never meets an old schema, but old code does meet the new
-  one. Add nullable columns; leave renames and drops to a follow-up PR merged
-  once the new code is everywhere.
-- **The run happens inside one transaction**, so a migration may not contain
-  `begin`, `commit`, or anything Postgres refuses to run in a transaction
-  (`create index concurrently`). Apply those by hand. `npm test` checks the
-  first part for you.
-
-Two consequences of migrating in the build worth knowing: the database has to be
-reachable for a deploy to succeed at all, and rolling a deployment back in
-Vercel does not roll the schema back — `node-pg-migrate up` only ever applies
-what is outstanding. That is the same restore-from-branch decision as before,
-just worth saying out loud.
+Two consequences: a deploy needs the database reachable to succeed, and rolling
+a deployment back does not roll the schema back.
 
 ### Turn on Neon Auth
-
-This app is on the **current** Neon Auth — managed Better Auth, not the older
-Stack Auth integration (`@stackframe/stack`, `NEXT_PUBLIC_STACK_*`). Identity
-lives in the `neon_auth` schema of this same database rather than a separate
-project, so users are queryable in SQL and a Neon branch carries its own
-accounts.
 
 ```bash
 npx neonctl neon-auth enable --project-id "$NEON_PROJECT_ID" --branch main
@@ -166,32 +115,20 @@ npx neonctl neon-auth config email-password --project-id "$NEON_PROJECT_ID"
 npx neonctl neon-auth status --project-id "$NEON_PROJECT_ID" --output json
 ```
 
-`NEON_PROJECT_ID` is already in `.env.local` from step 3 (Vercel pulled it in
-alongside `DATABASE_URL`). Enabling Neon Auth pushes one more variable into the
-same Vercel project:
+`NEON_PROJECT_ID` is already in `.env.local` from the pull above. Enabling auth
+pushes `NEON_AUTH_BASE_URL` into the same Vercel project — check with
+`npx vercel env ls`, and if it is missing, read it out of `status --output json`
+and add it as in [step 5](#5-add-the-remaining-variables-in-vercel).
 
-| Neon calls it | You'll use it as |
-| --- | --- |
-| Auth base URL | `NEON_AUTH_BASE_URL` |
+This is the **current** Neon Auth — managed Better Auth, not the older Stack
+Auth integration (`@stackframe/stack`, `NEXT_PUBLIC_STACK_*`), which is closed
+to new projects and is what most tutorials still describe. Accounts live in
+`neon_auth.users_sync` in this same database. Sign-in, sign-up, verification and
+password reset are served at `/auth/*` and `/account/*`, which is why this app
+has no password form of its own.
 
-Check it landed with `npx vercel env ls`. If it didn't, read it out of the
-`status --output json` above and add it with `vercel env add` as in
-[step 5](#5-add-the-remaining-variables-in-vercel) — the rest of the setup is
-identical either way.
-
-The app also needs a cookie-signing secret, which is **yours to generate**
-rather than something Neon provisions — see [step
-4](#4-generate-your-secrets), which is where `NEON_AUTH_COOKIE_SECRET` is
-created alongside the app's other secrets.
-
-Neon Auth owns the accounts directly in `neon_auth.users_sync` in this
-database. This app never reads that table — it only needs the user id, which
-arrives with the session — but it is there if you ever want to join user
-emails onto your own tables in SQL.
-
-Sign-in, sign-up, email verification and password reset are served by Neon
-Auth itself at `/auth/*` and `/account/*`, which is why this app has no
-password form of its own.
+The cookie-signing secret is **yours to generate**, not something Neon
+provisions — that is the next step.
 
 ---
 
@@ -203,55 +140,41 @@ CRON_SECRET=$(openssl rand -base64 32)
 NEON_AUTH_COOKIE_SECRET=$(openssl rand -base64 32)
 ```
 
-Keep all three — the next steps and GitHub Actions need the same values. What
-they do:
+Keep all three; the next steps and GitHub Actions need the same values.
 
-- **`ENCRYPTION_KEY`** seals every stored Elixia credential. It is the only
-  thing that makes a leaked database dump inert. **If you lose or change it,
-  every user must re-link their gym account** — that is by design, not a bug.
-- **`CRON_SECRET`** is the shared secret GitHub Actions sends to trigger a
-  booking run. Without it the endpoint would be publicly triggerable.
-- **`NEON_AUTH_COOKIE_SECRET`** signs the session cookie Neon Auth issues.
-  Unlike `NEON_AUTH_BASE_URL` this is not something Neon provisions — it must
-  be at least 32 characters, or the app treats Neon Auth as unconfigured.
+- **`ENCRYPTION_KEY`** seals every stored Elixia credential, and is the only
+  thing making a leaked database dump inert. Nothing provisions it, and the app
+  refuses to serve a signed-in request without it. **Lose or change it and every
+  user must re-link their gym account** — by design.
+- **`CRON_SECRET`** authenticates the booking tick. Without it the endpoint
+  would be publicly triggerable.
+- **`NEON_AUTH_COOKIE_SECRET`** signs the session cookie. Must be 32+
+  characters, or the app treats Neon Auth as unconfigured.
 
 ---
 
 ## 5. Add the remaining variables in Vercel
 
 Neon supplied the database and auth variables. These are the ones only you can
-supply. `vercel env add` takes the value on stdin, so each is one line:
+supply:
 
 ```bash
 add() { printf '%s' "$2" | npx vercel env add "$1" production,preview,development; }
 
-add ENCRYPTION_KEY               "$ENCRYPTION_KEY"
-add CRON_SECRET                  "$CRON_SECRET"
+add ENCRYPTION_KEY               "$ENCRYPTION_KEY"      # step 4
+add CRON_SECRET                  "$CRON_SECRET"         # step 4
 add NEON_AUTH_COOKIE_SECRET      "$NEON_AUTH_COOKIE_SECRET"
-add MOCK_ELIXIA                  1
-add DRY_RUN                      1
-add DEFAULT_BOOKING_WINDOW_DAYS  7
+add MOCK_ELIXIA                  1                      # 0 after step 10
+add DRY_RUN                      1                      # 0 to really book
+add DEFAULT_BOOKING_WINDOW_DAYS  7                      # 7 Basic, 14 Premium
 add DEFAULT_TIMEZONE             Europe/Helsinki
 ```
 
-What each one is:
+Including `development` matters: that is the set `vercel env pull` gives you
+next, so the same values serve local dev. Confirm with `npx vercel env ls`.
 
-| Variable | Value |
-| --- | --- |
-| `ENCRYPTION_KEY` | from step 4 |
-| `CRON_SECRET` | from step 4 |
-| `NEON_AUTH_COOKIE_SECRET` | from step 4 |
-| `MOCK_ELIXIA` | `1` for now |
-| `DRY_RUN` | `1` at first |
-| `DEFAULT_BOOKING_WINDOW_DAYS` | `7` or `14` |
-| `DEFAULT_TIMEZONE` | `Europe/Helsinki` |
-
-Including `development` matters: that is the set `vercel env pull` gives you in
-the next step, so the same values serve local dev without a second copy to
-maintain. Confirm with `npx vercel env ls`.
-
-Redeploy after adding them — Vercel does not apply new variables to an existing
-build.
+**Redeploy afterwards.** Vercel does not apply new variables to an existing
+build, so until you do, the deployment behaves exactly as if you never set them.
 
 ---
 
@@ -262,68 +185,75 @@ npx vercel env pull .env.local
 npm run dev
 ```
 
-`vercel env pull` writes the **Development** values — database, auth, and
-everything from step 5 — into `.env.local`, which is gitignored. Re-run it
-whenever a variable changes in Vercel; nothing here is edited by hand.
+`vercel env pull` writes the **Development** values into `.env.local`, which is
+gitignored. Re-run it whenever a variable changes; nothing here is edited by
+hand.
 
-By default the Development `DATABASE_URL` points at the same Neon branch as
-production. If you'd rather local dev didn't write to real data, create a branch
-in the Neon console and point the Development variable at it, then pull again.
+Development `DATABASE_URL` points at the same Neon branch as production. To keep
+local dev off real data, create a branch in the Neon console, point the
+Development variable at it, and pull again.
 
-Open <http://localhost:3000>:
+At <http://localhost:3000>:
 
-1. **Create an account** — this is your Booker login, separate from Elixia.
+1. **Create an account** — your Booker login, separate from Elixia.
 2. **Link your Elixia account** — with `MOCK_ELIXIA=1`, any email containing `@`
    and any password of 4+ characters is accepted.
 3. **Add a class** and check the "Opens …" time looks right.
 
-Trigger a booking run by hand:
+Fire a booking run by hand:
 
 ```bash
 curl -X POST http://localhost:3000/api/cron/tick \
-  -H "Authorization: Bearer <your CRON_SECRET>"
+  -H "Authorization: Bearer $CRON_SECRET"
 ```
 
 ---
 
-## 7. Deploy to production
+## 7. Deploy
 
 ```bash
 npx vercel deploy --prod
-```
-
-Check it came up:
-
-```bash
 curl https://<your-app>.vercel.app/api/health
 ```
 
-Every field should read `true` except `apiDiscovered` (see step 10).
+Every field should read `true` except `apiDiscovered` (step 10) — including
+**`encryptionConfigured`**, which is the one that is false on a deployment that
+otherwise looks fine and where sign-in fails with "Could not load your account".
 
-### Add your app URL to Neon Auth
+Then let Neon Auth link back to the deployment:
 
 ```bash
 npx neonctl neon-auth domain add "https://<your-app>.vercel.app" --project-id "$NEON_PROJECT_ID"
 ```
 
-Confirmation and password-reset emails link back here; without it they point at
-`localhost` and appear broken to everyone but you. Add your preview domain too
-if you want sign-in to work on preview deployments.
+Without it, confirmation and password-reset emails point at `localhost`. Add
+your preview domain too if you want sign-in on previews.
 
-### Point a custom domain at it (optional)
+### How deploying works
 
-Domain registered at Cloudflare, DNS at Cloudflare, app on Vercel. Attach the
-domain first, then ask Vercel which record it wants — the target changes, so
-read it rather than hardcoding it:
+**Vercel's Git integration deploys; GitHub Actions only checks.** Once the
+project is linked (step 2), Vercel builds every pull request as a preview and
+every push to `main` as production — no GitHub-side configuration, no `VERCEL_*`
+token anywhere. The **Pull request** and **Main** workflows lint, typecheck,
+test and build; neither deploys and neither migrates, and
+`tests/workflows.test.ts` fails if either starts to, because a second route to
+production deploys every merge twice and silently undoes rollbacks.
+
+So a red **Main** run means the commit is broken *and already live*. The
+pull-request run is the real gate.
+
+### Custom domain (optional)
+
+Domain and DNS at Cloudflare, app on Vercel. Attach first, then read the record
+Vercel wants rather than hardcoding it:
 
 ```bash
 npx vercel domains add booker.example.com elixia_booker
 npx vercel domains inspect booker.example.com     # the record to create
 ```
 
-Cloudflare has no CLI for DNS records, so this part goes through its API with a
-token scoped to **Zone → DNS → Edit** on that one zone (**My Profile → API
-Tokens → Create Token**):
+Cloudflare has no DNS CLI, so create the record through its API with a token
+scoped to **Zone → DNS → Edit** on that zone:
 
 ```bash
 export CLOUDFLARE_API_TOKEN=<scoped token>
@@ -339,96 +269,52 @@ curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE/dns_records" \
 npx vercel domains verify booker.example.com
 ```
 
-Two things to get right:
-
-- **`"proxied": false`.** Orange-clouding the record puts Cloudflare's proxy in
-  front of a host that already terminates TLS, and the symptoms — a certificate
-  that never issues, or a redirect loop — do not point back at the toggle.
-  Leave it grey.
+- **`"proxied": false`.** Orange-clouding puts Cloudflare's proxy in front of a
+  host that already terminates TLS; the symptoms — a certificate that never
+  issues, or a redirect loop — do not point back at the toggle.
 - **Re-running the `POST` fails** rather than updating. Look the record up by
-  name and `PATCH` it if it already exists, otherwise a second run of your
-  setup dies halfway.
+  name and `PATCH` it if it exists, or a second run of your setup dies halfway.
+- `verify` failing immediately afterwards is normal — DNS propagation. Re-run it
+  in a few minutes.
 
-Then point `APP_URL` (step 8) at the custom domain, and add it as a Neon Auth
-trusted domain exactly as you did for the `vercel.app` URL. Verification depends
-on DNS propagation, so `verify` failing right afterwards is normal — re-run it
-in a few minutes.
-
-### How deploying works
-
-**Vercel's Git integration deploys; GitHub Actions only checks.** Once the
-project is linked to the repository (step 2), Vercel builds every pull request
-as a preview and every push to `main` as production — no secrets, no
-configuration on the GitHub side. Leave it enabled and there is nothing to set
-up here.
-
-Two workflows run alongside it and lint, typecheck, test and build: **Pull
-request** on every pull request, and **Main** on every push to `main`. Neither
-deploys, and neither migrates — `vercel.json` makes the build itself
-`npm run migrate && next build`, so the schema lands before the deployment that
-needs it serves anything (step 3).
-
-Three things that follow from that:
-
-- **The pull-request run is the real gate.** A red **Main** run means the commit
-  is broken *and already live*, because Vercel deployed it the moment it landed.
-  Merge on green, and treat **Main** as the record of what landed.
-- **Do not add a deploy step to the workflows.** A second route to production
-  makes every merge deploy twice, racing itself, and a rollback made in Vercel
-  is silently undone by the next Actions deploy. `tests/workflows.test.ts` fails
-  if one appears.
-- **Do not move migrations back into a workflow.** A workflow and the deploy
-  both start from the same push, so nothing orders them — the point of putting
-  the migration in the build is that Vercel promotes a deployment only if its
-  build succeeded. The same test fails if a workflow starts migrating.
-
-Deployments use the environment variables set in Vercel (step 6), which is also
-how the build reaches the database to migrate it, and how a preview picks up the
-Neon branch Vercel created for it. Nothing there needs duplicating as a GitHub
-secret — no `VERCEL_*` token is needed anywhere, and the two GitHub secrets this
-repo does use, `APP_URL` and `CRON_SECRET`, are for the booking cron in step 8,
-not for deploying.
+Then point `APP_URL` (step 8) at the custom domain and add it as a Neon Auth
+trusted domain exactly as above.
 
 ---
 
 ## 8. Set up the cron (GitHub Actions)
 
-Vercel's Hobby plan runs cron jobs **once a day**, which is useless for booking
-that opens at an exact minute. GitHub Actions has minute granularity and is free
-for public repositories, so it drives the tick instead. The workflows are already
-in [`.github/workflows/`](.github/workflows/).
+Vercel's Hobby plan runs cron jobs once a day, which is useless for booking that
+opens at an exact minute. GitHub Actions has minute granularity and is free for
+public repositories. The workflows are already in
+[`.github/workflows/`](.github/workflows/) — **Booking cron** every minute, and
+**Nightly reindex**, which reprojects upcoming releases so the tick stays a
+single indexed scan. Both use the same two secrets:
 
 ```bash
-gh secret set APP_URL     --body "https://<your-app>.vercel.app"
-gh secret set CRON_SECRET --body "$CRON_SECRET"
+gh secret set APP_URL     --body "https://<your-app>.vercel.app"   # no trailing slash
+gh secret set CRON_SECRET --body "$CRON_SECRET"                    # same value as Vercel
+
+gh workflow run "Booking cron" && gh run watch
 ```
 
-| Secret | Value |
-| --- | --- |
-| `APP_URL` | `https://<your-app>.vercel.app` (no trailing slash) |
-| `CRON_SECRET` | the same value you put in Vercel in step 5 |
-
-Then trigger it once rather than waiting for the schedule:
-
-```bash
-gh workflow run "Booking cron"
-gh run watch
-```
+**Run it once rather than trusting the list.** `gh secret list` shows a secret
+that exists, not one that has a value — setting one from an empty variable
+stores an empty string that lists identically, and the failure surfaces later as
+every scheduled run failing with `APP_URL and CRON_SECRET repository secrets
+must be set`.
 
 Two things worth knowing:
 
-- **Scheduled workflows are queued, not punctual.** GitHub can delay them by
-  minutes under load. The handler is built for that: it claims a release from a
-  minute either side of now and then sleeps to the exact instant, so a slightly
-  late trigger still books on time. Every attempt logs its offset from T-0, so a
-  genuinely late one is visible rather than a mystery.
-- **Scheduled workflows are disabled after 60 days of no repository activity.**
-  If the repo goes quiet, GitHub emails you and stops running them. Any commit
-  re-enables them.
+- **Scheduled workflows are queued, not punctual**, and GitHub can delay them by
+  minutes under load. The handler claims a release from a minute either side of
+  now and sleeps to the exact instant, so a slightly late trigger still books on
+  time. Every attempt logs its offset from T-0.
+- **Scheduled workflows are disabled after 60 days** of repository inactivity.
+  Any commit re-enables them.
 
-If you'd rather not depend on that, alternatives that work unchanged:
-[cron-job.org](https://cron-job.org) (free, reliable, minute granularity), or
-Vercel Pro, whose own cron then works via the `crons` field in `vercel.json`.
+Alternatives that work unchanged: [cron-job.org](https://cron-job.org), or
+Vercel Pro, whose own cron then works via `crons` in `vercel.json`.
 
 ---
 
@@ -436,26 +322,26 @@ Vercel Pro, whose own cron then works via the `crons` field in `vercel.json`.
 
 1. Message [@BotFather](https://t.me/BotFather) → `/newbot` → copy the token.
 2. Add `TELEGRAM_BOT_TOKEN` to Vercel and redeploy.
-3. Send your new bot any message, then open
+3. Message your new bot, then open
    `https://api.telegram.org/bot<TOKEN>/getUpdates` and copy `message.chat.id`.
 4. Paste that chat ID into **Settings** in the app.
 
-One bot serves everyone; each user supplies their own chat ID. Without it the app
-still books and logs — it just can't tell you about it.
+One bot serves everyone; each user supplies their own chat ID. Without it the
+app still books and logs — it just can't tell you about it.
 
 ---
 
-## 10. Replace the mock with the real Elixia API
+## 10. Replace the mock
 
-Everything above works today against `lib/mock.ts`. This is the step that makes
-it book real classes, and it has to happen on your own machine: the app needs to
-watch a real login, which means a real browser and your own 2FA.
+Everything above works against `lib/mock.ts`. This is the step that books real
+classes, and it has to happen on your own machine: it needs a real login, which
+means a real browser and your own 2FA.
 
 ```bash
 cp .env.example .env         # add ELIXIA_EMAIL / ELIXIA_PASSWORD
 npx playwright install chromium
 
-npm run discover:headed      # walks you through login → schedule → booking
+npm run discover:headed      # walks login → schedule → booking
 npm run redact               # strips secrets, ready to commit
 ```
 
@@ -469,18 +355,17 @@ curl -X POST 'https://<booking-endpoint>' \
   -d '{"classId":"..."}'
 ```
 
-If the browser succeeds and `curl` fails, **stop** — the whole premise is dead. A
-serverless function can't run a JS challenge and can't control its TLS
-fingerprint, so no amount of endpoint detail will help, and the architecture
-needs rethinking rather than finishing. Better to find out in five minutes than
-after a week of work.
+If the browser succeeds and `curl` fails, **stop** — the premise is dead. A
+serverless function can't run a JS challenge or control its TLS fingerprint, so
+no amount of endpoint detail helps and the architecture needs rethinking. Better
+to find out in five minutes than after a week.
 
 If it succeeds:
 
 1. Fill in [`docs/api.md`](docs/api.md) from the capture.
 2. Update `lib/elixia.ts`: `ENDPOINTS`, `authHeaders`, `buildBookingBody`,
    `parseLoginResponse`, `classifyBookingResponse`, `resolveClassId`.
-3. Set `API_DISCOVERED = true` in that file.
+3. Set `API_DISCOVERED = true` there.
 4. Set `MOCK_ELIXIA=0` in Vercel and redeploy.
 5. Leave `DRY_RUN=1` for one booking window and check the history shows a
    plausible attempt at the right millisecond.
@@ -490,45 +375,36 @@ If it succeeds:
 
 ## Has to be done by hand
 
-Everything else above is a command. These are the exceptions, and each is here
-because the provider gates it on a human rather than because a CLI is missing:
+Everything else is a command. These are gated on a human by the provider:
 
-- **`npx vercel login`, or minting a Vercel token** — a browser device flow,
-  once per machine. After that, everything else on Vercel is scriptable.
+- **`npx vercel login`, or minting a Vercel token** — browser device flow, once
+  per machine.
 - **Minting `NEON_API_KEY` and `CLOUDFLARE_API_TOKEN`** — a token cannot create
-  itself, so the first one of each comes from that provider's console.
-- **Accepting a Marketplace integration's legal terms**, if the CLI asks:
-  `vercel integration accept-terms` requires an interactive terminal and human
-  confirmation by design.
-- **Registering the domain and pointing its nameservers at Cloudflare**, if you
-  want a custom domain.
-- **Creating the Telegram bot** — BotFather is a chat, and your chat ID only
-  exists once you have messaged the bot.
-- **Elixia discovery (step 10)** — a real login with real 2FA in a headed
-  browser is the entire point of that step.
+  itself.
+- **Accepting a Marketplace integration's terms**, if the CLI asks.
+- **Registering the domain and pointing its nameservers at Cloudflare**, for a
+  custom domain.
+- **Creating the Telegram bot** — BotFather is a chat, and your chat ID exists
+  only once you have messaged it.
+- **Elixia discovery (step 10)** — a real login with real 2FA is the point.
 
 ---
 
 ## Checklist
 
 - [ ] `npm test` passes locally
-- [ ] Vercel project created and linked (`npx vercel link`)
-- [ ] Neon provisioned (`npx vercel integration add neon`) and `DATABASE_URL`
-      visible in `npx vercel env ls`
-- [ ] `npm run migrate` run against the Neon database
-- [ ] Neon Auth enabled (`neonctl neon-auth enable`), `NEON_AUTH_BASE_URL`
-      present in Vercel, and your app URL added as a trusted domain
+- [ ] Vercel project linked, and it is the project you meant
+- [ ] Neon provisioned and `DATABASE_URL` visible in `npx vercel env ls`
+- [ ] `npm run migrate` run once against Neon
+- [ ] Neon Auth enabled, `NEON_AUTH_BASE_URL` in Vercel, app URL added as a
+      trusted domain
 - [ ] `ENCRYPTION_KEY`, `CRON_SECRET`, `NEON_AUTH_COOKIE_SECRET` and the app
-      settings added in Vercel for Production, Preview and Development, then
-      redeployed
+      settings added for Production, Preview and Development — **then redeployed**
+- [ ] `/api/health` reports everything `true` but `apiDiscovered`,
+      `encryptionConfigured` included
 - [ ] `vercel env pull .env.local` works and `npm run dev` comes up configured
-- [ ] `/api/health` reports everything configured
-- [ ] Custom domain added and `npx vercel domains verify` clean, if you want
-      one, with the Cloudflare record left unproxied
-- [ ] `APP_URL` and `CRON_SECRET` set as GitHub Actions secrets
-- [ ] **Pull request** and **Main** workflows green, and Vercel's automatic Git
-      deploys left enabled
-- [ ] **Booking cron** workflow run manually and green
+- [ ] `APP_URL` and `CRON_SECRET` set on GitHub, **verified by a manual run**
+- [ ] **Pull request** and **Main** green, Vercel's Git deploys left enabled
 - [ ] Account created, gym account linked, one class added
 - [ ] Discovery done, `MOCK_ELIXIA=0`, one dry-run window observed
 - [ ] `DRY_RUN=0`
@@ -537,59 +413,56 @@ because the provider gates it on a human rather than because a CLI is missing:
 
 ## Troubleshooting
 
+**"Could not load your account" after signing in** — sign-in worked and
+`/api/me` did not. The message on screen is the server's own; act on that.
+Nearly always `ENCRYPTION_KEY is not set`, because nothing provisions it (step
+4). Add it, then **redeploy**; locally, re-pull `.env.local` and restart
+`npm run dev`. `/api/health` names it as `encryptionConfigured`.
+
 **"Neon Auth is not configured"** — `NEON_AUTH_BASE_URL` or
 `NEON_AUTH_COOKIE_SECRET` is missing, or the secret is under 32 characters.
-Enabling Neon Auth pushes `NEON_AUTH_BASE_URL` into Vercel, but only into the
-project the Neon database is attached to; `NEON_AUTH_COOKIE_SECRET` is never
-provisioned for you (step 4) — check both are there with `npx vercel env ls`,
-add whichever is missing, and **redeploy**. Locally, re-run `npx vercel env
-pull .env.local` and restart `npm run dev`; both are read at request time, not
-baked in at build time, so a stale `.env.local` is the usual cause.
+Check both with `npx vercel env ls`.
 
-**"Could not load your account" after signing in** — the sign-in worked and
-`/api/me` did not. The message on screen is the server's own; act on that. By
-far the most common one is `ENCRYPTION_KEY is not set`, because unlike the Neon
-variables it is never provisioned for you (step 4) — set it with `npx vercel env
-add`, then **redeploy**, or locally re-run `npx vercel env pull .env.local` and
-restart `npm run dev`.
+**A variable is set in Vercel but the app disagrees** — the running deployment
+was built before you added it. Redeploy. Nothing applies a new variable to an
+existing build, and locally nothing updates a `.env.local` you have not
+re-pulled.
 
-**Confirmation link points at localhost** — add your deployed URL as a trusted
-domain in Neon Auth (step 7).
+**The cron workflow fails**, by message:
 
-**A change to a migration had no effect** — migrations are tracked by file
-name, so one that has already run is never applied again, however much you edit
-it. Put the change in a new migration, including when it is a fix for the
-previous one.
-
-**A preview deployment is missing a column the branch adds** — expected. Its
-Neon branch was cut from production before the migration merged, and the
-preview build applies migrations to it — so redeploy the preview to pick it up.
-
-**Local dev can't reach the database** — `.env.local` is stale, or was pulled
-before the variables existed. Re-run `npx vercel env pull .env.local`. If it
-comes back without `DATABASE_URL`, the Neon variables aren't ticked for the
-Development environment in Vercel.
-
-**A preview deployment has no data** — expected. Each preview gets its own Neon
-branch, with your schema but not your rows.
-
-**The cron workflow fails with 401** — `CRON_SECRET` differs between GitHub and
-Vercel. They must match exactly; re-paste both.
-
-**The cron workflow fails with 500 mentioning `CRON_SECRET`** — it isn't set in
-Vercel. The endpoint refuses to run rather than allowing an unauthenticated
-booking run.
+| Message | Cause |
+| --- | --- |
+| `secrets must be set` | `APP_URL` or `CRON_SECRET` is empty on GitHub — an empty secret lists the same as a real one |
+| `401` | `CRON_SECRET` differs between GitHub and Vercel |
+| `500` naming `CRON_SECRET` | it isn't set in Vercel; the endpoint refuses rather than allow an unauthenticated booking |
 
 **The workflow stopped running** — GitHub disables scheduled workflows after 60
-days of repository inactivity. Push any commit to re-enable.
+days of inactivity. Push any commit.
+
+**Confirmation link points at localhost** — add your deployed URL as a Neon Auth
+trusted domain (step 7).
+
+**A change to a migration had no effect** — migrations are tracked by file name,
+so one that has run never runs again however much you edit it. Put the change in
+a new migration, including when it fixes the previous one.
+
+**A preview is missing a column the branch adds** — its Neon branch was cut
+before the migration merged. Redeploy the preview.
+
+**A preview has no data** — expected. Each preview gets its own Neon branch,
+with your schema but not your rows.
+
+**Local dev can't reach the database** — `.env.local` is stale or predates the
+variables. Re-pull. If `DATABASE_URL` is still absent, the Neon variables aren't
+ticked for Development in Vercel.
 
 **"No database configured" banner** — the app fell back to in-memory storage
 because `DATABASE_URL` is missing. Data will not survive.
 
 **A booking was missed** — check the history entry's offset from T-0. A large
 positive number means the trigger arrived late (GitHub queueing); `too-early`
-across every retry means the release time is computed wrong, so check the
-membership tier and timezone in Settings.
+across every retry means the release time is computed wrong, so check membership
+tier and timezone in Settings.
 
 **Everything works but nothing is really booked** — expected while
 `MOCK_ELIXIA=1` or `DRY_RUN=1`. Both are shown as banners in the app.

@@ -1,4 +1,5 @@
 import { API_DISCOVERED } from '@/lib/elixia';
+import { encryptionConfigured } from '@/lib/appConfig';
 import { authConfigured } from '@/lib/auth/neonAuth';
 import { databaseConfigured } from '@/lib/db/neon';
 import { handle, json } from '@/lib/http';
@@ -16,6 +17,7 @@ export async function GET(): Promise<Response> {
       dryRun: (process.env.DRY_RUN ?? '') === '1',
       databaseConfigured: databaseConfigured(),
       authConfigured: authConfigured(),
+      encryptionConfigured: encryptionConfigured(),
       cronConfigured: Boolean(process.env.CRON_SECRET),
     }),
   );
