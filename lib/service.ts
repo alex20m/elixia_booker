@@ -415,7 +415,7 @@ export async function runDueBookings(
   clock: TickClock = {},
 ): Promise<number> {
   const logger = new Logger(clock.now);
-  const entries = await config.repo.claimDue(nowMs - MINUTE_MS, nowMs + MINUTE_MS);
+  const entries = await config.repo.claimDue(nowMs - MINUTE_MS, nowMs + MINUTE_MS, nowMs);
   logger.log('cron.tick', { dueCount: entries.length });
   if (entries.length === 0) return 0;
 

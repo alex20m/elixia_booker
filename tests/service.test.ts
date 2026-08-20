@@ -365,6 +365,23 @@ describe('the booking tick', () => {
     expect(await runDueBookings(config, nowMs, instantClock())).toBe(1);
   });
 
+  it('does not double-book when two ticks race for the same release', async () => {
+    // The per-minute safety net and the high-precision watcher both call the
+    // same endpoint, and can land within seconds of each other around a
+    // release. The second must find nothing left to claim.
+    const profile = await linkedProfile();
+    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+
+    setNow(firstRelease(sub) - 30_000);
+    const [first, second] = await Promise.all([
+      runDueBookings(config, nowMs, instantClock()),
+      runDueBookings(config, nowMs, instantClock()),
+    ]);
+
+    expect(first + second).toBe(1);
+    expect(await repo.listHistory(profile.id)).toHaveLength(1);
+  });
+
   it('skips a user whose gym link has expired', async () => {
     const profile = await linkedProfile();
     const sub = await addSubscription(config, profile, BODYPUMP, nowMs);

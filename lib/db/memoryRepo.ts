@@ -10,8 +10,11 @@
  * Not suitable for production: serverless invocations do not share memory.
  */
 
-import { DuplicateSubscriptionError, type NewSubscription, type Repo } from './repo';
+import { CLAIM_LEASE_MS, DuplicateSubscriptionError, type NewSubscription, type Repo } from './repo';
 import type { BookingHistoryEntry, DueEntry, Profile, Subscription } from '../types';
+
+/** A due entry as stored, with the claim bookkeeping `Repo` callers never see. */
+type StoredDueEntry = DueEntry & { claimedAtMs?: number };
 
 export interface MemoryRepo extends Repo {
   /** Test hook: everything persisted, for asserting on what was written. */
@@ -21,7 +24,7 @@ export interface MemoryRepo extends Repo {
 export function createMemoryRepo(): MemoryRepo {
   const profiles = new Map<string, Profile>();
   const subscriptions = new Map<string, Subscription>();
-  const dueEntries: DueEntry[] = [];
+  const dueEntries: StoredDueEntry[] = [];
   const history = new Map<string, BookingHistoryEntry[]>();
   let nextId = 1;
 
@@ -105,10 +108,26 @@ export function createMemoryRepo(): MemoryRepo {
       dueEntries.push(...entries);
     },
 
-    async claimDue(fromMs, toMs) {
-      return dueEntries
-        .filter((e) => e.releaseEpochMs >= fromMs && e.releaseEpochMs <= toMs)
-        .sort((a, b) => a.releaseEpochMs - b.releaseEpochMs);
+    async claimDue(fromMs, toMs, nowMs = Date.now()) {
+      const claimable = dueEntries.filter(
+        (e) =>
+          e.releaseEpochMs >= fromMs &&
+          e.releaseEpochMs <= toMs &&
+          (e.claimedAtMs === undefined || e.claimedAtMs < nowMs - CLAIM_LEASE_MS),
+      );
+      const claimed: DueEntry[] = claimable.map(({ claimedAtMs: _claimedAtMs, ...entry }) => entry);
+      for (const e of claimable) e.claimedAtMs = nowMs;
+      return claimed.sort((a, b) => a.releaseEpochMs - b.releaseEpochMs);
+    },
+
+    async peekNextRelease(afterMs, nowMs = Date.now()) {
+      let earliest: number | null = null;
+      for (const e of dueEntries) {
+        if (e.claimedAtMs !== undefined && e.claimedAtMs >= nowMs - CLAIM_LEASE_MS) continue;
+        if (e.releaseEpochMs < afterMs) continue;
+        if (earliest === null || e.releaseEpochMs < earliest) earliest = e.releaseEpochMs;
+      }
+      return earliest;
     },
 
     async pruneDueEntries(beforeMs) {
