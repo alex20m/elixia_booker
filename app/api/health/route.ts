@@ -1,5 +1,5 @@
 import { API_DISCOVERED } from '@/lib/elixia';
-import { authConfigured } from '@/lib/auth/stack';
+import { authConfigured } from '@/lib/auth/neonAuth';
 import { databaseConfigured } from '@/lib/db/neon';
 import { handle, json } from '@/lib/http';
 

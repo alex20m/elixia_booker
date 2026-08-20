@@ -13,6 +13,17 @@
   --err: #b42318;
   --err-bg: #fdeceb;
   --radius: 10px;
+
+  /* @neondatabase/auth-ui reads these names on :root and falls back to its own
+     defaults when absent (see its "theme-safe" fallback pattern), so only the
+     ones that map cleanly onto an existing token are set here. --border and
+     --radius already match by name and are picked up without repeating them. */
+  --background: var(--bg);
+  --foreground: var(--text);
+  --primary: var(--accent);
+  --primary-foreground: var(--accent-text);
+  --destructive: var(--err);
+  --ring: var(--accent);
 }
 
 @media (prefers-color-scheme: dark) {

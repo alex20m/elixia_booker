@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
-import { StackProvider, StackTheme } from '@stackframe/stack';
-import { stackServerApp } from '@/lib/auth/stack';
+import '@neondatabase/auth-ui/css';
+import { authConfigured } from '@/lib/auth/neonAuth';
+import { Providers } from './providers';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -16,20 +17,16 @@ export const viewport: Viewport = {
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  const auth = stackServerApp();
-
   return (
     <html lang="en">
       <body>
         {/* Without Neon Auth configured there is no app to provide, so the page
             renders bare and explains what to set rather than crashing on a
             constructor that cannot find its keys. */}
-        {auth ? (
-          <StackProvider app={auth}>
-            <StackTheme>
-              <div className="wrap">{children}</div>
-            </StackTheme>
-          </StackProvider>
+        {authConfigured() ? (
+          <Providers>
+            <div className="wrap">{children}</div>
+          </Providers>
         ) : (
           <div className="wrap">{children}</div>
         )}
