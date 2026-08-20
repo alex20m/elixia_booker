@@ -7,7 +7,7 @@
  */
 
 import { loadAppConfig, ConfigError, type AppConfig } from './appConfig';
-import { stackServerApp } from './auth/stack';
+import { neonAuth } from './auth/neonAuth';
 import { neonSql } from './db/neon';
 import { createNeonRepo } from './db/neonRepo';
 import { getOrCreateProfile, ServiceError } from './service';
@@ -38,15 +38,15 @@ export interface Session {
  * one place a mistake here would matter.
  */
 export async function requireUser(): Promise<Session> {
-  const auth = stackServerApp();
+  const auth = neonAuth();
   if (!auth) {
     throw new ConfigError(
-      'Neon Auth is not configured. Set NEXT_PUBLIC_STACK_PROJECT_ID, ' +
-        'NEXT_PUBLIC_STACK_PUBLISHABLE_CLIENT_KEY and STACK_SECRET_SERVER_KEY.',
+      'Neon Auth is not configured. Set NEON_AUTH_BASE_URL and NEON_AUTH_COOKIE_SECRET.',
     );
   }
 
-  const user = await auth.getUser();
+  const { data: session } = await auth.getSession();
+  const user = session?.user;
   if (!user) throw new ServiceError('Not signed in', 401);
 
   // No DATABASE_URL is not fatal here: loadAppConfig falls back to the

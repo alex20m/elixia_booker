@@ -154,44 +154,44 @@ just worth saying out loud.
 
 ### Turn on Neon Auth
 
-> ⚠️ **This app is on _legacy_ Neon Auth**, the Stack Auth-based one
-> (`@stackframe/stack`, the `NEXT_PUBLIC_STACK_*` variables below). Neon has
-> since replaced Neon Auth with a managed Better Auth that keeps identity in the
-> database's own `neon_auth` schema — a different SDK and different variables.
-> `neonctl neon-auth enable` provisions **that** one, which this app does not
-> speak yet, so enable auth from the console until the app is migrated. Legacy
-> Neon Auth stays supported for existing projects but is closed to new ones, so
-> a brand-new Neon project may not be able to offer it at all.
+This app is on the **current** Neon Auth — managed Better Auth, not the older
+Stack Auth integration (`@stackframe/stack`, `NEXT_PUBLIC_STACK_*`). Identity
+lives in the `neon_auth` schema of this same database rather than a separate
+project, so users are queryable in SQL and a Neon branch carries its own
+accounts.
 
-In the Neon console for that database, open **Auth** and enable it. Neon
-provisions a Stack Auth project wired to this database and — because the project
-is connected to Vercel — pushes three more variables into the same Vercel
-project:
+```bash
+npx neonctl neon-auth enable --project-id "$NEON_PROJECT_ID" --branch main
+npx neonctl neon-auth config email-password --project-id "$NEON_PROJECT_ID"
+npx neonctl neon-auth status --project-id "$NEON_PROJECT_ID" --output json
+```
+
+`NEON_PROJECT_ID` is already in `.env.local` from step 3 (Vercel pulled it in
+alongside `DATABASE_URL`). Enabling Neon Auth pushes one more variable into the
+same Vercel project:
 
 | Neon calls it | You'll use it as |
 | --- | --- |
-| Project ID | `NEXT_PUBLIC_STACK_PROJECT_ID` |
-| Publishable client key | `NEXT_PUBLIC_STACK_PUBLISHABLE_CLIENT_KEY` |
-| Secret server key | `STACK_SECRET_SERVER_KEY` |
+| Auth base URL | `NEON_AUTH_BASE_URL` |
 
-Check they landed with `npx vercel env ls`. If they didn't, read them out of
-`neon-auth status --output json` and add them with `vercel env add` as in
+Check it landed with `npx vercel env ls`. If it didn't, read it out of the
+`status --output json` above and add it with `vercel env add` as in
 [step 5](#5-add-the-remaining-variables-in-vercel) — the rest of the setup is
-identical either way. Take the names from that output rather than assuming
-them: they are what the app imports, and a wrong guess builds fine and fails at
-sign-in.
+identical either way.
 
-> ⚠️ The **secret server key acts for every user.** It belongs only in
-> server-side environment variables. Never give it a `NEXT_PUBLIC_` prefix and
-> never paste it into client code.
+The app also needs a cookie-signing secret, which is **yours to generate**
+rather than something Neon provisions — see [step
+4](#4-generate-your-secrets), which is where `NEON_AUTH_COOKIE_SECRET` is
+created alongside the app's other secrets.
 
-Neon Auth owns the accounts, and mirrors them into a `neon_auth.users_sync`
-table in the same database. This app never reads that mirror — it only needs the
-user id, which arrives with the session — but it is there if you ever want to
-join user emails onto your own tables in SQL.
+Neon Auth owns the accounts directly in `neon_auth.users_sync` in this
+database. This app never reads that table — it only needs the user id, which
+arrives with the session — but it is there if you ever want to join user
+emails onto your own tables in SQL.
 
-Sign-in, sign-up, email verification and password reset are served by Neon Auth
-itself at `/handler/*`, which is why this app has no password form of its own.
+Sign-in, sign-up, email verification and password reset are served by Neon
+Auth itself at `/auth/*` and `/account/*`, which is why this app has no
+password form of its own.
 
 ---
 
@@ -200,16 +200,20 @@ itself at `/handler/*`, which is why this app has no password form of its own.
 ```bash
 ENCRYPTION_KEY=$(openssl rand -base64 32)
 CRON_SECRET=$(openssl rand -base64 32)
+NEON_AUTH_COOKIE_SECRET=$(openssl rand -base64 32)
 ```
 
-Keep both — the next steps and GitHub Actions need the same values. What they
-do:
+Keep all three — the next steps and GitHub Actions need the same values. What
+they do:
 
 - **`ENCRYPTION_KEY`** seals every stored Elixia credential. It is the only
   thing that makes a leaked database dump inert. **If you lose or change it,
   every user must re-link their gym account** — that is by design, not a bug.
 - **`CRON_SECRET`** is the shared secret GitHub Actions sends to trigger a
   booking run. Without it the endpoint would be publicly triggerable.
+- **`NEON_AUTH_COOKIE_SECRET`** signs the session cookie Neon Auth issues.
+  Unlike `NEON_AUTH_BASE_URL` this is not something Neon provisions — it must
+  be at least 32 characters, or the app treats Neon Auth as unconfigured.
 
 ---
 
@@ -223,6 +227,7 @@ add() { printf '%s' "$2" | npx vercel env add "$1" production,preview,developmen
 
 add ENCRYPTION_KEY               "$ENCRYPTION_KEY"
 add CRON_SECRET                  "$CRON_SECRET"
+add NEON_AUTH_COOKIE_SECRET      "$NEON_AUTH_COOKIE_SECRET"
 add MOCK_ELIXIA                  1
 add DRY_RUN                      1
 add DEFAULT_BOOKING_WINDOW_DAYS  7
@@ -235,6 +240,7 @@ What each one is:
 | --- | --- |
 | `ENCRYPTION_KEY` | from step 4 |
 | `CRON_SECRET` | from step 4 |
+| `NEON_AUTH_COOKIE_SECRET` | from step 4 |
 | `MOCK_ELIXIA` | `1` for now |
 | `DRY_RUN` | `1` at first |
 | `DEFAULT_BOOKING_WINDOW_DAYS` | `7` or `14` |
@@ -296,9 +302,9 @@ Every field should read `true` except `apiDiscovered` (see step 10).
 
 ### Add your app URL to Neon Auth
 
-In the Neon console under **Auth → Domains**, add your Vercel URL as a trusted
-domain. (`neonctl neon-auth domain add` does this from the CLI, but for the new
-Neon Auth rather than the legacy one this app uses — see the warning in step 3.)
+```bash
+npx neonctl neon-auth domain add "https://<your-app>.vercel.app" --project-id "$NEON_PROJECT_ID"
+```
 
 Confirmation and password-reset emails link back here; without it they point at
 `localhost` and appear broken to everyone but you. Add your preview domain too
@@ -494,9 +500,6 @@ because the provider gates it on a human rather than because a CLI is missing:
 - **Accepting a Marketplace integration's legal terms**, if the CLI asks:
   `vercel integration accept-terms` requires an interactive terminal and human
   confirmation by design.
-- **Enabling legacy Neon Auth and its trusted domains** (step 3). The CLI
-  manages the current Neon Auth, not the Stack Auth-based one this app still
-  uses; migrating the app removes this entry.
 - **Registering the domain and pointing its nameservers at Cloudflare**, if you
   want a custom domain.
 - **Creating the Telegram bot** — BotFather is a chat, and your chat ID only
@@ -513,10 +516,11 @@ because the provider gates it on a human rather than because a CLI is missing:
 - [ ] Neon provisioned (`npx vercel integration add neon`) and `DATABASE_URL`
       visible in `npx vercel env ls`
 - [ ] `npm run migrate` run against the Neon database
-- [ ] Legacy Neon Auth enabled from the Neon console, its three variables
+- [ ] Neon Auth enabled (`neonctl neon-auth enable`), `NEON_AUTH_BASE_URL`
       present in Vercel, and your app URL added as a trusted domain
-- [ ] `ENCRYPTION_KEY`, `CRON_SECRET` and the app settings added in Vercel for
-      Production, Preview and Development, then redeployed
+- [ ] `ENCRYPTION_KEY`, `CRON_SECRET`, `NEON_AUTH_COOKIE_SECRET` and the app
+      settings added in Vercel for Production, Preview and Development, then
+      redeployed
 - [ ] `vercel env pull .env.local` works and `npm run dev` comes up configured
 - [ ] `/api/health` reports everything configured
 - [ ] Custom domain added and `npx vercel domains verify` clean, if you want
@@ -533,14 +537,14 @@ because the provider gates it on a human rather than because a CLI is missing:
 
 ## Troubleshooting
 
-**"Neon Auth is not configured"** — the `NEXT_PUBLIC_*` variables are missing.
-Enabling Neon Auth pushes them into Vercel, but only into the project the Neon
-database is attached to; check they are there, and add them by hand if not.
-They're baked in at build time, so you must **redeploy** after they appear —
-setting them on an existing deployment does nothing.
-
-**The build fails with "Invalid project ID"** — `NEXT_PUBLIC_STACK_PROJECT_ID`
-is malformed rather than absent. Re-copy it from the Neon console.
+**"Neon Auth is not configured"** — `NEON_AUTH_BASE_URL` or
+`NEON_AUTH_COOKIE_SECRET` is missing, or the secret is under 32 characters.
+Enabling Neon Auth pushes `NEON_AUTH_BASE_URL` into Vercel, but only into the
+project the Neon database is attached to; `NEON_AUTH_COOKIE_SECRET` is never
+provisioned for you (step 4) — check both are there with `npx vercel env ls`,
+add whichever is missing, and **redeploy**. Locally, re-run `npx vercel env
+pull .env.local` and restart `npm run dev`; both are read at request time, not
+baked in at build time, so a stale `.env.local` is the usual cause.
 
 **Confirmation link points at localhost** — add your deployed URL as a trusted
 domain in Neon Auth (step 7).
