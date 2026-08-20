@@ -49,20 +49,39 @@ keeps it until there is a reason of its own to move.
   preview, every merge to `main` goes to production, and no workflow of ours
   does the deploying. Two routes to production race each other and deploy
   everything twice.
-- **CI/CD exists from the first commit**, as at most two workflows:
-  - **checks** — on every pull request and push: install from the lockfile,
-    lint, typecheck, test, build. Nothing merges without it.
-  - **deploy-time work** — only if something genuinely has to happen around a
-    deploy that Vercel does not do, which in practice means database
-    migrations. Never a job that deploys.
-- **Database migrations run through `node-pg-migrate`** and its own CLI, called
-  from that workflow. Not a hand-written runner: ledgers, checksums and locking
-  are solved problems, and a bespoke one is code nobody reviews and everything
-  depends on. The same preference holds generally — reach for the maintained
-  package before writing the mechanism yourself.
-- Because Vercel's deploy does not wait for that workflow, **every migration
-  must be compatible with the code already running**: add, backfill, and only
-  remove in a later change.
+- **CI/CD exists from the first commit**, as at most two workflows — one for
+  pull requests, one for pushes to `main` — each running the same checks:
+  install from the lockfile, lint, typecheck, test, build. Nothing merges
+  without it. Neither deploys, and neither migrates. (A workflow for the app's
+  own scheduled work is a separate thing and does not count against this.)
+- **Database migrations run in the deploy's build command, never in a
+  workflow.** A migration workflow cannot be ordered against a deploy the
+  platform owns: both start from the same push, so new code can be serving
+  requests against a schema that has not been migrated yet. Putting the
+  migration inside the build makes the ordering a dependency instead — Vercel
+  promotes a deployment only if its build exited 0, so a failed migration
+  leaves the previous deployment serving. Set it in `vercel.json`, which also
+  overrides a Build Command set in the dashboard:
+
+  ```json
+  { "buildCommand": "npm run migrate && next build" }
+  ```
+
+  **`&&`, never `;`** — a semicolon builds straight over a failed migration,
+  which is the exact failure this arrangement exists to prevent. Keep the
+  migration out of the plain `build` script, or the checks need a database too.
+- **Use the migration tool's own CLI** — `node-pg-migrate` for Postgres,
+  `supabase db push` where Supabase owns the schema — and not a hand-written
+  runner: ledgers, checksums and locking are solved problems, and a bespoke one
+  is code nobody reviews and everything depends on. The same preference holds
+  generally — reach for the maintained package before writing the mechanism
+  yourself.
+- **Old code still meets the new schema**, because the migration runs while the
+  previous deployment is still serving, so **every migration must be compatible
+  with the code already running**: add, backfill, and only remove in a later
+  change. Two costs that come with this and should be stated in `SETUP.md`: a
+  deploy now needs the database reachable to succeed, and rolling a deployment
+  back does not roll the schema back.
 - **Anything else the app genuinely needs is fair game** — pick it deliberately,
   and document its setup along with the rest.
 

@@ -129,6 +129,15 @@ So the split is fixed:
   migration, which is the whole failure being designed out. Keep the migration
   out of the plain `build` script, or CI's build check needs a database too.
 
+  The command in front of the `&&` is whatever your migration tool's
+  non-interactive form is, and that is the part to check per stack: it has to
+  run in a build container with no login and no TTY, taking its target from an
+  environment variable the platform already sets. `node-pg-migrate` reads
+  `DATABASE_URL`; a Supabase-owned schema wants `supabase db push` pointed at a
+  direct connection string rather than a linked project — verify the exact flag
+  against that CLI's `--help` before writing it down, because a build command
+  that prompts hangs the deploy instead of failing it.
+
 The consequence to design around: **old code meets the new schema.** The
 migration runs while the previous deployment is still serving, and that
 deployment keeps serving until the build finishes, so migrations still have to
