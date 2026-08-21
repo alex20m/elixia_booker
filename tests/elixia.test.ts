@@ -57,7 +57,7 @@ function scheduleFixture() {
         dates: [
           { isoDate: '2026-08-21', disabled: false },
           { isoDate: '2026-08-22', disabled: false },
-          // Beyond the 14-day window: listed in the picker, but unbookable.
+          // Beyond Elixia's published horizon: in the picker, but no classes.
           { isoDate: '2026-09-05', disabled: true },
         ],
       },
@@ -197,7 +197,7 @@ describe('findClassId', () => {
     );
   });
 
-  it('reports a date past the booking window as not-yet-open, not as an error', () => {
+  it('reports a date past the published schedule as not-yet-open, not as an error', () => {
     // This is the ordinary state before T-0, so it has to be the retryable
     // outcome rather than something that aborts the run.
     const err = (() => {
@@ -208,7 +208,10 @@ describe('findClassId', () => {
       }
     })();
     expect(err).toBeInstanceOf(ClassNotListedError);
-    expect(err?.message).toMatch(/beyond the booking window/);
+    // Says "published", not "bookable": the disabled flag marks Elixia's
+    // publishing horizon, which is the same for every tier — not this
+    // member's booking window (docs/api.md §4).
+    expect(err?.message).toMatch(/beyond the published schedule/);
   });
 
   it('reports a date absent from the schedule entirely', () => {

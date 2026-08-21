@@ -357,16 +357,24 @@ the first run".
 
 ### 10a. Set your booking window
 
-Discovery measured a **14-day** window on the account it ran against, but the
-app still defaults to 7. Get this wrong and every release fires a week late, so
-set it explicitly:
+**7 on a normal membership; 14 only on Premium.** The app defaults to 7, so
+most people need nothing here.
+
+Do not try to read this off the schedule: Elixia publishes ~14 days of classes
+to everyone regardless of tier, so a normal member sees classes they cannot yet
+book, with nothing marking them as such (see
+[`docs/api.md` §4](docs/api.md#4-schedule-listing)). Getting it wrong is quiet
+either way — too high and releases fire before booking opens, too low and they
+fire days late.
 
 ```bash
-npx vercel env add DEFAULT_BOOKING_WINDOW_DAYS production   # 14, or 7 on a Basic/Flexible tier
+npx vercel env add DEFAULT_BOOKING_WINDOW_DAYS production   # 7, or 14 on Premium
 ```
 
-Existing accounts also have a per-account setting in the dashboard, which
-overrides this default.
+**That variable only applies to accounts created after it is set.** An existing
+account keeps whatever it was created with, so change an existing one in the
+app's own Settings — which also reprojects its release schedule, as the
+variable alone would not.
 
 ### 10b. Turn off the mock and dry-run once
 
@@ -442,8 +450,8 @@ Everything else is a command. These are gated on a human by the provider:
       manual run**
 - [ ] **Pull request** and **Main** green, Vercel's Git deploys left enabled
 - [ ] Account created, gym account linked, one class added
-- [ ] `DEFAULT_BOOKING_WINDOW_DAYS` set to your tier (14 on Premium — the app
-      defaults to 7, which fires every release a week late)
+- [ ] Booking window matches your tier — 7 normal, 14 Premium. The app defaults
+      to 7; existing accounts change it in Settings, not via the env var
 - [ ] `MOCK_ELIXIA` removed, one `DRY_RUN=1` window observed in the history
 - [ ] `DRY_RUN=0`, and **the first live run watched** — it is also the test of
       whether booking works outside a browser at all (docs/api.md §7)

@@ -200,10 +200,25 @@ optimisation, and retried at T-0 if it was not yet resolvable. A failure to
 resolve maps onto the retryable `too-early` outcome
 (`ClassNotListedError` → `{kind: 'too-early'}`).
 
-**The window, measured.** In the 2026-08-21 capture, dates `2026-08-21`
-through `2026-09-04` were enabled and `2026-09-05` onward disabled — a
-**14-day** window for this account, not the 7 the app defaults to. Worth
-setting per-account rather than assuming (see §8).
+**The listing span is NOT your booking window.** In the 2026-08-21 capture,
+dates `2026-08-21` through `2026-09-04` were enabled and `2026-09-05` onward
+disabled — 14 days. It is tempting to read that as "this account can book 14
+days ahead". **That reading is wrong**, and it was made here once already: the
+account owner confirmed 7 days is the limit on a normal membership, with 14
+reserved for Premium.
+
+What the date list actually describes is how far ahead Elixia *publishes the
+schedule*, which is the same for everyone. How far ahead *you* may book is a
+property of your membership tier, and the listing does not carry it — a class
+eight days out is visible, listed, and completely unbookable by a normal
+member, with nothing in the response distinguishing it from one you can book.
+
+So the booking window has to be configured, not detected. It is
+`bookingWindowDays` on the profile (7 by default, 14 for Premium), and getting
+it wrong is silent in both directions: too high and every release fires before
+booking opens, burning the retry budget against a class that is not yet
+bookable; too low and it fires days late, by which point a popular class is
+gone or full.
 
 **What is still unknown, and it matters for timing.** The window is *day*
 granular in the listing — a whole date flips from disabled to enabled — but
@@ -348,10 +363,11 @@ building.
 
 ## 8. Open questions for the account owner
 
-- [x] **Which membership tier — is the window 7 days or 14?** Measured as
-      **14** from the captured date list (§4). The app still defaults to 7, so
-      set `DEFAULT_BOOKING_WINDOW_DAYS=14`, or the per-account setting, or every
-      release fires a week late.
+- [x] **Which membership tier — is the window 7 days or 14?** **7** on a normal
+      membership; 14 is Premium only, confirmed by the account owner. This was
+      briefly recorded as 14 by misreading the schedule listing's 14-day span
+      as a booking window — see §4 for why those are different things. The app
+      defaults to 7, which is correct here.
 - [ ] **Is the release time the class's own time-of-day, or a fixed clock time
       N days before?** Still unknown, and it decides whether releases fire at
       the right minute — see §4. Settling it needs two captures either side of
