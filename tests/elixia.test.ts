@@ -5,9 +5,11 @@ import {
   ElixiaClient,
   buildBookingBody,
   classifyBookingResponse,
+  collectClassOptions,
   extractDataProps,
   findClassId,
   findClubIdByName,
+  listClubOptions,
   performElixiaLogin,
 } from '../lib/elixia';
 import { isRetryable } from '../lib/types';
@@ -120,6 +122,34 @@ function unfilteredFixture() {
   return { filters: filtersFixture(), schedule: { query: { clubIds: '' } } };
 }
 
+function event(name: string, time: string) {
+  return {
+    id: `741p${name.length}${time.replace(':', '')}`,
+    isBooked: false,
+    hasWaitingList: false,
+    waitingListCount: 0,
+    metadata: { name, clubName: 'Circus', startsAt: `2026-08-24T${time}:00+03:00`, time, duration: 60 },
+  };
+}
+
+function oneClassFixture({ date, name, time }: { date: string; name: string; time: string }) {
+  return { schedule: { events: [{ date, events: [event(name, time)] }] } };
+}
+
+/** The same two weekly classes as the listing publishes them: once per week. */
+function twoWeekFixture() {
+  return {
+    schedule: {
+      events: [
+        { date: '2026-08-24', events: [event('Bodypump', '09:00')] }, // Monday
+        { date: '2026-08-27', events: [event('Bodypump', '18:00')] }, // Thursday
+        { date: '2026-08-31', events: [event('Bodypump', '09:00')] }, // Monday again
+        { date: '2026-09-03', events: [event('Bodypump', '18:00')] }, // Thursday again
+      ],
+    },
+  };
+}
+
 function pageHtml(props: unknown): string {
   return `<!doctype html><html><body><script data-props="true" type="application/json">${JSON.stringify(
     props,
@@ -171,6 +201,77 @@ describe('findClubIdByName', () => {
 
   it('returns null for a centre that does not exist', () => {
     expect(findClubIdByName(scheduleFixture(), 'Nowhere')).toBeNull();
+  });
+});
+
+describe('listClubOptions', () => {
+  it('lists every centre the filter offers, so the chooser can be built from it', () => {
+    // The chooser's whole point is that a centre cannot be typed wrong, which
+    // requires the full list rather than a lookup of one name at a time.
+    expect(listClubOptions(scheduleFixture())).toEqual([
+      { id: '740', name: 'Iso Omena' },
+      { id: '741', name: 'Circus' },
+    ]);
+  });
+
+  it('is empty rather than throwing when the page carries no filter tree', () => {
+    expect(listClubOptions({})).toEqual([]);
+  });
+});
+
+describe('collectClassOptions', () => {
+  it('turns the published schedule into the weekly classes a user can pick', () => {
+    // 2026-08-21 is a Friday; the weekday is derived from the date rather than
+    // stored anywhere on the event.
+    expect(collectClassOptions(scheduleFixture())).toEqual([
+      { className: 'Cycling The Journey', weekday: 'friday', startTime: '17:00' },
+      { className: 'HIIT Run & Box', weekday: 'friday', startTime: '18:30' },
+      { className: 'HIIT Run & Box', weekday: 'friday', startTime: '20:00' },
+    ]);
+  });
+
+  it('collapses the same weekly class appearing on both published weeks', () => {
+    // The listing spans ~14 days, so every weekly class occurs twice in it.
+    // Offering it twice would put two identical rows in the chooser.
+    const props = twoWeekFixture();
+    expect(collectClassOptions(props)).toEqual([
+      { className: 'Bodypump', weekday: 'monday', startTime: '09:00' },
+      { className: 'Bodypump', weekday: 'thursday', startTime: '18:00' },
+    ]);
+  });
+
+  it('pads the displayed time so it matches what a subscription stores', () => {
+    // The schedule renders "9:00"; subscriptions and findClassId use "09:00".
+    // Storing the unpadded form would resolve to nothing at T-0.
+    const props = oneClassFixture({ date: '2026-08-24', name: 'Yoga', time: '9:00' });
+    expect(collectClassOptions(props)).toEqual([
+      { className: 'Yoga', weekday: 'monday', startTime: '09:00' },
+    ]);
+  });
+
+  it('orders the week from Monday, then by time, so the list reads like a timetable', () => {
+    const props = {
+      schedule: {
+        events: [
+          { date: '2026-08-23', events: [event('Sunday Spin', '10:00')] }, // Sunday
+          { date: '2026-08-24', events: [event('Late Yoga', '19:00'), event('Dawn Yoga', '06:30')] },
+        ],
+      },
+    };
+    expect(collectClassOptions(props).map((c) => `${c.weekday} ${c.startTime} ${c.className}`)).toEqual([
+      'monday 06:30 Dawn Yoga',
+      'monday 19:00 Late Yoga',
+      'sunday 10:00 Sunday Spin',
+    ]);
+  });
+
+  it('skips a day whose date is not a real date instead of inventing a weekday', () => {
+    const props = { schedule: { events: [{ date: 'later', events: [event('Ghost', '10:00')] }] } };
+    expect(collectClassOptions(props)).toEqual([]);
+  });
+
+  it('is empty for a page with no schedule, which is what an unfiltered page is', () => {
+    expect(collectClassOptions(extractDataProps(pageHtml(unfilteredFixture())))).toEqual([]);
   });
 });
 
@@ -282,6 +383,51 @@ describe('ElixiaClient.resolveClassId', () => {
         subscription({ center: 'Atlantis' }),
         '2026-08-21',
       ),
+    ).rejects.toThrow(/No Elixia centre named "Atlantis"/);
+  });
+});
+
+describe('ElixiaClient.listCenters / listClasses', () => {
+  it('lists centres from the unfiltered page, which is the only place the club list exists', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL) => {
+      expect(url.toString()).toBe(`${BASE}/varaukset`);
+      return new Response(pageHtml(unfilteredFixture()), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await expect(new ElixiaClient({ fetchImpl, baseUrl: BASE }).listCenters(tokens)).resolves.toEqual([
+      { id: '740', name: 'Iso Omena' },
+      { id: '741', name: 'Circus' },
+    ]);
+  });
+
+  it('fetches a centre by name filtered by its club id, since an unfiltered page has no classes', async () => {
+    const urls: string[] = [];
+    const fetchImpl = vi.fn(async (url: string | URL) => {
+      const u = url.toString();
+      urls.push(u);
+      return new Response(pageHtml(u.includes('clubIds') ? scheduleFixture() : unfilteredFixture()), {
+        status: 200,
+      });
+    }) as unknown as typeof fetch;
+
+    const classes = await new ElixiaClient({ fetchImpl, baseUrl: BASE }).listClasses(tokens, 'Circus');
+
+    expect(urls).toEqual([`${BASE}/varaukset`, `${BASE}/varaukset?clubIds=741`]);
+    expect(classes).toContainEqual({
+      className: 'HIIT Run & Box',
+      weekday: 'friday',
+      startTime: '18:30',
+    });
+  });
+
+  it('says which centre was unknown rather than returning an empty timetable', async () => {
+    // An empty list would read as "this centre has no classes", sending the
+    // user looking for a fault at the gym rather than at the name.
+    const fetchImpl = (async () =>
+      new Response(pageHtml(unfilteredFixture()), { status: 200 })) as typeof fetch;
+
+    await expect(
+      new ElixiaClient({ fetchImpl, baseUrl: BASE }).listClasses(tokens, 'Atlantis'),
     ).rejects.toThrow(/No Elixia centre named "Atlantis"/);
   });
 });

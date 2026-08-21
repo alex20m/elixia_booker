@@ -3,6 +3,8 @@ import { createMemoryRepo, type MemoryRepo } from '../lib/db/memoryRepo';
 import {
   addSubscription,
   buildDashboard,
+  listCenters,
+  listClasses,
   getOrCreateProfile,
   linkElixia,
   mutateSubscription,
@@ -203,6 +205,54 @@ describe('managing classes', () => {
   ])('rejects %s', async (_label, payload) => {
     const profile = await linkedProfile();
     await expect(addSubscription(config, profile, payload, nowMs)).rejects.toThrow(ServiceError);
+  });
+
+  it('refuses a class that is not on the centre\'s schedule', async () => {
+    // The whole reason the chooser exists: a class nobody teaches can never be
+    // resolved at T-0, so it would sit in the list booking nothing, silently.
+    const profile = await linkedProfile();
+
+    await expect(
+      addSubscription(config, profile, { ...BODYPUMP, startTime: '06:00' }, nowMs),
+    ).rejects.toMatchObject({ status: 400 });
+    await expect(
+      addSubscription(config, profile, { ...BODYPUMP, className: 'Underwater Basketry' }, nowMs),
+    ).rejects.toMatchObject({ status: 400 });
+    await expect(
+      addSubscription(config, profile, { ...BODYPUMP, weekday: 'sunday' }, nowMs),
+    ).rejects.toMatchObject({ status: 400 });
+
+    expect(await repo.listSubscriptions(profile.id)).toHaveLength(0);
+  });
+
+  it('refuses a centre Elixia does not have', async () => {
+    const profile = await linkedProfile();
+    await expect(
+      addSubscription(config, profile, { ...BODYPUMP, center: 'Atlantis' }, nowMs),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('stores the schedule\'s own spelling, not the one that was submitted', async () => {
+    // Booking matches name and time against the listing exactly, so keeping a
+    // user's "bodypump" or "9:00" would resolve to nothing on the day.
+    const profile = await linkedProfile();
+    const sub = await addSubscription(
+      config,
+      profile,
+      { ...BODYPUMP, className: '  bodypump ', startTime: '9:00' },
+      nowMs,
+    );
+
+    expect(sub).toMatchObject({ className: 'Bodypump', startTime: '09:00' });
+  });
+
+  it('cannot add a class before a gym account is linked', async () => {
+    // Nothing can be checked against the schedule without a session, and
+    // accepting it unchecked is exactly the hole this closes.
+    const profile = await getOrCreateProfile(config, USER_ID);
+    await expect(addSubscription(config, profile, BODYPUMP, nowMs)).rejects.toMatchObject({
+      status: 409,
+    });
   });
 
   it('refuses the same class twice, case-insensitively', async () => {
@@ -488,5 +538,44 @@ describe('the schedule', () => {
 
     const stale = await repo.claimDue(0, nowMs - 2 * 86_400_000);
     expect(stale).toHaveLength(0);
+  });
+});
+
+describe('the class catalogue', () => {
+  it('offers the centres the gym actually has', async () => {
+    const profile = await linkedProfile();
+    const centers = await listCenters(config, profile, nowMs);
+
+    expect(centers.map((c) => c.name)).toContain('Tapiola');
+    expect(centers.every((c) => c.id && c.name)).toBe(true);
+  });
+
+  it('offers a centre\'s published weekly slots, which is what may be subscribed to', async () => {
+    const profile = await linkedProfile();
+    const classes = await listClasses(config, profile, 'Tapiola', nowMs);
+
+    expect(classes).toContainEqual({
+      className: 'Bodypump',
+      weekday: 'tuesday',
+      startTime: '09:00',
+    });
+    // Every offered slot must be addable, or the chooser is offering fiction.
+    for (const option of classes.slice(0, 3)) {
+      await expect(
+        addSubscription(config, profile, { ...option, center: 'Tapiola' }, nowMs),
+      ).resolves.toMatchObject({ className: option.className });
+    }
+  });
+
+  it('says an unknown centre is unknown rather than showing an empty timetable', async () => {
+    const profile = await linkedProfile();
+    await expect(listClasses(config, profile, 'Atlantis', nowMs)).rejects.toMatchObject({
+      status: 400,
+    });
+  });
+
+  it('needs a linked gym account, since the schedule is behind the login', async () => {
+    const profile = await getOrCreateProfile(config, USER_ID);
+    await expect(listCenters(config, profile, nowMs)).rejects.toMatchObject({ status: 409 });
   });
 });

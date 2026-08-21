@@ -12,6 +12,9 @@
 
 import type { DashboardView } from './service';
 
+/** "monday" as a person would write it. Weekdays are stored lowercased. */
+export const titleCase = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
+
 /** A failed request, carrying the status so callers can tell 401 from the rest. */
 export class ApiError extends Error {
   readonly status: number;

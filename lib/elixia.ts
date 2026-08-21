@@ -22,13 +22,20 @@
  *      something the booking call would choke on.
  */
 
-import { ClassNotListedError } from './types';
-import type { AttemptOutcome, StoredTokens, Subscription } from './types';
+import { ClassNotListedError, UnknownCenterError, WEEKDAYS } from './types';
+import type {
+  AttemptOutcome,
+  CenterOption,
+  ClassOption,
+  StoredTokens,
+  Subscription,
+  Weekday,
+} from './types';
 
 // Defined in types.ts, not here, so booking.ts can branch on it without
 // depending on the adapter. Re-exported because this is the file whose
 // functions throw it.
-export { ClassNotListedError };
+export { ClassNotListedError, UnknownCenterError };
 
 /**
  * What the booking engine needs from a backend.
@@ -40,6 +47,10 @@ export { ClassNotListedError };
 export interface BookingBackend {
   login(email: string, password: string, nowMs: number): Promise<StoredTokens>;
   refresh(tokens: StoredTokens, nowMs: number): Promise<StoredTokens>;
+  /** Every centre this account can browse — the chooser's centre list. */
+  listCenters(tokens: StoredTokens): Promise<CenterOption[]>;
+  /** The weekly classes published for one centre — the chooser's class list. */
+  listClasses(tokens: StoredTokens, center: string): Promise<ClassOption[]>;
   resolveClassId(
     tokens: StoredTokens,
     subscription: Subscription,
@@ -322,17 +333,18 @@ export function extractDataProps(html: string): SchedulePageProps {
 }
 
 /**
- * Finds a club's numeric id by its display name, from the filter options the
- * schedule page embeds (226 clubs across the group in the observed capture).
+ * Every centre the schedule page's own filter offers (226 clubs across the
+ * group in the observed capture).
  *
  * Walks the filter tree rather than indexing a fixed path: the filters object
  * is deeply nested presentation data whose shape is far more likely to be
  * rearranged than the `{queryName: 'clubIds', options: [{value, label}]}`
- * node itself.
+ * node itself. An absent or restyled tree yields an empty list rather than
+ * throwing — the caller says what a missing centre list means, and for the
+ * chooser that is "nothing to offer", not a crash.
  */
-export function findClubIdByName(props: SchedulePageProps, name: string): string | null {
-  const wanted = name.trim().toLowerCase();
-  let found: string | null = null;
+export function listClubOptions(props: SchedulePageProps): CenterOption[] {
+  let found: CenterOption[] | null = null;
 
   const walk = (node: unknown): void => {
     if (found !== null || node === null || typeof node !== 'object') return;
@@ -344,24 +356,35 @@ export function findClubIdByName(props: SchedulePageProps, name: string): string
 
     const record = node as Record<string, unknown>;
     if (record['queryName'] === 'clubIds' && Array.isArray(record['options'])) {
-      for (const option of record['options'] as Array<Record<string, unknown>>) {
-        const label = typeof option['label'] === 'string' ? option['label'] : '';
-        const value = typeof option['value'] === 'string' ? option['value'] : '';
-        if (label.trim().toLowerCase() === wanted && value) {
-          found = value;
-          return;
-        }
-      }
+      found = (record['options'] as Array<Record<string, unknown>>)
+        .map((option) => ({
+          id: typeof option['value'] === 'string' ? option['value'] : '',
+          name: typeof option['label'] === 'string' ? option['label'].trim() : '',
+        }))
+        .filter((club) => club.id !== '' && club.name !== '');
+      return;
     }
     for (const value of Object.values(record)) walk(value);
   };
 
   walk(props.filters ?? props);
-  return found;
+  return found ?? [];
+}
+
+/**
+ * Finds a club's numeric id by its display name.
+ *
+ * Case- and space-insensitive because the name may have been typed by hand:
+ * subscriptions created before the chooser existed still carry whatever their
+ * owner wrote.
+ */
+export function findClubIdByName(props: SchedulePageProps, name: string): string | null {
+  const wanted = name.trim().toLowerCase();
+  return listClubOptions(props).find((club) => club.name.toLowerCase() === wanted)?.id ?? null;
 }
 
 /** "9:00" and "09:00" are the same time; the page renders the padded form. */
-function normalizeTime(value: string): string {
+export function normalizeTime(value: string): string {
   const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
   if (!match) return value.trim();
   return `${match[1]!.padStart(2, '0')}:${match[2]}`;
@@ -369,6 +392,68 @@ function normalizeTime(value: string): string {
 
 function normalizeName(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/**
+ * The weekday a published date falls on.
+ *
+ * Read from the date string in UTC rather than from `metadata.startsAt`: the
+ * date group is already the local calendar day Elixia filed the class under,
+ * so parsing it in any other zone can shift it across midnight and file a
+ * Friday evening class under Saturday. Returns null for anything that is not
+ * a plain `YYYY-MM-DD`, so a restyled page drops the day instead of inventing
+ * one.
+ */
+export function weekdayOfIsoDate(isoDate: string): Weekday | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) return null;
+  const at = Date.parse(`${isoDate}T00:00:00Z`);
+  return Number.isNaN(at) ? null : (WEEKDAYS[new Date(at).getUTCDay()] ?? null);
+}
+
+/** Monday first: a timetable is read as a week, not from Sunday. */
+const WEEK_ORDER: readonly Weekday[] = [
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+  'sunday',
+];
+
+/**
+ * Every distinct weekly slot the published schedule contains.
+ *
+ * The listing spans ~14 days, so a weekly class appears in it twice; the
+ * chooser wants one row per slot, which is why identical name/weekday/time
+ * triples collapse. That triple is exactly what `findClassId` matches on
+ * later, so anything this returns is resolvable on the day — and anything it
+ * omits is not merely unlisted but unbookable by this app, since the booking
+ * engine reads the same embedded props.
+ */
+export function collectClassOptions(props: SchedulePageProps): ClassOption[] {
+  const seen = new Map<string, ClassOption>();
+
+  for (const day of props.schedule?.events ?? []) {
+    const weekday = weekdayOfIsoDate(day.date ?? '');
+    if (!weekday) continue;
+
+    for (const event of day.events ?? []) {
+      const className = (event.metadata?.name ?? '').trim();
+      const startTime = normalizeTime(event.metadata?.time ?? '');
+      if (!className || !/^\d{2}:\d{2}$/.test(startTime)) continue;
+
+      const key = `${normalizeName(className)}|${weekday}|${startTime}`;
+      if (!seen.has(key)) seen.set(key, { className, weekday, startTime });
+    }
+  }
+
+  return [...seen.values()].sort(
+    (a, b) =>
+      WEEK_ORDER.indexOf(a.weekday) - WEEK_ORDER.indexOf(b.weekday) ||
+      a.startTime.localeCompare(b.startTime) ||
+      a.className.localeCompare(b.className),
+  );
 }
 
 /**
@@ -607,13 +692,32 @@ export class ElixiaClient implements BookingBackend {
 
     const props = await this.fetchPage(tokens, `${this.baseUrl}${ENDPOINTS.schedule}`);
     const id = findClubIdByName(props, trimmed);
-    if (!id) {
-      throw new Error(
-        `No Elixia centre named "${center}". Use the exact name as it appears in the ` +
-          `centre filter on ${this.baseUrl}${ENDPOINTS.schedule}, or its numeric club id.`,
-      );
-    }
+    if (!id) throw new UnknownCenterError(center);
     return id;
+  }
+
+  /**
+   * The centre list, which only the schedule page carries.
+   *
+   * Deliberately the unfiltered page: it costs no club id to fetch and its
+   * filter tree holds every club in the group, which is exactly the list a
+   * chooser has to offer before the user has picked anything.
+   */
+  async listCenters(tokens: StoredTokens): Promise<CenterOption[]> {
+    return listClubOptions(await this.fetchPage(tokens, `${this.baseUrl}${ENDPOINTS.schedule}`));
+  }
+
+  /**
+   * Every weekly slot published for one centre.
+   *
+   * Same request `resolveClassId` makes at T-0, read for its whole timetable
+   * rather than for one class — so what the chooser offers and what booking
+   * can resolve come from a single source, and cannot disagree.
+   */
+  async listClasses(tokens: StoredTokens, center: string): Promise<ClassOption[]> {
+    const clubId = await this.resolveClubId(tokens, center);
+    const url = `${this.baseUrl}${ENDPOINTS.schedule}?clubIds=${encodeURIComponent(clubId)}`;
+    return collectClassOptions(await this.fetchPage(tokens, url));
   }
 
   async resolveClassId(
