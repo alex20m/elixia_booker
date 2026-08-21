@@ -8,7 +8,7 @@
  *
  * The operations are shaped around what the app actually does. In particular
  * `claimDue` takes a time window rather than "give me everything", because the
- * per-minute cron must stay one index scan no matter how many users exist.
+ * watcher's tick must stay one index scan no matter how many users exist.
  */
 
 import type {
@@ -22,15 +22,16 @@ import type {
  * How long a claim holds before it is treated as abandoned and becomes
  * reclaimable.
  *
- * Two callers can legitimately race for the same release: the per-minute
- * safety-net tick (cron.yml) and the high-precision watcher (watch.yml) both
- * end up asking for "what's due right now" within seconds of each other.
- * `claimDue` hands a release to only one of them — but if that caller then
- * crashes or is killed mid-attempt (a serverless invocation hitting its own
- * `maxDuration`, at most 300s on Vercel Pro), the release must not stay
- * claimed forever with nobody ever retrying it. Comfortably above that ceiling
- * so a claim is never reclaimed out from under an attempt still legitimately
- * in flight.
+ * The watcher (watch.yml) can plausibly ask "what's due right now" twice in
+ * quick succession around the same release: it fires the tick, and by the
+ * time that request returns and the loop asks again, the release it just
+ * booked can still fall inside the next ±60s claim window. Without a claim,
+ * that second ask would find the same row and fire it again. `claimDue` hands
+ * a release to only the first caller — but if that caller then crashes or is
+ * killed mid-attempt (a serverless invocation hitting its own `maxDuration`,
+ * at most 300s on Vercel Pro), the release must not stay claimed forever with
+ * nobody ever retrying it. Comfortably above that ceiling so a claim is never
+ * reclaimed out from under an attempt still legitimately in flight.
  */
 export const CLAIM_LEASE_MS = 6 * 60_000;
 
