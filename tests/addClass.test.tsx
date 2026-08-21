@@ -100,6 +100,17 @@ async function choose(id: string, value: string): Promise<void> {
   });
 }
 
+async function type(id: string, value: string): Promise<void> {
+  const input = container.querySelector<HTMLInputElement>(`#${id}`);
+  if (!input) throw new Error(`no #${id} in the form`);
+  await act(async () => {
+    // React tracks the DOM value it last wrote, so setting `.value` directly
+    // is swallowed as "unchanged"; the native setter is what it watches.
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
 async function clickAdd(): Promise<void> {
   await act(async () => {
     container.querySelector<HTMLButtonElement>('#add-btn')!.click();
@@ -177,6 +188,50 @@ describe('the class chooser', () => {
     expect(optionLabels('s-class').join('|')).not.toMatch(/Bodypump/);
     expect(optionLabels('s-class').join('|')).toMatch(/Loading/);
     expect(container.querySelector<HTMLButtonElement>('#add-btn')!.disabled).toBe(true);
+  });
+
+  it('lets a centre be named by hand when the list does not have it', async () => {
+    // The club list comes from a page Elixia can restyle, and it has already
+    // been wrong once. Being locked out of your own gym because its name is
+    // missing from a dropdown is a worse failure than the one the dropdown
+    // prevents — and what is typed here is still checked against that
+    // centre's real timetable before anything can be added.
+    classesByCenter['Circus'] = TAPIOLA_CLASSES;
+
+    await render();
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('#center-manual-toggle')!.click();
+    });
+    await type('s-center-manual', 'Circus');
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('#center-manual-find')!.click();
+    });
+
+    expect(optionLabels('s-class').join('|')).toMatch(/Bodypump/);
+
+    await choose('s-class', '0');
+    await clickAdd();
+    expect(posts).toEqual([
+      {
+        url: '/api/subscriptions',
+        body: { className: 'Bodypump', center: 'Circus', weekday: 'monday', startTime: '09:00' },
+      },
+    ]);
+  });
+
+  it('refuses a hand-typed centre Elixia does not have, rather than accepting it', async () => {
+    await render();
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('#center-manual-toggle')!.click();
+    });
+    await type('s-center-manual', 'Atlantis');
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('#center-manual-find')!.click();
+    });
+
+    expect(container.textContent).toMatch(/No Elixia centre named "Atlantis"/);
+    expect(container.querySelector<HTMLButtonElement>('#add-btn')!.disabled).toBe(true);
+    expect(posts).toEqual([]);
   });
 
   it('shows the server\'s reason when the catalogue cannot be read', async () => {
