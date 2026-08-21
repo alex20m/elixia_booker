@@ -385,15 +385,19 @@ export function findClassId(
   subscription: Pick<Subscription, 'className' | 'startTime'>,
   classDate: string,
 ): string {
-  // The window check comes first because a date beyond it is still *present*
-  // in both the picker and the events array — just marked disabled and carrying
-  // zero classes. Diagnosing that as "the class is not listed" would be
-  // technically true and completely unhelpful.
+  // This check comes first because a date beyond the published range is still
+  // *present* in both the picker and the events array — just marked disabled
+  // and carrying zero classes. Diagnosing that as "the class is not listed"
+  // would be technically true and completely unhelpful.
+  //
+  // Note what `disabled` does *not* mean: it is not your booking window. Elixia
+  // publishes the same ~14 days to everyone, while how far ahead you may book
+  // is a membership tier (docs/api.md §4). A date can be enabled and listed and
+  // still be unbookable by you — so this says "published", not "bookable".
   const known = (props.schedule?.dateList?.dates ?? []).find((d) => d.isoDate === classDate);
   if (known?.disabled === true) {
     throw new ClassNotListedError(
-      `No classes listed for ${classDate} — that date is beyond the booking window. ` +
-        `Booking has not opened yet.`,
+      `No classes listed for ${classDate} — that date is beyond the published schedule.`,
     );
   }
 
