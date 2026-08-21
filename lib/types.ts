@@ -19,6 +19,30 @@ export const WEEKDAYS: readonly Weekday[] = [
   'saturday',
 ];
 
+/**
+ * A centre, as Elixia's own schedule filter lists it.
+ *
+ * Both halves are used: the id is what the schedule page filters on, the name
+ * is what a person recognises and what a subscription stores.
+ */
+export interface CenterOption {
+  id: string;
+  name: string;
+}
+
+/**
+ * One weekly slot that actually exists on the published schedule.
+ *
+ * This is the unit the chooser offers and a subscription is built from — the
+ * triple `findClassId` matches on, minus the date, because a subscription
+ * recurs and a listed occurrence does not.
+ */
+export interface ClassOption {
+  className: string;
+  weekday: Weekday;
+  startTime: string;
+}
+
 /** One class you want booked, every week. */
 export interface DesiredClass {
   /** Stable local identifier, used in logs and notifications. */
@@ -97,6 +121,23 @@ export class ClassNotListedError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'ClassNotListedError';
+  }
+}
+
+/**
+ * The centre is not one Elixia has.
+ *
+ * Told apart from a listing that came back empty, because the two look
+ * identical from the outside and mean opposite things: an unknown centre is
+ * the caller's mistake and never resolves, while an empty timetable is a real
+ * answer about a real club.
+ */
+export class UnknownCenterError extends Error {
+  constructor(readonly center: string) {
+    super(
+      `No Elixia centre named "${center}". Pick one from the list, or use its numeric club id.`,
+    );
+    this.name = 'UnknownCenterError';
   }
 }
 

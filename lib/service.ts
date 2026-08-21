@@ -11,7 +11,12 @@
  * still an open question in docs/api.md §1.
  */
 
-import { API_DISCOVERED, ElixiaClient, type BookingBackend } from './elixia';
+import {
+  API_DISCOVERED,
+  ElixiaClient,
+  normalizeTime,
+  type BookingBackend,
+} from './elixia';
 import { MockElixiaClient } from './mock';
 import { importEncryptionKey, decryptJson, encryptJson, DecryptionError } from './auth/crypto';
 import { DuplicateSubscriptionError } from './db/repo';
@@ -21,14 +26,17 @@ import { Logger } from './logger';
 import { notifyChat } from './notify';
 import { DEFAULT_TIMINGS } from './config';
 import { needsRefresh } from './tokens';
-import { WEEKDAYS } from './types';
+import { UnknownCenterError, WEEKDAYS } from './types';
 import type { AppConfig } from './appConfig';
 import type {
   BookingConfig,
   BookingHistoryEntry,
+  CenterOption,
+  ClassOption,
   DueEntry,
   Profile,
   SealedElixiaSecret,
+  StoredTokens,
   Subscription,
   Weekday,
 } from './types';
@@ -164,6 +172,114 @@ export async function unlinkElixia(
   await config.repo.replaceDueEntries(profile.id, []);
 }
 
+/**
+ * A usable Elixia session for this profile, renewed and re-sealed if needed.
+ *
+ * Shared by the cron and by anything that browses the schedule, so a session
+ * is renewed the same way everywhere — and, crucially, *persisted* when it is,
+ * rather than each caller quietly logging in again on the next request.
+ *
+ * Throws rather than returning null: every caller needs the session to do
+ * anything at all, and the two of them want very different things to happen
+ * when it cannot be had (the cron marks the link dead and notifies; a browsing
+ * request just says so), which is why that handling stays with them.
+ */
+async function elixiaSession(
+  config: AppConfig,
+  profile: Profile,
+  backend: BookingBackend,
+  nowMs: number,
+): Promise<StoredTokens> {
+  const secret = await openSecret(config, profile);
+  let tokens = secret.tokens;
+
+  if (!tokens || needsRefresh(tokens, nowMs)) {
+    tokens = tokens?.refreshToken
+      ? await backend
+          .refresh(tokens, nowMs)
+          .catch(() => backend.login(profile.elixiaEmail ?? '', secret.password, nowMs))
+      : // No usable refresh token: fall back to the stored password. This is
+        // exactly why it is kept — otherwise the bot dies the first time a
+        // session lapses and waits for the user to notice.
+        await backend.login(profile.elixiaEmail ?? '', secret.password, nowMs);
+
+    await config.repo.upsertProfile({
+      ...profile,
+      elixiaSecret: await sealSecret(config, { password: secret.password, tokens }),
+      elixiaStatus: 'ok',
+      elixiaCheckedAtMs: nowMs,
+    });
+  }
+
+  return tokens;
+}
+
+/**
+ * Run something against the live schedule, with every failure turned into a
+ * status the browser can act on.
+ *
+ * The distinction that matters is between "you asked for something that does
+ * not exist" (400, and retrying will not help) and "Elixia could not be
+ * reached" (502, and it might) — collapsing the two would either send someone
+ * hunting for a typo during an outage, or tell them to try again forever.
+ */
+async function browsingSchedule<T>(
+  config: AppConfig,
+  profile: Profile,
+  nowMs: number,
+  fn: (backend: BookingBackend, tokens: StoredTokens) => Promise<T>,
+): Promise<T> {
+  const backend = backendFor(config);
+  const tokens = await elixiaSession(config, profile, backend, nowMs).catch((err) => {
+    if (err instanceof ServiceError) throw err;
+    throw new ServiceError(
+      `Elixia would not accept your saved credentials (${(err as Error).message}). Re-link your gym account.`,
+      401,
+    );
+  });
+
+  try {
+    return await fn(backend, tokens);
+  } catch (err) {
+    if (err instanceof UnknownCenterError) throw new ServiceError(err.message, 400);
+    if (err instanceof ServiceError) throw err;
+    throw new ServiceError(
+      `Could not read Elixia's schedule right now (${(err as Error).message}). Try again in a moment.`,
+      502,
+    );
+  }
+}
+
+/** Every centre a class can be chosen from. */
+export async function listCenters(
+  config: AppConfig,
+  profile: Profile,
+  nowMs: number,
+): Promise<CenterOption[]> {
+  return browsingSchedule(config, profile, nowMs, (backend, tokens) => backend.listCenters(tokens));
+}
+
+/**
+ * Every weekly slot published for one centre — the only classes that may be
+ * subscribed to.
+ *
+ * What it can offer is bounded by what Elixia publishes (~14 days, the same
+ * for everyone), which is more than a week, so every weekly slot appears at
+ * least once.
+ */
+export async function listClasses(
+  config: AppConfig,
+  profile: Profile,
+  center: string,
+  nowMs: number,
+): Promise<ClassOption[]> {
+  const trimmed = center.trim();
+  if (!trimmed) throw new ServiceError('Pick a centre first', 400);
+  return browsingSchedule(config, profile, nowMs, (backend, tokens) =>
+    backend.listClasses(tokens, trimmed),
+  );
+}
+
 // --- dashboard -------------------------------------------------------------
 
 export interface DashboardView {
@@ -241,16 +357,39 @@ export async function addSubscription(
     throw new ServiceError('Start time must look like 09:00', 400);
   }
 
+  // Checked against the live schedule, not just against the chooser that
+  // offered it: a class that is not published cannot be resolved at T-0, so
+  // accepting one would add a row that books nothing and says nothing until
+  // the user notices weeks later that they never got in.
+  const offered = await listClasses(config, profile, center, nowMs);
+  const match = offered.find(
+    (option) =>
+      option.className.trim().toLowerCase() === className.toLowerCase() &&
+      option.weekday === weekday &&
+      option.startTime === normalizeTime(startTime),
+  );
+
+  if (!match) {
+    throw new ServiceError(
+      `"${className}" at ${normalizeTime(startTime)} is not on ${center}'s schedule on ` +
+        `${weekday}. Pick a class from the list — Elixia publishes about two weeks ahead.`,
+      400,
+    );
+  }
+
   const existing = await config.repo.listSubscriptions(profile.id);
 
   let subscription: Subscription;
   try {
     subscription = await config.repo.createSubscription({
       userId: profile.id,
-      className,
+      // The listing's own spelling and padding, not the submitted one: booking
+      // matches these against the schedule exactly, so "bodypump" or "9:00"
+      // would resolve to nothing on the day.
+      className: match.className,
       center,
       weekday,
-      startTime,
+      startTime: match.startTime,
       priority: existing.length + 1,
     });
   } catch (err) {
@@ -434,26 +573,7 @@ export async function runDueBookings(
     // Prepare the session before sleeping to T-0, never during the race.
     let tokens;
     try {
-      const secret = await openSecret(config, profile);
-      tokens = secret.tokens;
-
-      if (!tokens || needsRefresh(tokens, nowMs)) {
-        tokens = tokens?.refreshToken
-          ? await backend.refresh(tokens, nowMs).catch(() =>
-              backend.login(profile.elixiaEmail ?? '', secret.password, nowMs),
-            )
-          : // No usable refresh token: fall back to the stored password. This is
-            // exactly why it is kept — otherwise the bot dies the first time a
-            // session lapses and waits for the user to notice.
-            await backend.login(profile.elixiaEmail ?? '', secret.password, nowMs);
-
-        await config.repo.upsertProfile({
-          ...profile,
-          elixiaSecret: await sealSecret(config, { password: secret.password, tokens }),
-          elixiaStatus: 'ok',
-          elixiaCheckedAtMs: nowMs,
-        });
-      }
+      tokens = await elixiaSession(config, profile, backend, nowMs);
     } catch (err) {
       // Loud, not silent: mark it dead so the UI prompts for re-linking.
       await config.repo.upsertProfile({

@@ -12,8 +12,44 @@
  * mock marker, so it cannot be mistaken for a real one.
  */
 
+import { UnknownCenterError } from './types';
 import type { BookingBackend } from './elixia';
-import type { AttemptOutcome, StoredTokens, Subscription } from './types';
+import type {
+  AttemptOutcome,
+  CenterOption,
+  ClassOption,
+  StoredTokens,
+  Subscription,
+  Weekday,
+} from './types';
+
+/**
+ * A timetable, because a mock gym that accepts any class name would hide the
+ * one thing the chooser exists to enforce: that a class has to be on the
+ * schedule before it can be subscribed to.
+ *
+ * Every centre runs the same week — the point is to exercise the paths, not to
+ * model a real club — and two names steer `book` below: anything containing
+ * "full" lands on the waiting list, anything containing "busy" is refused once
+ * as too-early first.
+ */
+const MOCK_CENTERS: CenterOption[] = [
+  { id: '740', name: 'Tapiola' },
+  { id: '741', name: 'Sello' },
+  { id: '742', name: 'Kamppi' },
+];
+
+function slots(className: string, startTime: string, days: Weekday[]): ClassOption[] {
+  return days.map((weekday) => ({ className, weekday, startTime }));
+}
+
+const MOCK_TIMETABLE: ClassOption[] = [
+  ...slots('Bodypump', '09:00', ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']),
+  ...slots('Bodypump', '18:00', ['tuesday', 'thursday']),
+  ...slots('Yoga', '17:00', ['monday', 'wednesday']),
+  ...slots('Full House Spin', '09:00', ['tuesday', 'saturday']),
+  ...slots('Busy Bootcamp', '07:00', ['monday', 'wednesday', 'friday']),
+];
 
 /** Access tokens are short-lived so the refresh path actually gets exercised. */
 const MOCK_TOKEN_TTL_MS = 10 * 60 * 1000;
@@ -40,6 +76,21 @@ export class MockElixiaClient implements BookingBackend {
       expiresAtMs: nowMs + MOCK_TOKEN_TTL_MS,
       updatedAtMs: nowMs,
     };
+  }
+
+  async listCenters(_tokens: StoredTokens): Promise<CenterOption[]> {
+    return [...MOCK_CENTERS];
+  }
+
+  /**
+   * Rejects an unknown centre by name, exactly as the real client does, so the
+   * error the UI shows for a stale hand-typed centre is exercised here too.
+   */
+  async listClasses(_tokens: StoredTokens, center: string): Promise<ClassOption[]> {
+    const wanted = center.trim().toLowerCase();
+    const known = MOCK_CENTERS.some((c) => c.name.toLowerCase() === wanted || c.id === wanted);
+    if (!known) throw new UnknownCenterError(center);
+    return [...MOCK_TIMETABLE];
   }
 
   async resolveClassId(

@@ -7,20 +7,11 @@ import {
   apiRequest as api,
   dashboardScreen,
   loadDashboard,
+  titleCase,
   type DashboardLoad,
 } from '@/lib/dashboardState';
+import AddClass from './AddClass';
 import type { DashboardView } from '@/lib/service';
-import type { Weekday } from '@/lib/types';
-
-const WEEKDAY_OPTIONS: Weekday[] = [
-  'monday',
-  'tuesday',
-  'wednesday',
-  'thursday',
-  'friday',
-  'saturday',
-  'sunday',
-];
 
 const OUTCOME_LABELS: Record<string, [string, string]> = {
   booked: ['pill-ok', 'Booked'],
@@ -31,8 +22,6 @@ const OUTCOME_LABELS: Record<string, [string, string]> = {
   unauthorized: ['pill-err', 'Session rejected'],
   error: ['pill-err', 'Error'],
 };
-
-const titleCase = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
 
 export default function DashboardApp() {
   // Re-renders on its own when the session changes — including in another tab —
@@ -363,85 +352,6 @@ function ClassList({ view, refresh }: { view: DashboardView; refresh: () => Prom
           </button>
         </div>
       ))}
-    </div>
-  );
-}
-
-function AddClass({ refresh }: { refresh: () => Promise<void> }) {
-  const [className, setClassName] = useState('');
-  const [center, setCenter] = useState('');
-  const [weekday, setWeekday] = useState<Weekday>('monday');
-  const [startTime, setStartTime] = useState('09:00');
-  const [error, setError] = useState('');
-
-  return (
-    <div className="card">
-      <h2>Add a class</h2>
-      <div className="row row-2">
-        <div>
-          <label htmlFor="s-name">Class name</label>
-          <input
-            id="s-name"
-            placeholder="Bodypump"
-            value={className}
-            onChange={(e) => setClassName(e.target.value)}
-          />
-        </div>
-        <div>
-          <label htmlFor="s-center">Centre</label>
-          <input
-            id="s-center"
-            placeholder="Tapiola"
-            value={center}
-            onChange={(e) => setCenter(e.target.value)}
-          />
-        </div>
-      </div>
-      <div className="row row-3">
-        <div>
-          <label htmlFor="s-weekday">Weekday</label>
-          <select
-            id="s-weekday"
-            value={weekday}
-            onChange={(e) => setWeekday(e.target.value as Weekday)}
-          >
-            {WEEKDAY_OPTIONS.map((d) => (
-              <option key={d} value={d}>
-                {titleCase(d)}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label htmlFor="s-time">Start time</label>
-          <input
-            id="s-time"
-            type="time"
-            value={startTime}
-            onChange={(e) => setStartTime(e.target.value)}
-          />
-        </div>
-      </div>
-      {error && <div className="banner banner-err">{error}</div>}
-      <button
-        id="add-btn"
-        onClick={async () => {
-          setError('');
-          try {
-            await api('/api/subscriptions', {
-              method: 'POST',
-              body: JSON.stringify({ className, center, weekday, startTime }),
-            });
-            setClassName('');
-            setCenter('');
-            await refresh();
-          } catch (err) {
-            setError((err as Error).message);
-          }
-        }}
-      >
-        Add class
-      </button>
     </div>
   );
 }

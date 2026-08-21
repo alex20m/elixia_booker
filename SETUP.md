@@ -198,7 +198,10 @@ At <http://localhost:3000>:
 1. **Create an account** — your Booker login, separate from Elixia.
 2. **Link your Elixia account** — with `MOCK_ELIXIA=1`, any email containing `@`
    and any password of 4+ characters is accepted.
-3. **Add a class** and check the "Opens …" time looks right.
+3. **Add a class** — pick a centre, then one of the classes it publishes, and
+   check the "Opens …" time looks right. With `MOCK_ELIXIA=1` the timetable is
+   the fixed mock one in `lib/mock.ts` (Tapiola, Sello, Kamppi); against the
+   real adapter it is whatever Elixia lists for that centre today.
 
 Fire a booking run by hand:
 
