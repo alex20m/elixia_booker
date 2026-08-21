@@ -175,12 +175,6 @@ export function createNeonRepo(sql: Sql): Repo {
     async createSubscription(subscription: NewSubscription) {
       try {
         const rows = await sql.query(
-          // on_full is deliberately omitted: the booking engine no longer
-          // branches on it (Elixia auto-waitlists, so there is nothing to
-          // choose), but the column is left in place with its default rather
-          // than dropped, so a deployment still running the previous code —
-          // which does insert it — keeps working. Removing it is a later
-          // migration, once nothing writes it.
           `insert into public.subscriptions (
              user_id, class_name, center, weekday, start_time, priority, booking_window_days
            )
