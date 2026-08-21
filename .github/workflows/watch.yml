@@ -1,26 +1,29 @@
 name: Booking watcher
 
-# cron.yml's per-minute trigger stays as a safety net, but it is no longer
-# what makes booking exact. GitHub documents scheduled workflows as queued,
-# not punctual — under load a trigger can arrive late enough that a release
-# falls outside the tick's own claim window and is missed outright, not just
-# fired late.
+# The only mechanism that drives booking. GitHub documents scheduled
+# workflows as queued, not punctual — under load a trigger can arrive late
+# enough that a release is missed outright, not just fired late — so this
+# workflow does not rely on a schedule trigger landing anywhere near a
+# release at all.
 #
-# This workflow removes the scheduler from that critical path. Instead of
-# being invoked once per release and racing GitHub's queue, one job starts
-# well ahead of the next release — its own start time can be off by many
-# minutes and it costs nothing — and then sleeps, using the runner's own
-# accurate clock, to the exact instant before calling the tick endpoint. The
-# tick still does its own millisecond-precise sleep once inside the request
-# (see lib/booking.ts); this workflow's job is only to make sure that request
-# goes out on time, which no longer depends on the schedule trigger's
-# punctuality at all — only on the job having started at some point before.
+# Instead of being invoked once per release, one job starts well ahead of
+# time and stays running: once it's up, it sleeps, using the runner's own
+# accurate clock, to the exact instant before calling the tick endpoint,
+# which does its own millisecond-precise sleep once inside the request (see
+# lib/booking.ts) before booking. GitHub caps any single job at ~6 hours, so
+# there's no way to make one job literally run forever — instead a new job
+# starts every 3 hours (see the schedule below) and each one runs for up to
+# ~5h50m, so by the time a job is nearing its own deadline, the next one has
+# already been running for hours. That overlap is what makes the scheduler's
+# own punctuality irrelevant: a trigger only has to land sometime in that
+# ~2h50m margin, not on the second, for there to always be one job awake and
+# watching.
 on:
   schedule:
     # Only has to start a watcher sometime before the next release, so a
     # jittery trigger costs nothing. Every 3 hours leaves wide overlap against
     # the job's own budget below, so the next watcher is already running well
-    # before the previous one's deadline.
+    # before the previous one's deadline — see the comment above.
     - cron: '0 */3 * * *'
   workflow_dispatch: {}
 

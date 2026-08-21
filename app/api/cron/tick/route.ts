@@ -15,11 +15,11 @@ export const maxDuration = 60;
 const SAFETY_MARGIN_MS = 5_000;
 
 /**
- * The booking tick. Driven every minute by GitHub Actions (see
- * .github/workflows/cron.yml), which is free and has minute granularity —
- * unlike Vercel's Hobby cron, which fires only once a day.
+ * The booking tick. Fired by the booking watcher (see
+ * .github/workflows/watch.yml), which sleeps to the exact release instant
+ * using its own clock rather than depending on a scheduler's punctuality.
  *
- * GET and POST both work so any scheduler can drive it.
+ * GET and POST both work so any caller can drive it.
  */
 async function tick(request: Request): Promise<Response> {
   return handle(async () => {

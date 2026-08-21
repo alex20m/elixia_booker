@@ -1,7 +1,7 @@
 name: Nightly reindex
 
 # Reprojects every linked account's upcoming releases and prunes old ones, so
-# the per-minute tick stays a single indexed range scan.
+# the booking watcher's lookups stay a single indexed range scan.
 on:
   schedule:
     - cron: '17 3 * * *'

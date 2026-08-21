@@ -6,11 +6,10 @@ export const dynamic = 'force-dynamic';
 /**
  * "When does the next release open?" — a read, not a claim.
  *
- * Lets the high-precision watcher (.github/workflows/watch.yml) sleep to the
- * exact release instant using its own clock, instead of depending on a
- * per-minute scheduler trigger to land on time. See that workflow's header
- * comment for why the trigger's own punctuality no longer matters once this
- * exists.
+ * Lets the booking watcher (.github/workflows/watch.yml) sleep to the exact
+ * release instant using its own clock, instead of depending on a scheduler
+ * trigger to land on time. See that workflow's header comment for why the
+ * trigger's own punctuality no longer matters once this exists.
  */
 async function next(request: Request): Promise<Response> {
   return handle(async () => {

@@ -64,9 +64,8 @@ read, pause or delete another's rows.
 
 ## How the booking works
 
-The booking watcher (`.github/workflows/watch.yml`) fires the tick precisely,
-and a per-minute cron (`.github/workflows/cron.yml`) fires it as a safety net.
-Either way, one tick does:
+The booking watcher (`.github/workflows/watch.yml`) fires the tick precisely.
+One tick does:
 
 1. **Look up.** One indexed range scan over precomputed release instants.
    Nothing due → immediate exit.
@@ -91,17 +90,20 @@ free — but its own schedules are documented as *queued, not punctual*, and
 under load a trigger can land late enough that a release falls outside even a
 generous claim window and is simply missed, not just fired late.
 
-That is why timing does not actually depend on the per-minute trigger landing
-on time. **The booking watcher** (`watch.yml`) is one long-running job, started
-by a coarse 3-hourly schedule — its own punctuality is irrelevant, since it
-only has to start sometime before the next release. Once running, it asks
-`/api/cron/next` for the next unclaimed release and sleeps to it using the
-runner's own accurate clock, not GitHub's scheduler. The per-minute **Booking
-cron** (`cron.yml`) stays as a safety net in case the watcher's job ever dies.
-`claimDue` claims a release atomically (`CLAIM_LEASE_MS` in `lib/db/repo.ts`),
-so whichever of the two gets there first is the only one that fires it, and a
-claim that is never finished — a crashed invocation — becomes reclaimable
-rather than lost. Every attempt still logs its offset from T-0.
+That is why timing does not depend on a scheduled trigger landing on time at
+all. **The booking watcher** (`watch.yml`) is a single long-running job, and
+GitHub caps any one job at ~6 hours — there is no way to make a job run
+forever. Instead a new job starts every 3 hours and each one runs for up to
+~5h50m, so a job is always already running well before the previous one's
+deadline. Once running, it asks `/api/cron/next` for the next unclaimed
+release and sleeps to it using the runner's own accurate clock, not GitHub's
+scheduler — the schedule trigger only has to land sometime in that ~2h50m
+overlap, not on the second, for a watcher to always be awake. `claimDue`
+claims a release atomically (`CLAIM_LEASE_MS` in `lib/db/repo.ts`), because
+the watcher's own loop can otherwise re-fire a release it just booked on its
+next iteration; a claim that is never finished — a crashed invocation —
+becomes reclaimable rather than lost. Every attempt still logs its offset
+from T-0.
 
 ### The timing detail that matters
 
@@ -138,8 +140,7 @@ lib/
   mock.ts               stand-in backend so the app runs before discovery
 db/migrations/          numbered schema migrations, applied once each
 db/migrate.ts           `npm run migrate` — node-pg-migrate, configured
-.github/workflows/      the checks, the every-minute tick, the
-                        nightly reindex
+.github/workflows/      the checks, the booking watcher, the nightly reindex
 discovery/              local-only Playwright capture (never deployed)
 ```
 

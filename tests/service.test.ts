@@ -366,9 +366,11 @@ describe('the booking tick', () => {
   });
 
   it('does not double-book when two ticks race for the same release', async () => {
-    // The per-minute safety net and the high-precision watcher both call the
-    // same endpoint, and can land within seconds of each other around a
-    // release. The second must find nothing left to claim.
+    // The watcher's own loop can plausibly call this twice in quick
+    // succession around one release — it fires the tick, and by the time
+    // that request returns and the loop asks again, the same release can
+    // still fall inside the next claim window. The second call must find
+    // nothing left to claim.
     const profile = await linkedProfile();
     const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
 

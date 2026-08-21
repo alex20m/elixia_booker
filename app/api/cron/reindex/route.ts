@@ -7,7 +7,7 @@ export const maxDuration = 60;
 
 /**
  * Nightly: reproject every linked account's classes and drop releases long
- * past, so the per-minute tick stays a single indexed range scan.
+ * past, so the booking watcher's lookups stay a single indexed range scan.
  */
 async function reindex(request: Request): Promise<Response> {
   return handle(async () => {

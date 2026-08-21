@@ -297,10 +297,10 @@ describe('due entries', () => {
   });
 
   it('claims a release only once, until the claim expires', async () => {
-    // Two overlapping schedulers — the per-minute safety net and the
-    // high-precision watcher — can both ask "what's due right now" within
-    // seconds of each other. The second must get nothing, or the class gets
-    // booked twice.
+    // The watcher's own loop can ask "what's due right now" twice in quick
+    // succession around the same release — once before firing it, once again
+    // on the next iteration while it's still inside the claim window. The
+    // second ask must get nothing, or the class gets booked twice.
     const alices = await addClass(ALICE, 'Bodypump');
     const release = Date.UTC(2026, 3, 1, 5, 0);
     await repo.replaceDueEntries(ALICE, [entry(ALICE, alices.id, release)]);
