@@ -293,6 +293,49 @@ provider console is the one manual step here.
   behaviour, not a broken setup — say so in SETUP.md before someone reports it
   as a bug.
 
+#### Those preview branches accumulate, and the quota failure lies about itself
+
+Nothing deletes a preview branch when its pull request merges. They pile up one
+per branch ever previewed, and every plan caps how many may exist — a free tier
+in the small handful, where a repo with a few merged PRs reaches the ceiling
+within days.
+
+**What makes this expensive is the symptom, which points at the wrong layer.**
+Provisioning the database happens *before* the build container starts, so the
+platform reports the failure as a build failure: a red deploy check, a generic
+"resource provisioning failed", and a build that lasted `0ms`. There are **no
+build logs at all**, because nothing was ever built. The natural reading is
+that the commit broke the build, and the natural response is to go hunting
+through a diff that is entirely innocent.
+
+Three signals separate this from a real build failure, and all three are
+cheap:
+
+- **Zero build events.** Not "the logs look short" — the log endpoint returns
+  nothing, because no build ran.
+- **Production still deploys fine.** Production uses the long-lived parent
+  branch and provisions nothing, so it is unaffected. Previews failing while
+  production succeeds is close to diagnostic on its own.
+- **It is not specific to one branch.** Check whether previews on *other*
+  branches also started failing, and when. A per-branch cause cannot explain a
+  project-wide onset.
+
+The fix is to delete the branches belonging to merged or abandoned work — never
+the default branch, which is the parent everything else is seeded from:
+
+```bash
+<provider-cli> branches list  --project-id "$PROJECT_ID" --output json
+<provider-cli> branches delete "<branch>" --project-id "$PROJECT_ID"
+```
+
+Then re-trigger the failed deployment; it will provision and build normally.
+
+Worth doing once as housekeeping and then *not* relying on memory: the quota
+refills silently and fails the same confusing way next time. If the integration
+offers automatic cleanup on branch deletion, turn it on. Otherwise put the
+delete command in SETUP.md next to the preview-database note, so the person who
+meets the 0ms build has somewhere to find it.
+
 ### Neon Auth is managed Better Auth now
 
 This is the trap worth spending a paragraph on: nearly everything written about
