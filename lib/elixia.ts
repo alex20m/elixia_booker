@@ -339,15 +339,28 @@ export function extractDataProps(html: string): SchedulePageProps {
  * Walks the filter tree rather than indexing a fixed path: the filters object
  * is deeply nested presentation data whose shape is far more likely to be
  * rearranged than the `{queryName: 'clubIds', options: [{value, label}]}`
- * node itself. An absent or restyled tree yields an empty list rather than
- * throwing — the caller says what a missing centre list means, and for the
- * chooser that is "nothing to offer", not a crash.
+ * node itself.
+ *
+ * **Every such node, not the first.** The page splits its clubs across
+ * several `clubIds` nodes — `categories` is an array — so stopping at the
+ * first match returns one group and silently drops the rest. That is not a
+ * cosmetic loss: this is also how a stored centre name is resolved to its
+ * club id, so a club in a later group stops resolving and its subscription
+ * books nothing, in exactly the way an unopened class does. Ids repeat across
+ * groups where a club is served by more than one filter, so the first
+ * spelling of each wins and the rest collapse.
+ *
+ * Sorted by name because the merged order is otherwise an artefact of how the
+ * page happens to nest its filters, and a list this long is only navigable in
+ * a predictable one. An absent or restyled tree yields an empty list rather
+ * than throwing — the caller says what a missing centre list means, and for
+ * the chooser that is "nothing to offer", not a crash.
  */
 export function listClubOptions(props: SchedulePageProps): CenterOption[] {
-  let found: CenterOption[] | null = null;
+  const byId = new Map<string, CenterOption>();
 
   const walk = (node: unknown): void => {
-    if (found !== null || node === null || typeof node !== 'object') return;
+    if (node === null || typeof node !== 'object') return;
 
     if (Array.isArray(node)) {
       for (const item of node) walk(item);
@@ -356,19 +369,17 @@ export function listClubOptions(props: SchedulePageProps): CenterOption[] {
 
     const record = node as Record<string, unknown>;
     if (record['queryName'] === 'clubIds' && Array.isArray(record['options'])) {
-      found = (record['options'] as Array<Record<string, unknown>>)
-        .map((option) => ({
-          id: typeof option['value'] === 'string' ? option['value'] : '',
-          name: typeof option['label'] === 'string' ? option['label'].trim() : '',
-        }))
-        .filter((club) => club.id !== '' && club.name !== '');
-      return;
+      for (const option of record['options'] as Array<Record<string, unknown>>) {
+        const id = typeof option['value'] === 'string' ? option['value'] : '';
+        const name = typeof option['label'] === 'string' ? option['label'].trim() : '';
+        if (id && name && !byId.has(id)) byId.set(id, { id, name });
+      }
     }
     for (const value of Object.values(record)) walk(value);
   };
 
   walk(props.filters ?? props);
-  return found ?? [];
+  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /**

@@ -39,12 +39,33 @@ function clubOptions() {
   };
 }
 
+/**
+ * A second group of clubs, because `categories` is an array: the real page
+ * splits its 226 clubs across several `clubIds` nodes rather than listing them
+ * all in one.
+ */
+function moreClubOptions() {
+  return {
+    queryName: 'clubIds',
+    options: [
+      { value: '742', label: 'Sello', name: 'clubIds' },
+      // Repeated from the first group, as a club served by two filters would be.
+      { value: '740', label: 'Iso Omena', name: 'clubIds' },
+    ],
+  };
+}
+
 /** Mirrors the real nesting depth, so the finder is exercised as a tree walk. */
 function filtersFixture() {
   return {
     filters: {
       filters: [
-        { title: 'Keskus', formContentOptions: { content: { content: [{ categories: [clubOptions()] }] } } },
+        {
+          title: 'Keskus',
+          formContentOptions: {
+            content: { content: [{ categories: [clubOptions(), moreClubOptions()] }] },
+          },
+        },
       ],
     },
   };
@@ -199,19 +220,34 @@ describe('findClubIdByName', () => {
     expect(findClubIdByName(scheduleFixture(), '  circus ')).toBe('741');
   });
 
+  it('finds a centre listed in a later filter group, not just the first', () => {
+    // The regression that hid Circus from the chooser also broke resolution:
+    // a subscription whose centre lives in a later group would stop resolving
+    // and quietly book nothing.
+    expect(findClubIdByName(scheduleFixture(), 'Sello')).toBe('742');
+  });
+
   it('returns null for a centre that does not exist', () => {
     expect(findClubIdByName(scheduleFixture(), 'Nowhere')).toBeNull();
   });
 });
 
 describe('listClubOptions', () => {
-  it('lists every centre the filter offers, so the chooser can be built from it', () => {
-    // The chooser's whole point is that a centre cannot be typed wrong, which
-    // requires the full list rather than a lookup of one name at a time.
+  it('lists every centre the filter offers, from every group it offers them in', () => {
+    // The clubs are split across several `clubIds` nodes, so stopping at the
+    // first one silently hides most of the gym's centres — and hid Circus.
+    // Alphabetical because the merged order is otherwise arbitrary, and a
+    // 226-item dropdown is only usable in a predictable order.
     expect(listClubOptions(scheduleFixture())).toEqual([
-      { id: '740', name: 'Iso Omena' },
       { id: '741', name: 'Circus' },
+      { id: '740', name: 'Iso Omena' },
+      { id: '742', name: 'Sello' },
     ]);
+  });
+
+  it('lists a club once when two filter groups both offer it', () => {
+    const ids = listClubOptions(scheduleFixture()).map((c) => c.id);
+    expect(ids).toEqual([...new Set(ids)]);
   });
 
   it('is empty rather than throwing when the page carries no filter tree', () => {
@@ -395,8 +431,9 @@ describe('ElixiaClient.listCenters / listClasses', () => {
     }) as unknown as typeof fetch;
 
     await expect(new ElixiaClient({ fetchImpl, baseUrl: BASE }).listCenters(tokens)).resolves.toEqual([
-      { id: '740', name: 'Iso Omena' },
       { id: '741', name: 'Circus' },
+      { id: '740', name: 'Iso Omena' },
+      { id: '742', name: 'Sello' },
     ]);
   });
 
