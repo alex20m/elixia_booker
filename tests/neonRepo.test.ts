@@ -44,7 +44,6 @@ const addClass = (userId: string, className: string, startTime = '09:00') =>
     center: 'Tapiola',
     weekday: 'monday',
     startTime,
-    onFull: 'waitlist',
     priority: 1,
   });
 
@@ -155,7 +154,6 @@ describe('subscriptions', () => {
         center: 'tapiola',
         weekday: 'monday',
         startTime: '09:00',
-        onFull: 'skip',
         priority: 2,
       }),
     ).rejects.toBeInstanceOf(DuplicateSubscriptionError);
@@ -177,7 +175,6 @@ describe('subscriptions', () => {
       center: 'Tapiola',
       weekday: 'tuesday',
       startTime: '18:00',
-      onFull: 'waitlist',
       priority: 2,
     });
     const first = await addClass(ALICE, 'Bodypump');
@@ -408,12 +405,12 @@ describe('booking history', () => {
     const alices = await addClass(ALICE, 'Bodypump');
     const bobs = await addClass(BOB, 'Yoga');
     await repo.appendHistory(ALICE, attempt(Date.UTC(2026, 3, 1, 5, 0), alices.id));
-    await repo.appendHistory(ALICE, attempt(Date.UTC(2026, 3, 2, 5, 0), alices.id, 'full'));
+    await repo.appendHistory(ALICE, attempt(Date.UTC(2026, 3, 2, 5, 0), alices.id, 'waitlisted'));
     await repo.appendHistory(BOB, attempt(Date.UTC(2026, 3, 3, 5, 0), bobs.id));
 
     const history = await repo.listHistory(ALICE);
     expect(history.map((h) => [h.atMs, h.outcome])).toEqual([
-      [Date.UTC(2026, 3, 2, 5, 0), 'full'],
+      [Date.UTC(2026, 3, 2, 5, 0), 'waitlisted'],
       [Date.UTC(2026, 3, 1, 5, 0), 'booked'],
     ]);
   });

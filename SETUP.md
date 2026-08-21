@@ -216,9 +216,9 @@ npx vercel deploy --prod
 curl https://<your-app>.vercel.app/api/health
 ```
 
-Every field should read `true` except `apiDiscovered` (step 10) — including
-**`encryptionConfigured`**, which is the one that is false on a deployment that
-otherwise looks fine and where sign-in fails with "Could not load your account".
+Every field should read `true`, **`encryptionConfigured`** included — that is
+the one that is false on a deployment that otherwise looks fine, and where
+sign-in then fails with "Could not load your account".
 
 Then let Neon Auth link back to the deployment:
 
@@ -347,45 +347,65 @@ app still books and logs — it just can't tell you about it.
 
 ---
 
-## 10. Replace the mock
+## 10. Go live against the real Elixia API
 
-Everything above works against `lib/mock.ts`. This is the step that books real
-classes, and it has to happen on your own machine: it needs a real login, which
-means a real browser and your own 2FA.
+**Discovery is already done.** `lib/elixia.ts` speaks the real API — login,
+schedule listing and booking are all implemented from captured traffic and
+written up in [`docs/api.md`](docs/api.md). `API_DISCOVERED` is `true`. So this
+step is no longer "figure out the API"; it is "switch off the mock and watch
+the first run".
 
-```bash
-cp .env.example .env         # add ELIXIA_EMAIL / ELIXIA_PASSWORD
-npx playwright install chromium
+### 10a. Set your booking window
 
-npm run discover:headed      # walks login → schedule → booking
-npm run redact               # strips secrets, ready to commit
-```
-
-**Run the decisive test before writing anything up.** Take a token from the
-browser's network tab and replay the booking POST with plain `curl`:
+Discovery measured a **14-day** window on the account it ran against, but the
+app still defaults to 7. Get this wrong and every release fires a week late, so
+set it explicitly:
 
 ```bash
-curl -X POST 'https://<booking-endpoint>' \
-  -H 'authorization: Bearer <token>' \
-  -H 'content-type: application/json' \
-  -d '{"classId":"..."}'
+npx vercel env add DEFAULT_BOOKING_WINDOW_DAYS production   # 14, or 7 on a Basic/Flexible tier
 ```
 
-If the browser succeeds and `curl` fails, **stop** — the premise is dead. A
-serverless function can't run a JS challenge or control its TLS fingerprint, so
-no amount of endpoint detail helps and the architecture needs rethinking. Better
-to find out in five minutes than after a week.
+Existing accounts also have a per-account setting in the dashboard, which
+overrides this default.
 
-If it succeeds:
+### 10b. Turn off the mock and dry-run once
 
-1. Fill in [`docs/api.md`](docs/api.md) from the capture.
-2. Update `lib/elixia.ts`: `ENDPOINTS`, `authHeaders`, `buildBookingBody`,
-   `parseLoginResponse`, `classifyBookingResponse`, `resolveClassId`.
-3. Set `API_DISCOVERED = true` there.
-4. Set `MOCK_ELIXIA=0` in Vercel and redeploy.
-5. Leave `DRY_RUN=1` for one booking window and check the history shows a
-   plausible attempt at the right millisecond.
-6. Set `DRY_RUN=0`.
+```bash
+npx vercel env rm MOCK_ELIXIA production
+npx vercel env add DRY_RUN production        # 1, for now
+npx vercel deploy --prod
+```
+
+Then link your gym account in the app and add a class. **Leave `DRY_RUN=1` for
+one real booking window** and check the history shows an attempt at a plausible
+millisecond offset from T-0. A dry run still logs in, still resolves the class
+id against the live schedule, and still sleeps to the exact instant — it just
+does not send the booking. That exercises everything that can go wrong except
+the one call you cannot take back.
+
+### 10c. Watch the first live run
+
+```bash
+npx vercel env rm DRY_RUN production
+npx vercel deploy --prod
+```
+
+**Watch this one rather than trusting it.** One thing discovery could not
+settle is whether the booking call works from *outside a browser* at all — a
+browser capture cannot prove the absence of a JS challenge or TLS
+fingerprinting (see [`docs/api.md` §7](docs/api.md#7-anti-bot-signals)).
+Everything observed points the right way, and the first real run is the test.
+If it comes back `unauthorized` or `error` while booking the same class by hand
+in a browser works, that is the finding — stop and re-read §7 before adding
+retries.
+
+### If it stops working later
+
+The adapter parses a page Elixia can restyle, so this will eventually break —
+loudly, with an error naming its own cause. Re-checking a known API needs only
+browser devtools; see
+[`docs/api.md` → If the shapes drift](docs/api.md#if-the-shapes-drift). Update
+`docs/api.md` and `lib/elixia.ts` together when you do.
 
 ---
 
@@ -402,7 +422,7 @@ Everything else is a command. These are gated on a human by the provider:
   custom domain.
 - **Creating the Telegram bot** — BotFather is a chat, and your chat ID exists
   only once you have messaged it.
-- **Elixia discovery (step 10)** — a real login with real 2FA is the point.
+- **Linking your gym account** — done in the app, once, by whoever owns it.
 
 ---
 
@@ -416,15 +436,23 @@ Everything else is a command. These are gated on a human by the provider:
       trusted domain
 - [ ] `ENCRYPTION_KEY`, `CRON_SECRET`, `NEON_AUTH_COOKIE_SECRET` and the app
       settings added for Production, Preview and Development — **then redeployed**
-- [ ] `/api/health` reports everything `true` but `apiDiscovered`,
-      `encryptionConfigured` included
+- [ ] `/api/health` reports everything `true`, `encryptionConfigured` included
 - [ ] `vercel env pull .env.local` works and `npm run dev` comes up configured
 - [ ] `APP_URL` and `CRON_SECRET` set on GitHub, **the watcher verified by a
       manual run**
 - [ ] **Pull request** and **Main** green, Vercel's Git deploys left enabled
 - [ ] Account created, gym account linked, one class added
-- [ ] Discovery done, `MOCK_ELIXIA=0`, one dry-run window observed
-- [ ] `DRY_RUN=0`
+- [ ] `DEFAULT_BOOKING_WINDOW_DAYS` set to your tier (14 on Premium — the app
+      defaults to 7, which fires every release a week late)
+- [ ] `MOCK_ELIXIA` removed, one `DRY_RUN=1` window observed in the history
+- [ ] `DRY_RUN=0`, and **the first live run watched** — it is also the test of
+      whether booking works outside a browser at all (docs/api.md §7)
+
+Already done, and not something a fresh deploy repeats:
+
+- [x] **Elixia API discovered** — login, schedule listing and booking are
+      implemented from real captures; `API_DISCOVERED = true`
+      ([`docs/api.md`](docs/api.md))
 
 ---
 

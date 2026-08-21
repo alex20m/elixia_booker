@@ -25,8 +25,7 @@ const WEEKDAY_OPTIONS: Weekday[] = [
 const OUTCOME_LABELS: Record<string, [string, string]> = {
   booked: ['pill-ok', 'Booked'],
   waitlisted: ['pill-ok', 'Waitlisted'],
-  'already-booked': ['pill-ok', 'Already booked'],
-  full: ['pill-warn', 'Full'],
+  'already-booked': ['pill-warn', 'Overlapping'],
   'too-early': ['pill-err', 'Missed'],
   'rate-limited': ['pill-err', 'Rate limited'],
   unauthorized: ['pill-err', 'Session rejected'],
@@ -334,8 +333,7 @@ function ClassList({ view, refresh }: { view: DashboardView; refresh: () => Prom
           <div className="item-main">
             <div className="item-title">{s.className}</div>
             <div className="item-meta">
-              {s.center} · {titleCase(s.weekday)} {s.startTime} ·{' '}
-              {s.onFull === 'waitlist' ? 'waitlist if full' : 'skip if full'}
+              {s.center} · {titleCase(s.weekday)} {s.startTime}
             </div>
             <div className="item-meta">
               {s.enabled
@@ -374,7 +372,6 @@ function AddClass({ refresh }: { refresh: () => Promise<void> }) {
   const [center, setCenter] = useState('');
   const [weekday, setWeekday] = useState<Weekday>('monday');
   const [startTime, setStartTime] = useState('09:00');
-  const [onFull, setOnFull] = useState('waitlist');
   const [error, setError] = useState('');
 
   return (
@@ -424,13 +421,6 @@ function AddClass({ refresh }: { refresh: () => Promise<void> }) {
             onChange={(e) => setStartTime(e.target.value)}
           />
         </div>
-        <div>
-          <label htmlFor="s-full">If full</label>
-          <select id="s-full" value={onFull} onChange={(e) => setOnFull(e.target.value)}>
-            <option value="waitlist">Join waitlist</option>
-            <option value="skip">Skip</option>
-          </select>
-        </div>
       </div>
       {error && <div className="banner banner-err">{error}</div>}
       <button
@@ -440,7 +430,7 @@ function AddClass({ refresh }: { refresh: () => Promise<void> }) {
           try {
             await api('/api/subscriptions', {
               method: 'POST',
-              body: JSON.stringify({ className, center, weekday, startTime, onFull }),
+              body: JSON.stringify({ className, center, weekday, startTime }),
             });
             setClassName('');
             setCenter('');

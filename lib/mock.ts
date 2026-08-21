@@ -52,18 +52,15 @@ export class MockElixiaClient implements BookingBackend {
 
   /**
    * Outcome is driven by the class name so every branch is reachable by hand:
-   * a class named "…full" comes back full, "…busy" rejects once as too-early
-   * before succeeding, and anything else books.
+   * a class named "…full" comes back waitlisted — matching the real API, which
+   * never rejects a booking for being full (docs/api.md §6) — "…busy" rejects
+   * once as too-early before succeeding, and anything else books.
    */
-  async book(
-    _tokens: StoredTokens,
-    classId: string,
-    waitlist: boolean,
-  ): Promise<AttemptOutcome> {
+  async book(_tokens: StoredTokens, classId: string): Promise<AttemptOutcome> {
     const id = classId.toLowerCase();
 
     if (id.includes('full')) {
-      return waitlist ? { kind: 'waitlisted', position: 3 } : { kind: 'full' };
+      return { kind: 'waitlisted', position: 3, bookingId: `MOCK-${classId}` };
     }
     if (id.includes('busy') && !this.busySeen.has(classId)) {
       this.busySeen.add(classId);

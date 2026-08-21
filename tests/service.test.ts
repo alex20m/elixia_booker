@@ -72,7 +72,6 @@ const BODYPUMP = {
   center: 'Tapiola',
   weekday: 'tuesday',
   startTime: '09:00',
-  onFull: 'waitlist',
 };
 
 /** A profile with a working Elixia link. */

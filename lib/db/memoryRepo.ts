@@ -69,7 +69,6 @@ export function createMemoryRepo(): MemoryRepo {
         center: input.center,
         weekday: input.weekday,
         startTime: input.startTime,
-        onFull: input.onFull,
         priority: input.priority,
         enabled: true,
         ...(input.bookingWindowDays !== undefined
