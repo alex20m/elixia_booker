@@ -1,0 +1,26 @@
+-- ---------------------------------------------------------------------------
+-- subscriptions: drop on_full, which no longer means anything
+-- ---------------------------------------------------------------------------
+--
+-- `on_full` stored a per-class choice between joining the waiting list and
+-- skipping when a class turned out to be full. Discovery established that
+-- Elixia offers no such choice: one POST /api/book either books the class or
+-- places you on its waiting list, decided server-side, with no flag in the
+-- request and no way to decline a queue place (docs/api.md §6). The column has
+-- been unreadable-from and unwritten-to since the release that removed the
+-- preference from the app.
+--
+-- This is deliberately a *separate* migration from the code change that
+-- stopped using the column, and it must stay that way. Migrations run inside
+-- the Vercel build, while the previous deployment is still serving — so a
+-- migration is executed against the *old* code. Dropping this column in the
+-- same deploy that stopped writing it would have broken that still-serving
+-- deployment outright: its INSERT named on_full, and so did the column list
+-- behind every subscription SELECT, which the booking tick runs. Splitting it
+-- means each migration is compatible with the code already running, which is
+-- the whole reason the ordering rule exists.
+--
+-- `if exists` so re-running against a database that never had the column (or
+-- has already had it dropped by hand) is not an error.
+
+alter table public.subscriptions drop column if exists on_full;
