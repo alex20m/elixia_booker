@@ -118,14 +118,24 @@ share memory: an approach that is not written down is discovered fresh every
 time, differently each time, and that is exactly how the same mistake gets made
 twice.
 
-**Anything a project discovers that is not already in this file or in a skill
-goes to two places, in the same task: this repo, and `app_skeleton`.** The
-skeleton is what every new app is copied from, so it is the only place a
-*future* project reads — a discovery landed only where it was found protects one
-codebase, and landed in the skeleton it protects every app that starts after
-today. Where the discovery changes what good code looks like rather than only
-what to know, change the skeleton's code too, so the next project starts in that
-shape without having to read anything.
+**A discovery that would help another project goes to two places, in the same
+task: this repo, and `app_skeleton`. A discovery that is only true of this app
+stays in this repo.** Apply the test before copying anything: would a *different*
+app — built on this stack, but doing something else entirely — act on it? A
+provider CLI that fails quietly, a version that has to be pinned exactly, an
+ordering that half-works when reversed: yes, those travel. This app's schema, its
+route names, its business rules, the one endpoint its own vendor gets wrong: no,
+those stay here, in this repo's own docs. Copying them to the skeleton is not a
+harmless extra — it makes the skeleton a worse starting point for everything
+built after, because the next project inherits advice that was never about it and
+cannot tell which lines to ignore.
+
+The skeleton is what every new app is copied from, so it is the only place a
+*future* project reads: a general discovery landed only where it was found
+protects one codebase, and landed in the skeleton it protects every app that
+starts after today. Where a general discovery changes what good code looks like
+rather than only what to know, change the skeleton's code too, so the next
+project starts in that shape without having to read anything.
 
 **Use the `capture-a-discovery` skill** for how: deciding whether it is a
 standing rule here or a procedure in a skill, copying rather than retyping so
@@ -150,8 +160,11 @@ To keep a skill worth having:
 - **Say what you are unsure about.** A skill that marks its own soft spots gets
   corrected; one that states everything with equal confidence gets trusted where
   it should not be.
-- **Add it to `app_skeleton` always**, and to any sibling repo carrying the same
-  skill, keeping every copy byte-identical so they cannot drift.
+- **Add it to `app_skeleton`** whenever the procedure is general, and to any
+  sibling repo carrying the same skill, keeping every copy byte-identical so they
+  cannot drift. Nearly every skill qualifies, because a skill is supposed to be
+  repo-agnostic to begin with — a procedure that only makes sense against one
+  app's own moving parts is the exception, and it stays in that repo alone.
 
 Existing skills follow this: `merge-on-green`, `test-first`,
 `isolated-task-branch`, `cli-first-provisioning`, `deploy-gate`,
