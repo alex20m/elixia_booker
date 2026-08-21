@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { describeReport, executeBooking, isSuccess } from '../lib/booking';
 import { Logger } from '../lib/logger';
+import { ClassNotListedError } from '../lib/types';
 import type { AttemptOutcome, BookingConfig, PlannedBooking, StoredTokens } from '../lib/types';
 
 const RELEASE = Date.parse('2026-08-11T06:00:00Z');
@@ -25,7 +26,6 @@ const planned: PlannedBooking = {
     weekday: 'tuesday',
     startTime: '09:00',
     priority: 1,
-    onFull: 'waitlist',
   },
   releaseEpochMs: RELEASE,
   classEpochMs: Date.parse('2026-08-18T06:00:00Z'),
@@ -147,33 +147,84 @@ describe('executeBooking', () => {
     expect(report.attempts).toBe(3);
   });
 
-  it('falls back to the waitlist only after the class is confirmed full', async () => {
-    const book = vi.fn(async (_t, _id, waitlist: boolean): Promise<AttemptOutcome> =>
-      waitlist ? { kind: 'waitlisted', position: 2 } : { kind: 'full' },
+  it('retries resolution at T-0 when the class was not listed yet, then books it', async () => {
+    // A class is absent from Elixia's schedule until its window opens
+    // (docs/api.md §4), so the pre-sleep resolve legitimately fails. Giving up
+    // there would miss every booking whose window opens at the release instant.
+    const resolveClassId = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new ClassNotListedError('not listed yet'))
+      .mockResolvedValueOnce('class-77');
+    const { built } = deps({ resolveClassId });
+
+    const report = await executeBooking(planned, built);
+
+    expect(resolveClassId).toHaveBeenCalledTimes(2);
+    expect(built.book).toHaveBeenCalledWith(tokens, 'class-77', expect.anything());
+    expect(report.outcome.kind).toBe('booked');
+  });
+
+  it('keeps retrying while the class stays unlisted, and never books a guess', async () => {
+    const resolveClassId = vi.fn(async () => {
+      throw new ClassNotListedError('not listed yet');
+    });
+    const { built } = deps({ resolveClassId });
+
+    const report = await executeBooking(planned, built);
+
+    expect(built.book).not.toHaveBeenCalled();
+    expect(report.outcome.kind).toBe('too-early');
+    expect(report.attempts).toBeGreaterThan(1);
+  });
+
+  it('reports a real lookup failure as an error, not as "never opened in time"', async () => {
+    // A mistyped centre never resolves however long you wait. Calling that
+    // "too early" would send someone hunting a race that never happened.
+    const resolveClassId = vi.fn(async () => {
+      throw new Error('No Elixia centre named "Atlantis"');
+    });
+    const { built } = deps({ resolveClassId });
+
+    const report = await executeBooking(planned, built);
+
+    expect(report.outcome.kind).toBe('error');
+    expect((report.outcome as { detail: string }).detail).toMatch(/Atlantis/);
+  });
+
+  it('does not re-resolve once it has an id, so retries cost one request each', async () => {
+    const outcomes: AttemptOutcome[] = [{ kind: 'too-early' }, { kind: 'booked' }];
+    const resolveClassId = vi.fn(async () => 'class-77');
+    const { built } = deps({ resolveClassId, book: vi.fn(async () => outcomes.shift()!) });
+
+    await executeBooking(planned, built);
+
+    expect(resolveClassId).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts a waiting-list place as the final answer, without a second request', async () => {
+    // Elixia books or waitlists in the one call (docs/api.md §6). A follow-up
+    // request would at best duplicate the placement.
+    const book = vi.fn(
+      async (): Promise<AttemptOutcome> => ({ kind: 'waitlisted', position: 2 }),
     );
     const { built } = deps({ book });
 
     const report = await executeBooking(planned, built);
 
-    // First call must be a real booking attempt, not a speculative waitlist —
-    // asking for the waitlist up front forfeits a place that was still open.
-    expect(book.mock.calls[0]![2]).toBe(false);
-    expect(book.mock.calls[1]![2]).toBe(true);
-    expect(report.outcome.kind).toBe('waitlisted');
+    expect(book).toHaveBeenCalledTimes(1);
+    expect(report.outcome).toEqual({ kind: 'waitlisted', position: 2 });
   });
 
-  it('does not touch the waitlist when onFull is skip', async () => {
-    const book = vi.fn(async (): Promise<AttemptOutcome> => ({ kind: 'full' }));
+  it('stops on an overlapping booking instead of retrying it', async () => {
+    const book = vi.fn(
+      async (): Promise<AttemptOutcome> => ({ kind: 'already-booked', detail: 'overlap' }),
+    );
     const { built } = deps({ book });
-    const skipPlan: PlannedBooking = {
-      ...planned,
-      desired: { ...planned.desired, onFull: 'skip' },
-    };
 
-    const report = await executeBooking(skipPlan, built);
+    const report = await executeBooking(planned, built);
 
     expect(book).toHaveBeenCalledTimes(1);
-    expect(report.outcome.kind).toBe('full');
+    expect(report.outcome.kind).toBe('already-booked');
   });
 
   it('stops on an expired session instead of retrying into a wall', async () => {
@@ -264,8 +315,8 @@ describe('executeBooking in dry-run mode', () => {
     expect(report.outcome).toEqual({ kind: 'booked', bookingId: 'DRY-RUN' });
   });
 
-  it('does not issue a waitlist request either', async () => {
-    const book = vi.fn(async (): Promise<AttemptOutcome> => ({ kind: 'full' }));
+  it('does not book even when the class would have been waitlisted', async () => {
+    const book = vi.fn(async (): Promise<AttemptOutcome> => ({ kind: 'waitlisted' }));
     const { built } = deps({ book, dryRun: true });
 
     await executeBooking(planned, built);
@@ -279,7 +330,6 @@ describe('isSuccess', () => {
     ['booked', true],
     ['waitlisted', true],
     ['already-booked', true],
-    ['full', false],
     ['too-early', false],
     ['unauthorized', false],
     ['error', false],

@@ -13,18 +13,32 @@ links their gym login, picks their classes, and is done.
 
 ---
 
-## ⚠️ One thing is missing: the Elixia API itself
+## The Elixia API is discovered
 
-Everything here works **except** the calls to Elixia, which have never been
-observed — the discovery run needs a real browser and your own 2FA, on your
-machine. See [docs/api.md](docs/api.md#why-it-is-blank).
+`lib/elixia.ts` speaks the real thing — login, schedule listing and booking —
+implemented from captured traffic and written up in [docs/api.md](docs/api.md).
+A mock backend (`MOCK_ELIXIA=1`) is still there for local work and tests.
 
-So `lib/elixia.ts` is a placeholder. **It is the only file containing guesses.**
-Until it is filled in, the app runs against a built-in mock (`MOCK_ELIXIA=1`),
-which makes every other layer — accounts, encryption, scheduling, cron,
-notifications, history — fully usable and testable today.
-[SETUP.md step 10](SETUP.md#10-replace-the-mock-with-the-real-elixia-api) covers
-replacing it.
+Three findings are worth knowing before reading any further, because each one
+is the opposite of what the app originally assumed:
+
+- **Sign-in is cookies, not tokens.** Elixia delegates to a SATS Group Keycloak
+  realm over a plain OAuth2 redirect chain, and the session is four cookies
+  lasting 14 days. There is no bearer token and no refresh endpoint.
+- **A full class is not a rejection.** One `POST /api/book` either books you or
+  puts you on the waiting list, and says which. There is no waitlist flag to
+  set and no way to decline a waiting-list place — so the app books, and counts
+  a place in the queue as success.
+- **A class does not exist until its window opens.** It is absent from the
+  schedule rather than refused, so "too early" means *resolution* failing, not
+  a booking error — which is why the class id is resolved again at T-0 if it
+  could not be resolved ahead of time.
+
+**One thing discovery could not settle:** whether the booking call works from
+outside a browser at all. Everything observed says yes, but a browser capture
+cannot prove the absence of a JS challenge or TLS fingerprinting. The first
+live run is that test — see
+[SETUP.md step 10](SETUP.md#10-go-live-against-the-real-elixia-api).
 
 ---
 
@@ -71,14 +85,15 @@ One tick does:
    Nothing due → immediate exit.
 2. **Verify.** The schedule is derived data; live subscriptions are the
    authority, so a paused class is dropped.
-3. **Prepare.** Decrypt the credentials, refresh or re-authenticate, resolve the
-   class id — all *before* the sleep.
+3. **Prepare.** Decrypt the credentials, re-authenticate if the session has
+   lapsed, and try to resolve the class id — all *before* the sleep.
 4. **Sleep** to the exact release millisecond.
 5. **Book**, retrying with jittered exponential backoff inside a ~30s budget,
-   clamped by the serverless function's own deadline. Permanent outcomes — full,
-   already booked, credentials rejected — stop the loop at once.
-6. **Waitlist** only after the class is confirmed full, and only if asked.
-7. **Record and notify.**
+   clamped by the serverless function's own deadline. If the class was not
+   resolvable earlier — because it was not on the schedule yet — resolution is
+   retried here too, and counts as "too early" until it succeeds. Permanent
+   outcomes (overlapping booking, credentials rejected) stop the loop at once.
+6. **Record and notify** — booked or waitlisted, both are success.
 
 A nightly job reprojects every account's releases and prunes old ones.
 
@@ -136,12 +151,11 @@ lib/
   auth/crypto.ts        AES-GCM sealing of stored credentials
   auth/stack.ts         Neon Auth (Stack) server app
   db/                   Repo interface + Neon and in-memory implementations
-  elixia.ts             ⚠️ the only file with unverified assumptions
-  mock.ts               stand-in backend so the app runs before discovery
+  elixia.ts             the Elixia adapter — login, listing, booking
+  mock.ts               stand-in backend for local work and tests
 db/migrations/          numbered schema migrations, applied once each
 db/migrate.ts           `npm run migrate` — node-pg-migrate, configured
 .github/workflows/      the checks, the booking watcher, the nightly reindex
-discovery/              local-only Playwright capture (never deployed)
 ```
 
 The `Repo` interface is why moving storage — Workers KV, then Redis, now
@@ -161,7 +175,7 @@ npm run build
 Covering the DST-aware release maths and its edge cases, the weekly planner, the
 retry loop's bounds and host-deadline clamping, encryption at rest, cron
 authorisation, per-user isolation, the schedule and its cascade behaviour,
-response classification, dry-run mode, and discovery-capture redaction. The
+response classification, and dry-run mode. The
 in-memory repo reproduces the constraints the real schema enforces — the
 duplicate-class unique index and cascade-on-delete — so a fake that is more
 permissive than production cannot hide bugs.
@@ -188,7 +202,7 @@ Six real bugs surfaced that way and are fixed:
   anonymous request got a 500 describing the deployment instead of a flat 401.
 
 Verified beyond the unit tests: built and served as a production Next.js app,
-driven through the browser with Playwright in both themes and at phone width,
+driven through a headless browser in both themes and at phone width,
 with the persisted data inspected directly to confirm no plaintext credential is
 written.
 
@@ -225,10 +239,11 @@ confirmed to fail against a workflow or config edited to break it.
 
 ## Design constraints
 
-- **No browser at runtime.** Playwright is local-discovery-only and never enters
-  the app's dependency graph.
-- **Each user acts only on their own account.** Enforced by row-level security,
-  not just by application code.
+- **No browser anywhere.** The adapter reaches Elixia with plain `fetch` — the
+  login chain and the schedule page are both parseable without one, which is
+  what makes booking from a serverless function possible at all.
+- **Each user acts only on their own account.** Every statement the repo issues
+  names the user, and `tests/neonRepo.test.ts` proves it against real Postgres.
 - **Bounded and polite.** ~30s per slot, jittered backoff, `Retry-After`
   honoured, requests aborted at the deadline, permanent failures stop the loop,
   and duplicate subscriptions are refused so the app never races itself.

@@ -30,7 +30,6 @@ describe('isRetryable', () => {
     ['booked', false],
     ['waitlisted', false],
     ['already-booked', false],
-    ['full', false],
     ['unauthorized', false],
   ] as const)('%s -> retryable=%s', (kind, expected) => {
     const outcome = { kind, detail: 'x' } as unknown as AttemptOutcome;
@@ -97,15 +96,16 @@ describe('retryWithBackoff', () => {
     expect(result.exhausted).toBe(false);
   });
 
-  it('stops immediately when the class is full, without retrying', async () => {
-    // Full does not become un-full inside 30s; retrying is pure hammering.
+  it('stops immediately on an overlapping booking, without retrying', async () => {
+    // An overlapping reservation does not clear inside 30s; retrying is pure
+    // hammering.
     const clock = fakeClock();
-    const attempt = vi.fn(async (): Promise<AttemptOutcome> => ({ kind: 'full' }));
+    const attempt = vi.fn(async (): Promise<AttemptOutcome> => ({ kind: 'already-booked' }));
 
     const result = await retryWithBackoff(attempt, { ...opts, ...clock, random: () => 0.5 });
 
     expect(attempt).toHaveBeenCalledTimes(1);
-    expect(result.outcome.kind).toBe('full');
+    expect(result.outcome.kind).toBe('already-booked');
     expect(result.exhausted).toBe(false);
   });
 

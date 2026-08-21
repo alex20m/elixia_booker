@@ -38,7 +38,7 @@ const PROFILE_COLUMNS = `
 
 const SUBSCRIPTION_COLUMNS = `
   id, user_id, class_name, center, weekday, start_time,
-  on_full, priority, enabled, booking_window_days, created_at
+  priority, enabled, booking_window_days, created_at
 `;
 
 const str = (value: unknown): string => String(value);
@@ -62,7 +62,6 @@ const toSubscription = (row: SqlRow): Subscription => ({
   center: str(row.center),
   weekday: str(row.weekday) as Weekday,
   startTime: str(row.start_time),
-  onFull: row.on_full === 'skip' ? 'skip' : 'waitlist',
   priority: num(row.priority),
   enabled: Boolean(row.enabled),
   ...(row.booking_window_days !== null && row.booking_window_days !== undefined
@@ -176,10 +175,16 @@ export function createNeonRepo(sql: Sql): Repo {
     async createSubscription(subscription: NewSubscription) {
       try {
         const rows = await sql.query(
+          // on_full is deliberately omitted: the booking engine no longer
+          // branches on it (Elixia auto-waitlists, so there is nothing to
+          // choose), but the column is left in place with its default rather
+          // than dropped, so a deployment still running the previous code —
+          // which does insert it — keeps working. Removing it is a later
+          // migration, once nothing writes it.
           `insert into public.subscriptions (
-             user_id, class_name, center, weekday, start_time, on_full, priority, booking_window_days
+             user_id, class_name, center, weekday, start_time, priority, booking_window_days
            )
-           values ($1, $2, $3, $4, $5, $6, $7, $8)
+           values ($1, $2, $3, $4, $5, $6, $7)
            returning ${SUBSCRIPTION_COLUMNS}`,
           [
             subscription.userId,
@@ -187,7 +192,6 @@ export function createNeonRepo(sql: Sql): Repo {
             subscription.center,
             subscription.weekday,
             subscription.startTime,
-            subscription.onFull,
             subscription.priority,
             subscription.bookingWindowDays ?? null,
           ],

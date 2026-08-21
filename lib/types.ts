@@ -19,14 +19,11 @@ export const WEEKDAYS: readonly Weekday[] = [
   'saturday',
 ];
 
-/** What to do when the class turns out to be full at T-0. */
-export type FullBehaviour = 'waitlist' | 'skip';
-
 /** One class you want booked, every week. */
 export interface DesiredClass {
   /** Stable local identifier, used in logs and notifications. */
   id: string;
-  /** Centre identifier, as Elixia identifies it. Confirm during discovery. */
+  /** Centre: either Elixia's numeric club id, or the club's exact name. */
   center: string;
   /** Class name as it appears on the schedule, e.g. "Bodypump". */
   className: string;
@@ -35,8 +32,6 @@ export interface DesiredClass {
   startTime: string;
   /** Lower number wins when two releases land in the same run. */
   priority: number;
-  /** Whether to join the waitlist if the class is already full. */
-  onFull: FullBehaviour;
   /** Overrides the global window. 7 = Basic/Flexible, 14 = Premium. */
   bookingWindowDays?: number;
   /** Set false to keep the entry but stop acting on it. */
@@ -89,12 +84,33 @@ export interface PlannedBooking {
   releaseNote?: 'gap' | 'ambiguous';
 }
 
-/** Outcome of a single booking attempt. */
+/**
+ * The class is not on the schedule for that date.
+ *
+ * Its own type because it is the *expected* state before a booking window
+ * opens — Elixia does not list a class at all until it becomes bookable
+ * (docs/api.md §4) — and so has to be told apart from a real failure to look
+ * it up, such as an unknown centre or a changed page. One is worth waiting
+ * through; the other never resolves no matter how long you retry.
+ */
+export class ClassNotListedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ClassNotListedError';
+  }
+}
+
+/**
+ * Outcome of a single booking attempt.
+ *
+ * There is deliberately no `full`: Elixia never rejects a booking for being
+ * full — it places you on the waiting list and returns success (docs/api.md
+ * §6). A full class is therefore `waitlisted`, not a failure.
+ */
 export type AttemptOutcome =
   | { kind: 'booked'; bookingId?: string }
-  | { kind: 'waitlisted'; position?: number }
-  | { kind: 'already-booked' }
-  | { kind: 'full' }
+  | { kind: 'waitlisted'; position?: number; bookingId?: string }
+  | { kind: 'already-booked'; detail?: string }
   | { kind: 'too-early'; retryAfterMs?: number }
   | { kind: 'rate-limited'; retryAfterMs?: number }
   | { kind: 'unauthorized'; detail: string }
@@ -103,16 +119,17 @@ export type AttemptOutcome =
 /** Whether an outcome is worth retrying, or is final. */
 export function isRetryable(outcome: AttemptOutcome): boolean {
   switch (outcome.kind) {
+    // 'too-early' is the class not being listed yet, which is exactly the
+    // state a run started just before T-0 expects to sit through.
     case 'too-early':
     case 'rate-limited':
     case 'error':
       return true;
-    // A full class stays full within our 30s budget, and an expired session
-    // will not fix itself. Retrying either is pure hammering.
+    // An overlapping booking and a rejected session will not fix themselves
+    // inside our budget. Retrying either is pure hammering.
     case 'booked':
     case 'waitlisted':
     case 'already-booked':
-    case 'full':
     case 'unauthorized':
       return false;
   }
@@ -178,12 +195,12 @@ export interface Profile {
 export interface Subscription {
   id: string;
   userId: string;
+  /** Either Elixia's numeric club id, or the club's exact name. */
   center: string;
   className: string;
   weekday: Weekday;
   startTime: string;
   priority: number;
-  onFull: FullBehaviour;
   enabled: boolean;
   /** Overrides the profile's tier for this class only. */
   bookingWindowDays?: number;

@@ -221,7 +221,6 @@ export interface SubscriptionInput {
   center?: string;
   weekday?: string;
   startTime?: string;
-  onFull?: string;
 }
 
 export async function addSubscription(
@@ -234,7 +233,6 @@ export async function addSubscription(
   const center = (input.center ?? '').trim();
   const weekday = input.weekday as Weekday;
   const startTime = (input.startTime ?? '').trim();
-  const onFull = input.onFull === 'skip' ? 'skip' : 'waitlist';
 
   if (!className) throw new ServiceError('Class name is required', 400);
   if (!center) throw new ServiceError('Centre is required', 400);
@@ -253,7 +251,6 @@ export async function addSubscription(
       center,
       weekday,
       startTime,
-      onFull,
       priority: existing.length + 1,
     });
   } catch (err) {
@@ -493,7 +490,7 @@ export async function runDueBookings(
           ...(entry.releaseNote ? { releaseNote: entry.releaseNote } : {}),
         },
         {
-          book: (t, classId, waitlist, signal) => backend.book(t, classId, waitlist, signal),
+          book: (t, classId, signal) => backend.book(t, classId, signal),
           resolveClassId: (planned) =>
             backend.resolveClassId(tokens!, subscription, planned.classDate),
           tokens,

@@ -9,6 +9,7 @@
 
 import { retryWithBackoff, defaultSleep, type RetryResult } from './retry';
 import type { Logger } from './logger';
+import { ClassNotListedError } from './types';
 import type { AttemptOutcome, BookingConfig, PlannedBooking, StoredTokens } from './types';
 
 export interface BookingDeps {
@@ -16,13 +17,15 @@ export interface BookingDeps {
   book: (
     tokens: StoredTokens,
     classId: string,
-    waitlist: boolean,
     signal?: AbortSignal,
   ) => Promise<AttemptOutcome>;
   /**
-   * Resolves the desired class to Elixia's own id. May need a schedule fetch;
-   * whether that can happen before the class is released is an open question in
-   * docs/api.md §4.
+   * Resolves the desired class to Elixia's own id, by fetching the schedule.
+   *
+   * Expected to fail with `ClassNotListedError` until the booking window
+   * opens: Elixia does not list a class at all before then (docs/api.md §4).
+   * That is why this is attempted twice — once early, once at T-0 — rather
+   * than treated as a fatal error the first time.
    */
   resolveClassId: (planned: PlannedBooking) => Promise<string>;
   tokens: StoredTokens;
@@ -83,8 +86,24 @@ export async function executeBooking(
   });
 
   // --- Everything below the sleep must be as thin as possible. -------------
-  const classId = await deps.resolveClassId(planned);
-  logger.log('class.resolved', { classId });
+  //
+  // Resolving early is an optimisation, not a precondition. A class outside
+  // its booking window is absent from the schedule entirely (docs/api.md §4),
+  // so this attempt legitimately fails whenever the window has not opened yet
+  // — and whether it has depends on a release granularity Elixia does not
+  // publish. Failing softly here and resolving again after the sleep keeps the
+  // critical path to a single request in the common case, without depending on
+  // an answer nobody has.
+  let classId: string | null = null;
+  try {
+    classId = await deps.resolveClassId(planned);
+    logger.log('class.resolved', { classId, when: 'before-sleep' });
+  } catch (err) {
+    logger.log('class.unresolved', {
+      when: 'before-sleep',
+      reason: (err as Error).message,
+    });
+  }
 
   const fireAt = planned.releaseEpochMs - config.leadMs;
   const waitMs = fireAt - now();
@@ -97,26 +116,37 @@ export async function executeBooking(
   }
 
   let firstAttemptOffsetMs: number | null = null;
-  let sawFull = false;
 
   const runAttempt = async (signal: AbortSignal): Promise<AttemptOutcome> => {
     if (firstAttemptOffsetMs === null) {
       firstAttemptOffsetMs = now() - planned.releaseEpochMs;
     }
 
-    // Fall back to the waitlist only after the class is confirmed full, and
-    // only if asked to. Requesting the waitlist speculatively would forfeit a
-    // place that might still be bookable.
-    const useWaitlist = sawFull && planned.desired.onFull === 'waitlist';
+    // The class appears on the schedule the moment booking opens, so *not being
+    // listed* is "not open yet" rather than a failure — retryable, with the
+    // budget bounding how long we keep looking. Any other lookup failure (an
+    // unknown centre, a changed page, a dead connection) is reported as the
+    // error it is: retrying those for 30s and then blaming the timing would
+    // send someone hunting a race that never happened.
+    if (classId === null) {
+      try {
+        classId = await deps.resolveClassId(planned);
+        logger.log('class.resolved', { classId, when: 'at-release' });
+      } catch (err) {
+        const reason = (err as Error).message;
+        logger.log('class.unresolved', { when: 'at-release', reason });
+        return err instanceof ClassNotListedError
+          ? { kind: 'too-early' }
+          : { kind: 'error', detail: `could not look up the class: ${reason}` };
+      }
+    }
 
     if (deps.dryRun) {
-      logger.log('attempt.dry-run', { classId, waitlist: useWaitlist });
+      logger.log('attempt.dry-run', { classId });
       return { kind: 'booked', bookingId: 'DRY-RUN' };
     }
 
-    const outcome = await deps.book(deps.tokens, classId, useWaitlist, signal);
-    if (outcome.kind === 'full') sawFull = true;
-    return outcome;
+    return deps.book(deps.tokens, classId, signal);
   };
 
   // Whatever is left after the sleep, never more than the configured budget.
@@ -140,30 +170,20 @@ export async function executeBooking(
     onWait: (attempt, delayMs) => logger.log('attempt.backoff', { attempt, delayMs }),
   });
 
-  // A full class with onFull: 'waitlist' needs one more request — the retry
-  // loop stopped because 'full' is final for booking, but the waitlist is a
-  // different call and has not been tried yet.
-  let finalOutcome = result.outcome;
-  let attempts = result.attempts;
-
-  if (finalOutcome.kind === 'full' && planned.desired.onFull === 'waitlist' && !deps.dryRun) {
-    logger.log('waitlist.attempt', { classId });
-    finalOutcome = await deps.book(deps.tokens, classId, true);
-    attempts += 1;
-    logger.log('waitlist.result', { ...finalOutcome });
-  }
-
+  // No waitlist follow-up: one call to /api/book either books the class or
+  // places you on its waiting list, and both are already success (docs/api.md
+  // §6). There is nothing left to try.
   logger.log('booking.done', {
-    outcome: finalOutcome.kind,
-    attempts,
+    outcome: result.outcome.kind,
+    attempts: result.attempts,
     exhausted: result.exhausted,
     firstAttemptOffsetMs,
   });
 
   return {
     planned,
-    outcome: finalOutcome,
-    attempts,
+    outcome: result.outcome,
+    attempts: result.attempts,
     exhausted: result.exhausted,
     firstAttemptOffsetMs,
     dryRun: deps.dryRun,
@@ -184,15 +204,19 @@ export function describeReport(report: BookingReport): string {
     case 'booked':
       return `${prefix}✅ Booked ${what}${timing}`;
     case 'waitlisted':
-      return `${prefix}🕒 Waitlisted ${what}${timing}`;
+      return outcome.position === undefined
+        ? `${prefix}🕒 Waitlisted ${what}${timing}`
+        : `${prefix}🕒 Waitlisted (#${outcome.position}) ${what}${timing}`;
+    // Elixia cannot tell "you already booked this" apart from "you hold a
+    // different class at the same time", so neither can this message.
     case 'already-booked':
-      return `${prefix}ℹ️ Already booked: ${what}`;
-    case 'full':
-      return `${prefix}❌ Full: ${what}${timing}`;
+      return `${prefix}ℹ️ Skipped ${what} — you already have an overlapping booking${
+        outcome.detail ? ` (${outcome.detail})` : ''
+      }`;
     case 'unauthorized':
-      return `${prefix}🚨 Session rejected booking ${what} — ${outcome.detail}`;
+      return `${prefix}🚨 Elixia refused to book ${what} — ${outcome.detail}`;
     case 'too-early':
-      return `${prefix}❌ Never opened in time: ${what}${timing} after ${report.attempts} attempts`;
+      return `${prefix}❌ Never appeared on the schedule in time: ${what}${timing} after ${report.attempts} attempts`;
     case 'rate-limited':
       return `${prefix}❌ Rate limited booking ${what} after ${report.attempts} attempts`;
     case 'error':

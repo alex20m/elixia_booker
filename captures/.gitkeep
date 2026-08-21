@@ -1,6 +1,0 @@
-Discovery output lands here.
-
-  captures/raw/       — gitignored. Live tokens, cookies, personal data.
-  captures/redacted/  — safe to commit after you skim it.
-
-Both are created by `npm run discover` / `npm run redact`.

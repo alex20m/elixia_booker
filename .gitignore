@@ -7,11 +7,11 @@
 .env.local
 .env*.local
 
-# Raw discovery output: contains live tokens, cookies and personal data.
-# Only the redacted artifacts under captures/redacted/ are safe to commit.
-captures/raw/
+# Leftovers from the (removed) discovery harness — these hold live session
+# cookies, so keep ignoring them even though nothing produces them any more.
 *.har
 auth-state.json
+captures/
 
 # Deps / build
 node_modules/

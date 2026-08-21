@@ -27,7 +27,6 @@ const bodypump: DesiredClass = {
   weekday: 'tuesday',
   startTime: '09:00',
   priority: 1,
-  onFull: 'waitlist',
 };
 
 describe('parseStartTime', () => {

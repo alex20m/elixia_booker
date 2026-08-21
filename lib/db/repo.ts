@@ -42,7 +42,6 @@ export interface NewSubscription {
   center: string;
   weekday: Subscription['weekday'];
   startTime: string;
-  onFull: Subscription['onFull'];
   priority: number;
   bookingWindowDays?: number;
 }
