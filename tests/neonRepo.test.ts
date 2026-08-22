@@ -97,6 +97,9 @@ describe('profiles', () => {
         elixiaSecret: 'sealed-blob',
         elixiaStatus: 'ok',
         elixiaCheckedAtMs: Date.UTC(2026, 3, 2, 8, 30),
+        defaultCountry: 'Finland',
+        defaultCity: 'Espoo',
+        defaultCenter: '740',
       }),
     );
 
@@ -109,7 +112,32 @@ describe('profiles', () => {
       elixiaSecret: 'sealed-blob',
       elixiaStatus: 'ok',
       elixiaCheckedAtMs: Date.UTC(2026, 3, 2, 8, 30),
+      defaultCountry: 'Finland',
+      defaultCity: 'Espoo',
+      defaultCenter: '740',
     });
+  });
+
+  it('remembers where a user last chose a class from, across sessions', async () => {
+    // The whole point of the columns: the choice has to survive the request
+    // that made it, or the chooser starts from nothing every week.
+    await repo.upsertProfile(
+      profile(ALICE, { defaultCountry: 'Sweden', defaultCity: 'Stockholm', defaultCenter: '743' }),
+    );
+
+    const stored = await repo.getProfile(ALICE);
+    expect(stored?.defaultCountry).toBe('Sweden');
+    expect(stored?.defaultCity).toBe('Stockholm');
+    expect(stored?.defaultCenter).toBe('743');
+  });
+
+  it('has no remembered centre until one has been chosen', async () => {
+    // Absent rather than empty: "never chosen" is what the chooser renders as
+    // an unpicked country, and '' would read as a country named nothing.
+    const stored = await repo.getProfile(ALICE);
+    expect(stored?.defaultCountry).toBeUndefined();
+    expect(stored?.defaultCity).toBeUndefined();
+    expect(stored?.defaultCenter).toBeUndefined();
   });
 
   it('erases the stored credentials when a profile is saved without them', async () => {
