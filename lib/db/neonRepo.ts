@@ -33,7 +33,8 @@ import type {
 
 const PROFILE_COLUMNS = `
   id, booking_window_days, time_zone, telegram_chat_id,
-  elixia_email, elixia_secret, elixia_status, elixia_checked_at
+  elixia_email, elixia_secret, elixia_status, elixia_checked_at,
+  default_country, default_city, default_center
 `;
 
 const SUBSCRIPTION_COLUMNS = `
@@ -53,6 +54,9 @@ const toProfile = (row: SqlRow): Profile => ({
   ...(row.elixia_secret ? { elixiaSecret: str(row.elixia_secret) } : {}),
   elixiaStatus: str(row.elixia_status) as ElixiaStatus,
   ...(row.elixia_checked_at ? { elixiaCheckedAtMs: toMs(row.elixia_checked_at) } : {}),
+  ...(row.default_country ? { defaultCountry: str(row.default_country) } : {}),
+  ...(row.default_city ? { defaultCity: str(row.default_city) } : {}),
+  ...(row.default_center ? { defaultCenter: str(row.default_center) } : {}),
 });
 
 const toSubscription = (row: SqlRow): Subscription => ({
@@ -132,9 +136,10 @@ export function createNeonRepo(sql: Sql): Repo {
       await sql.query(
         `insert into public.profiles (
            id, booking_window_days, time_zone, telegram_chat_id,
-           elixia_email, elixia_secret, elixia_status, elixia_checked_at
+           elixia_email, elixia_secret, elixia_status, elixia_checked_at,
+           default_country, default_city, default_center
          )
-         values ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz)
+         values ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9, $10, $11)
          on conflict (id) do update set
            booking_window_days = excluded.booking_window_days,
            time_zone = excluded.time_zone,
@@ -142,7 +147,10 @@ export function createNeonRepo(sql: Sql): Repo {
            elixia_email = excluded.elixia_email,
            elixia_secret = excluded.elixia_secret,
            elixia_status = excluded.elixia_status,
-           elixia_checked_at = excluded.elixia_checked_at`,
+           elixia_checked_at = excluded.elixia_checked_at,
+           default_country = excluded.default_country,
+           default_city = excluded.default_city,
+           default_center = excluded.default_center`,
         [
           profile.id,
           profile.bookingWindowDays,
@@ -152,6 +160,9 @@ export function createNeonRepo(sql: Sql): Repo {
           profile.elixiaSecret ?? null,
           profile.elixiaStatus,
           profile.elixiaCheckedAtMs ? iso(profile.elixiaCheckedAtMs) : null,
+          profile.defaultCountry ?? null,
+          profile.defaultCity ?? null,
+          profile.defaultCenter ?? null,
         ],
       );
     },
