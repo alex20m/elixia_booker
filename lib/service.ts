@@ -455,65 +455,46 @@ export async function updateSettings(
   return updated;
 }
 
-/** The longest a country, city or centre name may plausibly be. */
+/** The longest a centre name or club id may plausibly be. */
 const MAX_DEFAULT_LENGTH = 120;
 
 /**
- * Where this user last chose a class from, as the chooser wants it.
+ * The centre this user last chose a class from, as the chooser wants it.
  *
- * Empty strings rather than absent fields: the chooser compares them against
- * what the live filter offers today, and `''` matches nothing, which is
- * exactly the behaviour a never-chosen — or since-renamed — place should have.
+ * An empty string rather than an absent field: the chooser compares it against
+ * the clubs the live filter offers today, and `''` matches nothing, which is
+ * exactly the behaviour a never-chosen — or since-closed — centre should have.
  */
 export interface CenterDefaults {
-  country: string;
-  city: string;
   center: string;
 }
 
 export function centerDefaults(profile: Profile): CenterDefaults {
-  return {
-    country: profile.defaultCountry ?? '',
-    city: profile.defaultCity ?? '',
-    center: profile.defaultCenter ?? '',
-  };
+  return { center: profile.defaultCenter ?? '' };
 }
 
 /**
- * Remember the place, after every step of the cascade rather than only at the
- * end.
+ * Remember the centre, so the next visit starts at the same gym.
  *
- * The three values are written as one, replacing whatever was there: a blank
- * clears. That is what keeps them from contradicting each other — picking a
- * new country clears the city and centre that belonged to the old one, and a
- * merge-the-non-empty-ones version would instead save "Sweden, Espoo, 740"
- * and offer it back as a cascade that cannot be re-walked.
+ * A blank clears it, which is what a chooser reset back to no centre means —
+ * there is no state where forgetting has to be expressed some other way.
  *
- * Deliberately no reindex, unlike `updateSettings`: where a user browses from
- * moves no release instant, and rebuilding the schedule on every dropdown
- * change would be real work done for nothing.
+ * Deliberately no reindex, unlike `updateSettings`: which centre someone
+ * browses from moves no release instant, and rebuilding the schedule on every
+ * dropdown change would be real work done for nothing.
  */
 export async function saveCenterDefaults(
   config: AppConfig,
   profile: Profile,
-  input: { country?: unknown; city?: unknown; center?: unknown },
+  input: { center?: unknown },
 ): Promise<Profile> {
-  const clean = (value: unknown, field: string): string => {
-    const text = String(value ?? '').trim();
-    if (text.length > MAX_DEFAULT_LENGTH) {
-      throw new ServiceError(`That ${field} is too long to be a real one`, 400);
-    }
-    return text;
-  };
-
-  const country = clean(input.country, 'country');
-  const city = clean(input.city, 'city');
-  const center = clean(input.center, 'centre');
+  const center = String(input.center ?? '').trim();
+  if (center.length > MAX_DEFAULT_LENGTH) {
+    throw new ServiceError('That centre is too long to be a real one', 400);
+  }
 
   const updated: Profile = {
     ...profile,
-    ...(country ? { defaultCountry: country } : { defaultCountry: undefined }),
-    ...(city ? { defaultCity: city } : { defaultCity: undefined }),
     ...(center ? { defaultCenter: center } : { defaultCenter: undefined }),
   };
 

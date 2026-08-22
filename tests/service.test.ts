@@ -584,66 +584,44 @@ describe('the class catalogue', () => {
     await expect(listCenters(config, profile, nowMs)).rejects.toMatchObject({ status: 409 });
   });
 
-  it('files every centre under a country and a city, which is how the chooser reaches it', async () => {
-    const profile = await linkedProfile();
-    const centers = await listCenters(config, profile, nowMs);
-
-    // A centre with no place is one the cascade can never offer.
-    expect(centers.every((c) => c.country && c.city)).toBe(true);
-    expect(new Set(centers.map((c) => c.city)).size).toBeGreaterThan(1);
-  });
 });
 
 describe('the remembered centre', () => {
   it('is nothing at all until a first choice is made', async () => {
     const profile = await getOrCreateProfile(config, USER_ID);
-    expect(centerDefaults(profile)).toEqual({ country: '', city: '', center: '' });
+    expect(centerDefaults(profile)).toEqual({ center: '' });
   });
 
-  it('keeps the place a user last chose, so the next visit starts there', async () => {
+  it('keeps the centre a user last chose, so the next visit starts there', async () => {
     const profile = await getOrCreateProfile(config, USER_ID);
-    await saveCenterDefaults(config, profile, {
-      country: 'Finland',
-      city: 'Espoo',
-      center: '740',
-    });
+    await saveCenterDefaults(config, profile, { center: '740' });
 
     const stored = await repo.getProfile(profile.id);
-    expect(centerDefaults(stored!)).toEqual({ country: 'Finland', city: 'Espoo', center: '740' });
+    expect(centerDefaults(stored!)).toEqual({ center: '740' });
   });
 
-  it('forgets the centre when a wider choice changes, rather than keeping a mismatched one', async () => {
-    // Espoo is not in Sweden: a country saved beside a centre in another one
-    // would come back as a cascade whose steps contradict each other.
+  it('forgets it when a blank arrives, rather than keeping the old one', async () => {
     const profile = await getOrCreateProfile(config, USER_ID);
-    const saved = await saveCenterDefaults(config, profile, {
-      country: 'Finland',
-      city: 'Espoo',
-      center: '740',
-    });
-    await saveCenterDefaults(config, saved, { country: 'Sweden', city: '', center: '' });
+    const saved = await saveCenterDefaults(config, profile, { center: '740' });
+    await saveCenterDefaults(config, saved, { center: '' });
 
-    expect(centerDefaults((await repo.getProfile(profile.id))!)).toEqual({
-      country: 'Sweden',
-      city: '',
-      center: '',
-    });
+    expect(centerDefaults((await repo.getProfile(profile.id))!)).toEqual({ center: '' });
   });
 
-  it('does not touch the booking schedule, which the place has no bearing on', async () => {
+  it('does not touch the booking schedule, which the centre has no bearing on', async () => {
     const profile = await linkedProfile();
     await addSubscription(config, profile, BODYPUMP, nowMs);
     const before = await repo.peekNextRelease(0);
 
-    await saveCenterDefaults(config, profile, { country: 'Finland', city: 'Espoo', center: '740' });
+    await saveCenterDefaults(config, profile, { center: '740' });
 
     expect(await repo.peekNextRelease(0)).toBe(before);
   });
 
-  it('refuses a value too long to be a place, rather than storing it', async () => {
+  it('refuses a value too long to be a centre, rather than storing it', async () => {
     const profile = await getOrCreateProfile(config, USER_ID);
     await expect(
-      saveCenterDefaults(config, profile, { country: 'x'.repeat(300), city: '', center: '' }),
+      saveCenterDefaults(config, profile, { center: 'x'.repeat(300) }),
     ).rejects.toMatchObject({ status: 400 });
   });
 });
