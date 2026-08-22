@@ -177,6 +177,27 @@ a.btn.ghost {
   font-size: 13px;
 }
 
+/* An action that reads as part of a sentence — "then check again" — rather than
+   as a control beside it. Still a real button, because it does something rather
+   than going somewhere; only its appearance is borrowed from a link. */
+button.link {
+  display: inline;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  font-weight: 500;
+  text-decoration: underline;
+}
+
+/* The line under a field saying what the choice costs. The setup pages lean on
+   these: the three questions they ask are exactly the ones people answer wrongly
+   when nothing explains them. */
+.hint {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 6px 0 0;
+}
+
 .item {
   display: flex;
   align-items: center;

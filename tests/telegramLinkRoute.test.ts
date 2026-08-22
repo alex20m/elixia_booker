@@ -65,6 +65,8 @@ describe('/api/telegram/link', () => {
     expect(response.status).toBe(200);
     const profile = await repo.getProfile('alice');
     expect(profile?.telegramChatId).toBeUndefined();
-    expect(profile?.notifyChannel).toBe('email');
+    // Left on Telegram with no chat: a state the dashboard warns about, rather
+    // than a channel change the user never asked for.
+    expect(profile?.notifyChannel).toBe('telegram');
   });
 });

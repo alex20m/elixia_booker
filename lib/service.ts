@@ -23,7 +23,9 @@ import { DuplicateSubscriptionError } from './db/repo';
 import { releasesFor, releasesInRange } from './planner';
 import { executeBooking, describeReport } from './booking';
 import { Logger } from './logger';
-import { channelFor, notifyUser } from './notify';
+import { notifyUser } from './notify';
+import { isMembershipWindow } from './membership';
+import { isOfferedTimeZone } from './timezones';
 import {
   LINK_TOKEN_TTL_MS,
   TOKEN_PATTERN,
@@ -34,13 +36,14 @@ import {
 } from './telegramLink';
 import { DEFAULT_TIMINGS } from './config';
 import { needsRefresh } from './tokens';
-import { UnknownCenterError, WEEKDAYS } from './types';
+import { isConfigured, UnknownCenterError, WEEKDAYS } from './types';
 import type { AppConfig } from './appConfig';
 import type {
   BookingConfig,
   BookingHistoryEntry,
   CenterOption,
   ClassOption,
+  ConfiguredProfile,
   DueEntry,
   NotifyChannel,
   Profile,
@@ -57,7 +60,7 @@ export function backendFor(config: AppConfig): BookingBackend {
   return config.backend ?? (config.mock ? new MockElixiaClient() : new ElixiaClient());
 }
 
-export function timingConfig(profile: Profile): BookingConfig {
+export function timingConfig(profile: ConfiguredProfile): BookingConfig {
   return {
     timeZone: profile.timeZone,
     bookingWindowDays: profile.bookingWindowDays,
@@ -86,40 +89,101 @@ export class ServiceError extends Error {
  * applied would otherwise be authenticated and profile-less — able to sign in
  * and then fail on every subsequent query.
  */
-export async function getOrCreateProfile(
-  config: AppConfig,
-  userId: string,
-  /**
-   * The address this account signed in with, when the caller has a session to
-   * hand. It is what makes email a zero-setup default: a user is reachable
-   * from their first request, before they have opened Settings — which matters
-   * most for the one alert they cannot afford to miss, that booking has
-   * stopped because their gym credentials expired.
-   */
-  email?: string,
-): Promise<Profile> {
+export async function getOrCreateProfile(config: AppConfig, userId: string): Promise<Profile> {
   const existing = await config.repo.getProfile(userId);
-  if (existing) {
-    // Backfill, never overwrite: a profile that predates this field has
-    // nowhere to send, but one whose owner chose a different address chose it
-    // deliberately, and signing in must not undo that.
-    if (!email || existing.notifyEmail) return existing;
+  if (existing) return existing;
 
-    const filled: Profile = { ...existing, notifyEmail: email };
-    await config.repo.upsertProfile(filled);
-    return filled;
-  }
-
-  const profile: Profile = {
-    id: userId,
-    bookingWindowDays: config.defaultBookingWindowDays,
-    timeZone: config.defaultTimeZone,
-    notifyChannel: 'email',
-    ...(email ? { notifyEmail: email } : {}),
-    elixiaStatus: 'unlinked',
-  };
+  // Empty on purpose. Nothing here is guessed — not the booking window, not
+  // the timezone, and not even the notification address the session is holding
+  // right now, because storing that would settle the channel question by
+  // implication. `completeSetup` is the only writer of any of them.
+  const profile: Profile = { id: userId, elixiaStatus: 'unlinked' };
   await config.repo.upsertProfile(profile);
   return profile;
+}
+
+// --- setup -----------------------------------------------------------------
+
+/**
+ * What the browser is told when the account is not ready to be used.
+ *
+ * 428 Precondition Required, not 400 or 403: nothing is wrong with the request
+ * or the session — a precondition of the account has not been met. The client
+ * routes on the status alone, so every guarded endpoint sends a visitor to the
+ * setup pages without each one having to say so in its own words.
+ */
+export const SETUP_REQUIRED_STATUS = 428;
+const SETUP_REQUIRED_MESSAGE = 'Finish setting up your account first';
+
+/**
+ * Narrow a profile to one that has been through setup, or refuse.
+ *
+ * Every caller that computes a release instant or sends a message needs all
+ * three settings, and this is where "the user has not chosen yet" stops being
+ * something each of them has to remember to handle.
+ */
+export function requireConfigured(profile: Profile): ConfiguredProfile {
+  if (!isConfigured(profile)) throw new ServiceError(SETUP_REQUIRED_MESSAGE, SETUP_REQUIRED_STATUS);
+  return profile;
+}
+
+/** What the setup pages need to know before they can ask anything. */
+export interface SetupState {
+  /** Whether the pages have to be shown at all. */
+  needed: boolean;
+  /**
+   * The address this account signed in with, offered on the notifications
+   * page. A suggestion is not a default: it is prefilled into a field the user
+   * still has to see and submit, and nothing is stored until they do.
+   */
+  suggestedEmail: string;
+  /** Whether this deployment can offer the one-tap Telegram connect flow. */
+  telegramConnect: boolean;
+  /** The chat already connected, so the page can show that step as done. */
+  telegramChatId: string;
+}
+
+export function setupState(config: AppConfig, profile: Profile, sessionEmail?: string): SetupState {
+  return {
+    needed: !isConfigured(profile),
+    suggestedEmail: profile.notifyEmail ?? sessionEmail ?? '',
+    telegramConnect: telegramConnectConfigured(config),
+    telegramChatId: profile.telegramChatId ?? '',
+  };
+}
+
+/**
+ * Finish setup: store the answers, and let the app start.
+ *
+ * Validated as one submission rather than page by page, because the pages are
+ * one decision in three parts and a half-applied setup is the state this whole
+ * design exists to prevent. Nothing is written unless all of it passes.
+ */
+export async function completeSetup(
+  config: AppConfig,
+  profile: Profile,
+  input: SettingsInput,
+  nowMs: number,
+): Promise<ConfiguredProfile> {
+  const checked = readSettings(profile, input, true);
+
+  const updated: ConfiguredProfile = {
+    ...profile,
+    bookingWindowDays: checked.bookingWindowDays,
+    timeZone: checked.timeZone,
+    notifyChannel: checked.notifyChannel,
+    ...(checked.notifyEmail ? { notifyEmail: checked.notifyEmail } : { notifyEmail: undefined }),
+    ...(checked.telegramChatId
+      ? { telegramChatId: checked.telegramChatId }
+      : { telegramChatId: undefined }),
+    configuredAtMs: profile.configuredAtMs ?? nowMs,
+  };
+
+  await config.repo.upsertProfile(updated);
+  // A profile that had no window and no zone has nothing computed yet, and
+  // both of them decide when a release fires.
+  await reindexProfile(config, updated, nowMs);
+  return updated;
 }
 
 // --- notification channels -------------------------------------------------
@@ -233,7 +297,7 @@ async function announce(
 
   logger.log('notify.unsent', {
     userId: profile.id,
-    channel: channelFor(profile),
+    channel: profile.notifyChannel ?? 'unset',
     reason: result.reason ?? 'unknown',
   });
 }
@@ -241,16 +305,15 @@ async function announce(
 /**
  * Forget a connected chat.
  *
- * Someone on Telegram who disconnects is moved to email rather than left on a
- * channel with nowhere to send: the alternative is a user who believes they
- * are covered and hears nothing.
+ * The channel is left where the user put it, rather than being moved to email
+ * on their behalf: this app does not choose channels for people, and silently
+ * rerouting a gym schedule to an inbox nobody nominated is exactly the kind of
+ * helpful guess it exists to avoid. What it leaves behind — Telegram selected
+ * with no chat attached — is a state the dashboard says out loud, and `notifyUser`
+ * records as unsent rather than papering over.
  */
 export async function disconnectTelegram(config: AppConfig, profile: Profile): Promise<Profile> {
-  const updated: Profile = {
-    ...profile,
-    telegramChatId: undefined,
-    ...(channelFor(profile) === 'telegram' ? { notifyChannel: 'email' as const } : {}),
-  };
+  const updated: Profile = { ...profile, telegramChatId: undefined };
   await config.repo.upsertProfile(updated);
   return updated;
 }
@@ -468,7 +531,7 @@ export interface DashboardView {
 
 export async function buildDashboard(
   config: AppConfig,
-  profile: Profile,
+  profile: ConfiguredProfile,
   nowMs: number,
 ): Promise<DashboardView> {
   const subscriptions = await config.repo.listSubscriptions(profile.id);
@@ -478,7 +541,7 @@ export async function buildDashboard(
     account: {
       bookingWindowDays: profile.bookingWindowDays,
       timeZone: profile.timeZone,
-      notifyChannel: channelFor(profile),
+      notifyChannel: profile.notifyChannel,
       notifyEmail: profile.notifyEmail ?? '',
       telegramChatId: profile.telegramChatId ?? '',
       elixiaEmail: profile.elixiaEmail ?? '',
@@ -593,41 +656,72 @@ export async function mutateSubscription(
   await reindexProfile(config, profile, nowMs);
 }
 
-export async function updateSettings(
-  config: AppConfig,
+/** What the setup pages and the settings form both submit. */
+export interface SettingsInput {
+  bookingWindowDays?: unknown;
+  timeZone?: unknown;
+  notifyChannel?: unknown;
+  notifyEmail?: unknown;
+  telegramChatId?: unknown;
+}
+
+/** The settings a submission decides, once every one of them has been checked. */
+interface CheckedSettings {
+  bookingWindowDays: number;
+  timeZone: string;
+  notifyChannel: NotifyChannel;
+  notifyEmail: string | undefined;
+  telegramChatId: string | undefined;
+}
+
+/**
+ * Validate a submission against the lists the user was actually offered.
+ *
+ * Shared by setup and by the settings form so the two cannot drift: a value
+ * the setup pages would refuse must not become storable by saving it again
+ * from Settings, which is how an app with no defaults acquires one.
+ *
+ * `demandEverything` is the difference between them. Setup insists on all
+ * three answers, because that is the whole point of it. A later save treats a
+ * field the request does not carry as "not part of this form" rather than as a
+ * reset: a caller sending only a booking window must not thereby move a
+ * Telegram user onto email, wipe their address, or disconnect their chat.
+ */
+function readSettings(
   profile: Profile,
-  input: {
-    bookingWindowDays?: unknown;
-    timeZone?: unknown;
-    notifyChannel?: unknown;
-    notifyEmail?: unknown;
-    telegramChatId?: unknown;
-  },
-  nowMs: number,
-): Promise<Profile> {
-  const bookingWindowDays = Number(input.bookingWindowDays);
-  if (!Number.isInteger(bookingWindowDays) || bookingWindowDays < 0 || bookingWindowDays > 60) {
-    throw new ServiceError('Booking window must be a whole number of days', 400);
+  input: SettingsInput,
+  demandEverything: boolean,
+): CheckedSettings {
+  const bookingWindowDays =
+    input.bookingWindowDays === undefined && !demandEverything
+      ? profile.bookingWindowDays
+      : Number(input.bookingWindowDays);
+
+  if (!isMembershipWindow(bookingWindowDays)) {
+    throw new ServiceError(
+      'Choose a membership: Basic / Flexible books 7 days ahead, Premium 14',
+      400,
+    );
   }
 
-  const timeZone = String(input.timeZone ?? '').trim();
-  try {
-    new Intl.DateTimeFormat('en-US', { timeZone });
-  } catch {
-    throw new ServiceError(`Not a valid timezone: ${timeZone}`, 400);
+  const timeZone =
+    input.timeZone === undefined && !demandEverything ? profile.timeZone : input.timeZone;
+
+  // Checked against the list rather than against `Intl`: a zone can be real,
+  // resolvable, and still not one this app offered, which means it did not
+  // come from the picker and nobody has seen it spelled out on screen.
+  if (!isOfferedTimeZone(timeZone)) {
+    throw new ServiceError('Pick a timezone from the list', 400);
   }
 
-  // Throughout: a field the request does not carry means "not part of this
-  // form", never "reset it". A caller that sends only a booking window must
-  // not thereby move a Telegram user onto email, wipe their address, or
-  // disconnect their chat — and a settings form is free to grow or shrink
-  // without every omission becoming a silent write.
-  let notifyChannel = channelFor(profile);
-  if (input.notifyChannel !== undefined) {
-    notifyChannel = String(input.notifyChannel).trim() as NotifyChannel;
-    if (!NOTIFY_CHANNELS.includes(notifyChannel)) {
-      throw new ServiceError(`Not a notification channel: ${notifyChannel}`, 400);
-    }
+  const rawChannel =
+    input.notifyChannel === undefined && !demandEverything
+      ? profile.notifyChannel
+      : String(input.notifyChannel ?? '').trim();
+
+  const notifyChannel = rawChannel as NotifyChannel;
+  if (!NOTIFY_CHANNELS.includes(notifyChannel)) {
+    throw new ServiceError('Choose where booking alerts should go', 400);
   }
 
   let notifyEmail = profile.notifyEmail;
@@ -639,26 +733,8 @@ export async function updateSettings(
     notifyEmail = raw || undefined;
   }
 
-  // Checked against the values that will actually be stored, so clearing an
-  // address while on email is refused even though each half looks fine alone.
-  // Accepting it would leave someone believing they are covered while every
-  // alert is dropped for want of anywhere to send it.
-  //
-  // Only when the request actually concerns notifications, though: a profile
-  // that arrived in this state — created before there was an address to store,
-  // say — must not have its timezone save rejected over a field the user did
-  // not touch and cannot see from where they are standing.
-  const touchesNotifications =
-    input.notifyChannel !== undefined || input.notifyEmail !== undefined;
-  if (touchesNotifications && notifyChannel === 'email' && !notifyEmail) {
-    throw new ServiceError(
-      'Add an email address to send notifications to, or choose another channel',
-      400,
-    );
-  }
-
-  // The chat id belongs to the connect flow, but a deployment without the
-  // webhook still needs the manual field to work, blank included.
+  // The chat id normally arrives through the connect flow, but a deployment
+  // without the webhook still needs the manual field to work, blank included.
   let telegramChatId = profile.telegramChatId;
   if (input.telegramChatId !== undefined) {
     const raw = String(input.telegramChatId).trim();
@@ -674,13 +750,50 @@ export async function updateSettings(
     }
   }
 
-  const updated: Profile = {
+  // Checked against the values that will actually be stored, so choosing a
+  // channel with nowhere to send is refused even though each half looks fine
+  // alone. Accepting it would leave someone believing they are covered while
+  // every alert — including the one saying booking has stopped — is dropped.
+  //
+  // Only when the request actually concerns notifications, though: a save that
+  // moves a timezone must not be rejected over a chat that was disconnected
+  // days ago and is not on the form in front of the user.
+  const touchesNotifications =
+    demandEverything || input.notifyChannel !== undefined || input.notifyEmail !== undefined;
+
+  if (touchesNotifications && notifyChannel === 'email' && !notifyEmail) {
+    throw new ServiceError(
+      'Add an email address to send notifications to, or choose another channel',
+      400,
+    );
+  }
+  if (touchesNotifications && notifyChannel === 'telegram' && !telegramChatId) {
+    throw new ServiceError(
+      'Connect your Telegram chat before choosing it, or choose another channel',
+      400,
+    );
+  }
+
+  return { bookingWindowDays, timeZone, notifyChannel, notifyEmail, telegramChatId };
+}
+
+export async function updateSettings(
+  config: AppConfig,
+  profile: ConfiguredProfile,
+  input: SettingsInput,
+  nowMs: number,
+): Promise<ConfiguredProfile> {
+  const checked = readSettings(profile, input, false);
+
+  const updated: ConfiguredProfile = {
     ...profile,
-    bookingWindowDays,
-    timeZone,
-    notifyChannel,
-    ...(notifyEmail ? { notifyEmail } : { notifyEmail: undefined }),
-    ...(telegramChatId ? { telegramChatId } : { telegramChatId: undefined }),
+    bookingWindowDays: checked.bookingWindowDays,
+    timeZone: checked.timeZone,
+    notifyChannel: checked.notifyChannel,
+    ...(checked.notifyEmail ? { notifyEmail: checked.notifyEmail } : { notifyEmail: undefined }),
+    ...(checked.telegramChatId
+      ? { telegramChatId: checked.telegramChatId }
+      : { telegramChatId: undefined }),
   };
 
   await config.repo.upsertProfile(updated);
@@ -739,7 +852,7 @@ export async function saveCenterDefaults(
 
 export async function planFor(
   config: AppConfig,
-  profile: Profile,
+  profile: ConfiguredProfile,
   nowMs: number,
   horizonDays = 14,
 ): Promise<Array<{ className: string; classDate: string; releaseAt: string }>> {
@@ -869,7 +982,10 @@ export async function reindexProfile(
   nowMs: number,
   horizonDays = REINDEX_HORIZON_DAYS,
 ): Promise<number> {
-  if (profile.elixiaStatus !== 'ok') {
+  // An unconfigured profile has no window and no zone, so there is no instant
+  // to compute — and nothing to compute it for, since linking a gym account is
+  // itself behind setup.
+  if (!isConfigured(profile) || profile.elixiaStatus !== 'ok') {
     await config.repo.replaceDueEntries(profile.id, []);
     return 0;
   }
@@ -944,7 +1060,11 @@ export async function runDueBookings(
 
   for (const [userId, userEntries] of byUser) {
     const profile = await config.repo.getProfile(userId);
-    if (!profile || profile.elixiaStatus !== 'ok') continue;
+    // Unconfigured is not merely unusual here, it is unreachable: linking a gym
+    // account is behind setup, and a due entry only exists for a linked one.
+    // Skipping rather than defaulting keeps it that way — a release computed
+    // from a guessed timezone fires at the wrong minute and books nothing.
+    if (!profile || !isConfigured(profile) || profile.elixiaStatus !== 'ok') continue;
 
     const subscriptions = await config.repo.listSubscriptions(userId);
     const timings = timingConfig(profile);

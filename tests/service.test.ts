@@ -3,6 +3,8 @@ import { createMemoryRepo, type MemoryRepo } from '../lib/db/memoryRepo';
 import {
   addSubscription,
   buildDashboard,
+  completeSetup,
+  requireConfigured,
   listCenters,
   listClasses,
   getOrCreateProfile,
@@ -23,7 +25,7 @@ import { releasesInRange } from '../lib/planner';
 import { MockElixiaClient } from '../lib/mock';
 import type { BookingBackend } from '../lib/elixia';
 import type { AppConfig } from '../lib/appConfig';
-import type { Profile, Subscription } from '../lib/types';
+import type { ConfiguredProfile, Subscription } from '../lib/types';
 
 /**
  * The application's behaviour without HTTP or a database: create a profile, link
@@ -64,8 +66,6 @@ beforeEach(() => {
     encryptionKey: ENCRYPTION_KEY,
     dryRun: false,
     mock: true,
-    defaultBookingWindowDays: 7,
-    defaultTimeZone: 'Europe/Helsinki',
     ephemeralStore: true,
   };
 });
@@ -81,10 +81,29 @@ const BODYPUMP = {
   startTime: '09:00',
 };
 
-/** A profile with a working Elixia link. */
-async function linkedProfile(userId = USER_ID, email = 'gym@example.com'): Promise<Profile> {
+/**
+ * The answers every fixture below is built on.
+ *
+ * Spelled out rather than defaulted, because the app has no defaults: a
+ * profile is unconfigured until someone chooses, and nothing here — linking a
+ * gym account included — is reachable before that.
+ */
+const SETUP = {
+  bookingWindowDays: 7,
+  timeZone: 'Europe/Helsinki',
+  notifyChannel: 'email',
+  notifyEmail: 'me@example.com',
+};
+
+/** A profile through setup, with a working Elixia link. */
+async function linkedProfile(
+  userId = USER_ID,
+  email = 'gym@example.com',
+): Promise<ConfiguredProfile> {
   const profile = await getOrCreateProfile(config, userId);
-  return linkElixia(config, profile, email, 'correct-horse', nowMs);
+  const configured = await completeSetup(config, profile, SETUP, nowMs);
+  await linkElixia(config, configured, email, 'correct-horse', nowMs);
+  return requireConfigured((await repo.getProfile(userId))!);
 }
 
 function firstRelease(sub: Subscription, windowDays = 7): number {
@@ -99,22 +118,28 @@ function firstRelease(sub: Subscription, windowDays = 7): number {
 }
 
 describe('profiles', () => {
-  it('creates a profile on first use with the configured defaults', async () => {
+  it('creates a profile on first use with nothing chosen for the user', async () => {
     const profile = await getOrCreateProfile(config, USER_ID);
 
     expect(profile.id).toBe(USER_ID);
-    expect(profile.bookingWindowDays).toBe(7);
-    expect(profile.timeZone).toBe('Europe/Helsinki');
+    expect(profile.bookingWindowDays).toBeUndefined();
+    expect(profile.timeZone).toBeUndefined();
     expect(profile.elixiaStatus).toBe('unlinked');
   });
 
   it('returns the same profile on later calls rather than resetting it', async () => {
     const first = await getOrCreateProfile(config, USER_ID);
-    await updateSettings(config, first, { bookingWindowDays: 14, timeZone: 'UTC' }, nowMs);
+    const configured = await completeSetup(config, first, SETUP, nowMs);
+    await updateSettings(
+      config,
+      configured,
+      { ...SETUP, bookingWindowDays: 14, timeZone: 'Europe/Stockholm' },
+      nowMs,
+    );
 
     const second = await getOrCreateProfile(config, USER_ID);
     expect(second.bookingWindowDays).toBe(14);
-    expect(second.timeZone).toBe('UTC');
+    expect(second.timeZone).toBe('Europe/Stockholm');
   });
 });
 
@@ -357,18 +382,18 @@ describe('isolation between users', () => {
 });
 
 describe('settings', () => {
-  it('rejects an invalid timezone', async () => {
+  it('rejects a timezone that was never on the list', async () => {
     const profile = await linkedProfile();
     await expect(
-      updateSettings(config, profile, { bookingWindowDays: 7, timeZone: 'Europe/Helsinky' }, nowMs),
+      updateSettings(config, profile, { ...SETUP, timeZone: 'Europe/Helsinky' }, nowMs),
     ).rejects.toThrow(/timezone/i);
   });
 
-  it('rejects a fractional booking window', async () => {
+  it('rejects a booking window that is not one of the two memberships', async () => {
     const profile = await linkedProfile();
     await expect(
-      updateSettings(config, profile, { bookingWindowDays: 7.5, timeZone: 'UTC' }, nowMs),
-    ).rejects.toThrow(/whole number/);
+      updateSettings(config, profile, { ...SETUP, bookingWindowDays: 7.5 }, nowMs),
+    ).rejects.toThrow(/membership/i);
   });
 
   it('reschedules when the tier changes, so the cron fires at the new times', async () => {
@@ -376,12 +401,7 @@ describe('settings', () => {
     await addSubscription(config, profile, BODYPUMP, nowMs);
 
     const before = await repo.claimDue(0, nowMs + 30 * 86_400_000);
-    await updateSettings(
-      config,
-      profile,
-      { bookingWindowDays: 14, timeZone: 'Europe/Helsinki' },
-      nowMs,
-    );
+    await updateSettings(config, profile, { ...SETUP, bookingWindowDays: 14 }, nowMs);
     const after = await repo.claimDue(0, nowMs + 30 * 86_400_000);
 
     // Same release instants, but each now books a class a week further out.

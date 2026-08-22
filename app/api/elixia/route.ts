@@ -1,12 +1,12 @@
 import { linkElixia, unlinkElixia } from '@/lib/service';
-import { handle, json, requireUser } from '@/lib/http';
+import { handle, json, requireConfiguredUser } from '@/lib/http';
 
 export const runtime = 'nodejs';
 
 /** Link a gym account: verify the credentials, then store them sealed. */
 export async function POST(request: Request): Promise<Response> {
   return handle(async () => {
-    const { config, profile, nowMs } = await requireUser();
+    const { config, profile, nowMs } = await requireConfiguredUser();
     const body = (await request.json().catch(() => ({}))) as {
       email?: string;
       password?: string;
@@ -20,7 +20,7 @@ export async function POST(request: Request): Promise<Response> {
 /** Forget the stored credentials entirely. */
 export async function DELETE(): Promise<Response> {
   return handle(async () => {
-    const { config, profile, nowMs } = await requireUser();
+    const { config, profile, nowMs } = await requireConfiguredUser();
     await unlinkElixia(config, profile, nowMs);
     return json({ ok: true });
   });

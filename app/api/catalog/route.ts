@@ -1,5 +1,5 @@
 import { listCenters, listClasses } from '@/lib/service';
-import { handle, json, requireUser } from '@/lib/http';
+import { handle, json, requireConfiguredUser } from '@/lib/http';
 
 export const runtime = 'nodejs';
 // Matches every other route here, and matters more on this one: without it a
@@ -22,7 +22,7 @@ const NO_STORE = { 'cache-control': 'no-store' };
  */
 export async function GET(request: Request): Promise<Response> {
   return handle(async () => {
-    const { config, profile, nowMs } = await requireUser();
+    const { config, profile, nowMs } = await requireConfiguredUser();
     const center = new URL(request.url).searchParams.get('center');
 
     if (center === null) {

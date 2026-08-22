@@ -13,7 +13,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/http', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/http')>()),
-  requireUser: async () => ({ config: {}, profile: {}, nowMs: 0 }),
+  requireConfiguredUser: async () => ({ config: {}, profile: {}, nowMs: 0 }),
 }));
 
 vi.mock('@/lib/service', async (importOriginal) => ({

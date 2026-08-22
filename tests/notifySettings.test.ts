@@ -4,14 +4,14 @@ import {
   ServiceError,
   completeTelegramLink,
   disconnectTelegram,
-  getOrCreateProfile,
+  requireConfigured,
   startTelegramLink,
   updateSettings,
 } from '@/lib/service';
 import { channelFor } from '@/lib/notify';
 import { hashLinkToken } from '@/lib/telegramLink';
 import type { AppConfig } from '@/lib/appConfig';
-import type { Profile } from '@/lib/types';
+import type { ConfiguredProfile, Profile } from '@/lib/types';
 
 /**
  * Choosing a channel, and connecting a Telegram chat to an account.
@@ -34,16 +34,19 @@ const baseConfig = (): AppConfig =>
     encryptionKey: 'k',
     dryRun: false,
     mock: true,
-    defaultBookingWindowDays: 7,
-    defaultTimeZone: 'Europe/Helsinki',
     ephemeralStore: false,
     telegramBotToken: 'bot-token',
     telegramBotUsername: 'elixia_booker_bot',
     telegramWebhookSecret: 'webhook-secret',
   }) as AppConfig;
 
-const profileOf = async (id = 'alice'): Promise<Profile> =>
-  (await repo.getProfile(id)) as Profile;
+/**
+ * Every profile here has been through setup, because everything below is
+ * behind it: there is no state in which someone is choosing a channel without
+ * having chosen a booking window and a timezone first.
+ */
+const profileOf = async (id = 'alice'): Promise<ConfiguredProfile> =>
+  requireConfigured((await repo.getProfile(id)) as Profile);
 
 beforeEach(async () => {
   repo = createMemoryRepo();
@@ -52,39 +55,10 @@ beforeEach(async () => {
     id: 'alice',
     bookingWindowDays: 7,
     timeZone: 'Europe/Helsinki',
+    notifyChannel: 'email',
     notifyEmail: 'alice@example.com',
     elixiaStatus: 'unlinked',
-  });
-});
-
-describe('getOrCreateProfile', () => {
-  it('remembers the address a new account signed up with, so it is reachable at once', async () => {
-    // This is what makes email the zero-setup default: without it a new user
-    // has no channel until they visit Settings, and the first thing they would
-    // miss is the alert saying their booking never happened.
-    const created = await getOrCreateProfile(config, 'bob', 'bob@example.com');
-
-    expect(created.notifyEmail).toBe('bob@example.com');
-    expect((await profileOf('bob')).notifyEmail).toBe('bob@example.com');
-  });
-
-  it('fills in a missing address for a profile made before we stored one', async () => {
-    await repo.upsertProfile({
-      id: 'carol',
-      bookingWindowDays: 7,
-      timeZone: 'Europe/Helsinki',
-      elixiaStatus: 'unlinked',
-    });
-
-    const profile = await getOrCreateProfile(config, 'carol', 'carol@example.com');
-
-    expect(profile.notifyEmail).toBe('carol@example.com');
-  });
-
-  it('does not overwrite an address the user chose with the one they log in with', async () => {
-    const profile = await getOrCreateProfile(config, 'alice', 'different@example.com');
-
-    expect(profile.notifyEmail).toBe('alice@example.com');
+    configuredAtMs: NOW,
   });
 });
 
@@ -117,15 +91,17 @@ describe('updateSettings', () => {
     ).rejects.toThrow(/email/i);
   });
 
-  it('lets an unrelated setting be saved without fixing a channel it never mentioned', async () => {
-    // A profile can predate the address field. Changing a timezone should not
-    // fail with an error about email — the user did not touch it, and from the
-    // form they are on there is nothing to fix.
+  it('lets an unrelated setting be saved while a channel is missing its destination', async () => {
+    // Disconnecting Telegram leaves the channel chosen and the chat gone. That
+    // is worth a warning, not a wall: changing a timezone must not fail with an
+    // error about a chat the form in front of the user does not mention.
     await repo.upsertProfile({
       id: 'dave',
       bookingWindowDays: 7,
       timeZone: 'Europe/Helsinki',
+      notifyChannel: 'telegram',
       elixiaStatus: 'unlinked',
+      configuredAtMs: NOW,
     });
 
     await updateSettings(
@@ -160,6 +136,8 @@ describe('updateSettings', () => {
   });
 
   it('lets a user on Telegram clear their address entirely', async () => {
+    await repo.upsertProfile({ ...(await profileOf()), telegramChatId: '555' });
+
     await updateSettings(
       config,
       await profileOf(),
@@ -168,6 +146,14 @@ describe('updateSettings', () => {
     );
 
     expect((await profileOf()).notifyEmail).toBeUndefined();
+  });
+
+  it('refuses to leave Telegram selected with no chat connected', async () => {
+    // The same trap as an empty email address, from the other side: a channel
+    // that reaches nobody, chosen by someone who thinks they are covered.
+    await expect(
+      updateSettings(config, await profileOf(), settings({ notifyChannel: 'telegram' }), NOW),
+    ).rejects.toThrow(/telegram/i);
   });
 
   it('refuses a chat id that is really a public channel handle', async () => {
@@ -263,7 +249,7 @@ describe('completeTelegramLink', () => {
 });
 
 describe('disconnectTelegram', () => {
-  it('forgets the chat and moves the user back to a channel that works', async () => {
+  it('forgets the chat and leaves the channel exactly where the user put it', async () => {
     const token = new URL((await startTelegramLink(config, await profileOf(), NOW)).url)
       .searchParams.get('start')!;
     await completeTelegramLink(config, token, '555', NOW);
@@ -272,13 +258,14 @@ describe('disconnectTelegram', () => {
 
     const profile = await profileOf();
     expect(profile.telegramChatId).toBeUndefined();
-    expect(profile.notifyChannel).toBe('email');
+    // Not moved to email on their behalf. Rerouting a gym schedule to an inbox
+    // nobody nominated is the kind of helpful guess this app does not make; the
+    // dashboard says the chat is gone instead.
+    expect(profile.notifyChannel).toBe('telegram');
   });
 
   it('leaves a user who was already on email where they are', async () => {
-    // Asserted through `channelFor`, which is what the dispatcher routes on:
-    // a profile that never stated a channel is on email, and disconnecting a
-    // chat it never had must not move it anywhere.
+    // Asserted through `channelFor`, which is what the dispatcher routes on.
     await disconnectTelegram(config, await profileOf());
 
     expect(channelFor(await profileOf())).toBe('email');

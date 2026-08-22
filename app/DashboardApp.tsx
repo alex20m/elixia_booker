@@ -12,6 +12,9 @@ import {
   type DashboardLoad,
 } from "@/lib/dashboardState";
 import AddClass from "./AddClass";
+import Setup from "./Setup";
+import { MEMBERSHIP_OPTIONS } from "@/lib/membership";
+import { TIME_ZONE_GROUPS } from "@/lib/timezones";
 import type { DashboardView } from "@/lib/service";
 
 const OUTCOME_LABELS: Record<string, [string, string]> = {
@@ -86,6 +89,11 @@ function Authenticated() {
       return <p className="sub">Loading your account…</p>;
     case "signed-out":
       return <AuthPanel />;
+    case "setup":
+      // The whole app, replaced by the configuration pages: there is nothing
+      // behind them worth showing, and every endpoint the dashboard would call
+      // answers 428 until they are finished.
+      return <Setup onDone={() => void refresh()} />;
     case "error":
       return <LoadFailed message={screen.message} retry={refresh} />;
     case "dashboard":
@@ -481,17 +489,34 @@ export function Settings({
             value={windowDays}
             onChange={(e) => setWindowDays(e.target.value)}
           >
-            <option value="7">Basic / Flexible — 7 days</option>
-            <option value="14">Premium — 14 days</option>
+            {MEMBERSHIP_OPTIONS.map((option) => (
+              <option key={option.days} value={String(option.days)}>
+                {option.label}
+              </option>
+            ))}
           </select>
         </div>
         <div>
           <label htmlFor="tz">Timezone</label>
-          <input
+          {/* A picker here too, and for the same reason it is one during setup:
+              this field used to be a text box, and "Europe/Helsinky" saved from
+              it is a booking window that never opens. The server accepts only
+              these ids. */}
+          <select
             id="tz"
             value={timeZone}
             onChange={(e) => setTimeZone(e.target.value)}
-          />
+          >
+            {TIME_ZONE_GROUPS.map((group) => (
+              <optgroup key={group.region} label={group.region}>
+                {group.zones.map((zone) => (
+                  <option key={zone.id} value={zone.id}>
+                    {zone.label}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
         </div>
       </div>
       <div className="row row-2">
@@ -521,6 +546,19 @@ export function Settings({
           </div>
         )}
       </div>
+
+      {/* Disconnecting leaves the channel where the user put it rather than
+          moving them to email on their behalf — so this is a state they can
+          genuinely be sitting in, and it has to be said out loud. Silence here
+          is a user who believes they are covered and hears nothing, including
+          when booking stops. */}
+      {channel === "telegram" && !connected && (
+        <div className="banner banner-warn" id="notify-broken">
+          Telegram is selected but no chat is connected, so alerts are{" "}
+          <strong>not being delivered</strong>. Connect one below, or choose
+          another channel.
+        </div>
+      )}
 
       {channel === "telegram" && canConnect && (
         <div className="row">

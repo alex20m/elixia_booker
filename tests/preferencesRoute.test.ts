@@ -20,12 +20,15 @@ const base: Profile = {
   id: USER_ID,
   bookingWindowDays: 7,
   timeZone: 'Europe/Helsinki',
+  notifyChannel: 'email',
+  notifyEmail: 'user@example.com',
+  configuredAtMs: 0,
   elixiaStatus: 'unlinked',
 };
 
 vi.mock('@/lib/http', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/http')>()),
-  requireUser: async () => ({
+  requireConfiguredUser: async () => ({
     config: { repo },
     profile: (await repo.getProfile(USER_ID)) ?? base,
     nowMs: 0,

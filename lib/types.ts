@@ -223,32 +223,36 @@ export type ElixiaStatus = 'unlinked' | 'ok' | 'expired';
 /**
  * Where a user's booking alerts go.
  *
- * `email` is the default because it is the only one that works without the
- * user doing anything: the address comes from the account they signed up with.
- * `telegram` has to be connected first, and until it is there is nowhere to
- * send. `none` is a real choice, not an absence — someone who never wants to
- * hear from the bot should be able to say so rather than leave a channel
- * half-configured and wonder why it is quiet.
+ * Every one of these has to be chosen: `email` needs an address confirmed even
+ * though the session carries one, `telegram` needs a chat connected first, and
+ * `none` is a real choice rather than an absence — someone who never wants to
+ * hear from the bot should be able to say so, and be told plainly that the
+ * "booking has stopped" alert goes nowhere either.
  */
 export type NotifyChannel = 'email' | 'telegram' | 'none';
 
-/** One account, keyed by the Neon Auth user id. */
+/**
+ * One account, keyed by the Neon Auth user id.
+ *
+ * Three fields below are optional in the type and mandatory in practice, and
+ * that gap is the whole point: this app ships no defaults for them, so a
+ * profile exists in an unconfigured state from signup until the setup pages
+ * are finished. `isConfigured` is the only way past it, and everything that
+ * would act on a profile — the dashboard, the planner, the cron — goes through
+ * that narrowing rather than reading the fields hopefully.
+ */
 export interface Profile {
   id: string;
-  bookingWindowDays: number;
-  timeZone: string;
-  /**
-   * Absent means the default, `email`. Profiles written before notifications
-   * had a choice have no value stored, and the column's own default makes
-   * every row read back from Postgres explicit — so this is undefined only for
-   * a profile still in memory. Read it through `channelFor`, never directly.
-   */
+  /** How far ahead this membership may book. Absent until setup. */
+  bookingWindowDays?: number;
+  /** The zone class times are read in. Absent until setup — never guessed. */
+  timeZone?: string;
+  /** Where alerts go. Absent until setup; there is no fallback channel. */
   notifyChannel?: NotifyChannel;
   /**
-   * Where `email` notifications go. Seeded from the Neon Auth session on first
-   * sight, so a new account is reachable before it has opened Settings, and
-   * overridable afterwards — the gym account, the login and the inbox that
-   * should receive alerts are not always the same address.
+   * Where `email` notifications go. Suggested from the Neon Auth session
+   * during setup and stored only once confirmed — the gym account, the login
+   * and the inbox that should receive alerts are not always the same address.
    */
   notifyEmail?: string;
   /**
@@ -275,6 +279,47 @@ export interface Profile {
    * than the wrong thing.
    */
   defaultCenter?: string;
+  /**
+   * When the setup pages were finished. Absent until they are.
+   *
+   * Kept as its own field rather than inferred from the three settings being
+   * present, because inference cannot tell a value someone chose from a value
+   * that happened to be there — which is exactly what profiles written before
+   * setup existed are full of. Those get asked once, and keep their answers.
+   */
+  configuredAtMs?: number;
+}
+
+/**
+ * A profile whose owner has been through setup.
+ *
+ * Everything that turns a class into an instant, or an outcome into a message,
+ * needs all of these — so they are demanded once, at the boundary, instead of
+ * being defaulted at each of the dozen places that read them.
+ */
+export type ConfiguredProfile = Profile & {
+  bookingWindowDays: number;
+  timeZone: string;
+  notifyChannel: NotifyChannel;
+  configuredAtMs: number;
+};
+
+/**
+ * Whether this profile is ready to be acted on.
+ *
+ * Deliberately does *not* require the chosen channel's destination to still be
+ * present. Disconnecting Telegram leaves someone with a channel and nowhere to
+ * send, which must show up as a warning on the dashboard — not as an account
+ * that has stopped booking, which is what sending them back through setup
+ * would amount to.
+ */
+export function isConfigured(profile: Profile): profile is ConfiguredProfile {
+  return (
+    profile.configuredAtMs !== undefined &&
+    profile.bookingWindowDays !== undefined &&
+    profile.timeZone !== undefined &&
+    profile.notifyChannel !== undefined
+  );
 }
 
 /** One class a user wants booked, every week. */
