@@ -15,6 +15,26 @@ import type { DashboardView } from './service';
 /** "monday" as a person would write it. Weekdays are stored lowercased. */
 export const titleCase = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
 
+/**
+ * What to say about a class Elixia no longer publishes, or null when there is
+ * nothing to say.
+ *
+ * Decided here rather than in the component for the same reason the rest of
+ * this file exists: it is a rule about what the visitor is told, and it can be
+ * checked without a browser. The wording carries the date because that is what
+ * makes it actionable — a class missing since yesterday is very likely a
+ * holiday week, one missing for a month is gone — and it never claims the
+ * class was deleted, because all this app can observe is absence.
+ */
+export function describeUnlisted(unlistedSinceMs: number | undefined): string | null {
+  if (unlistedSinceMs === undefined) return null;
+  const since = new Date(unlistedSinceMs).toLocaleDateString();
+  return (
+    `Not on Elixia's schedule since ${since}, so nothing can be booked. ` +
+    `It may have been renamed, moved or dropped — check the timetable and re-add it.`
+  );
+}
+
 /** A failed request, carrying the status so callers can tell 401 from the rest. */
 export class ApiError extends Error {
   readonly status: number;

@@ -197,11 +197,32 @@ describe('subscriptions', () => {
     expect((await repo.listSubscriptions(BOB))[0]?.enabled).toBe(true);
   });
 
+  it('round-trips when a class was found missing from the schedule, and when it returns', async () => {
+    // The column is read back as epoch milliseconds; a timestamptz that came
+    // back as a string would put "Invalid Date" in the warning the owner sees.
+    const subscription = await addClass(ALICE, 'Bodypump');
+    const at = Date.parse('2026-08-18T03:00:00Z');
+
+    expect(await repo.setSubscriptionUnlisted(ALICE, subscription.id, at)).toBe(true);
+    expect((await repo.listSubscriptions(ALICE))[0]?.unlistedSinceMs).toBe(at);
+
+    expect(await repo.setSubscriptionUnlisted(ALICE, subscription.id, null)).toBe(true);
+    expect((await repo.listSubscriptions(ALICE))[0]?.unlistedSinceMs).toBeUndefined();
+  });
+
+  it('refuses to flag a class belonging to someone else', async () => {
+    const bobs = await addClass(BOB, 'Bodypump');
+
+    expect(await repo.setSubscriptionUnlisted(ALICE, bobs.id, Date.now())).toBe(false);
+    expect((await repo.listSubscriptions(BOB))[0]?.unlistedSinceMs).toBeUndefined();
+  });
+
   it('reports not-found rather than failing when the id is not a uuid at all', async () => {
     // Reachable from the API as /api/subscriptions/<anything>; a raw Postgres
     // cast error here would be a 500 where the user deserves a 404.
     expect(await repo.deleteSubscription(ALICE, 'not-a-uuid')).toBe(false);
     expect(await repo.setSubscriptionEnabled(ALICE, 'not-a-uuid', false)).toBe(false);
+    expect(await repo.setSubscriptionUnlisted(ALICE, 'not-a-uuid', Date.now())).toBe(false);
   });
 
   it('drops the scheduled releases of a deleted class', async () => {

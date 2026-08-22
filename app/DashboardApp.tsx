@@ -1,26 +1,27 @@
-'use client';
+"use client";
 
-import { useCallback, useEffect, useState } from 'react';
-import Link from 'next/link';
-import { authClient } from '@/lib/auth/client';
+import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { authClient } from "@/lib/auth/client";
 import {
   apiRequest as api,
   dashboardScreen,
+  describeUnlisted,
   loadDashboard,
   titleCase,
   type DashboardLoad,
-} from '@/lib/dashboardState';
-import AddClass from './AddClass';
-import type { DashboardView } from '@/lib/service';
+} from "@/lib/dashboardState";
+import AddClass from "./AddClass";
+import type { DashboardView } from "@/lib/service";
 
 const OUTCOME_LABELS: Record<string, [string, string]> = {
-  booked: ['pill-ok', 'Booked'],
-  waitlisted: ['pill-ok', 'Waitlisted'],
-  'already-booked': ['pill-warn', 'Overlapping'],
-  'too-early': ['pill-err', 'Missed'],
-  'rate-limited': ['pill-err', 'Rate limited'],
-  unauthorized: ['pill-err', 'Session rejected'],
-  error: ['pill-err', 'Error'],
+  booked: ["pill-ok", "Booked"],
+  waitlisted: ["pill-ok", "Waitlisted"],
+  "already-booked": ["pill-warn", "Overlapping"],
+  "too-early": ["pill-err", "Missed"],
+  "rate-limited": ["pill-err", "Rate limited"],
+  unauthorized: ["pill-err", "Session rejected"],
+  error: ["pill-err", "Error"],
 };
 
 export default function DashboardApp() {
@@ -35,7 +36,10 @@ function Authenticated() {
   // Tagged with the account it belongs to, and null until the first request
   // settles. Every other outcome — including failure — is a value, so nothing
   // can silently look like "still loading".
-  const [load, setLoad] = useState<{ userId: string; result: DashboardLoad } | null>(null);
+  const [load, setLoad] = useState<{
+    userId: string;
+    result: DashboardLoad;
+  } | null>(null);
 
   // Keyed on the id, not the user object: the hook is free to hand back a new
   // object on every render, and depending on that identity would re-create
@@ -78,13 +82,13 @@ function Authenticated() {
   });
 
   switch (screen.kind) {
-    case 'loading':
+    case "loading":
       return <p className="sub">Loading your account…</p>;
-    case 'signed-out':
+    case "signed-out":
       return <AuthPanel />;
-    case 'error':
+    case "error":
       return <LoadFailed message={screen.message} retry={refresh} />;
-    case 'dashboard':
+    case "dashboard":
       return <Dashboard view={screen.view} refresh={refresh} />;
   }
 }
@@ -98,7 +102,13 @@ function Authenticated() {
  * offered alongside retry because a session the server keeps refusing is the
  * one failure the visitor can clear themselves.
  */
-function LoadFailed({ message, retry }: { message: string; retry: () => Promise<void> }) {
+function LoadFailed({
+  message,
+  retry,
+}: {
+  message: string;
+  retry: () => Promise<void>;
+}) {
   const [busy, setBusy] = useState(false);
 
   return (
@@ -121,8 +131,8 @@ function LoadFailed({ message, retry }: { message: string; retry: () => Promise<
             }
           }}
         >
-          {busy ? 'Retrying…' : 'Try again'}
-        </button>{' '}
+          {busy ? "Retrying…" : "Try again"}
+        </button>{" "}
         <button className="ghost" onClick={() => void authClient.signOut()}>
           Sign out
         </button>
@@ -135,16 +145,18 @@ function AuthPanel() {
   return (
     <>
       <h1>Elixia Booker</h1>
-      <p className="sub">Books your group fitness classes the moment booking opens.</p>
+      <p className="sub">
+        Books your group fitness classes the moment booking opens.
+      </p>
       <div className="card">
         <h2>Sign in</h2>
         <p className="sub" style={{ marginTop: 0 }}>
-          Your Booker account is separate from your Elixia login. You link the gym account
-          after signing in.
+          Your Booker account is separate from your Elixia login. You link the
+          gym account after signing in.
         </p>
         <Link className="btn" id="auth-btn" href="/auth/sign-in">
           Sign in
-        </Link>{' '}
+        </Link>{" "}
         <Link className="btn ghost" id="auth-toggle" href="/auth/sign-up">
           Create an account
         </Link>
@@ -153,8 +165,14 @@ function AuthPanel() {
   );
 }
 
-function Dashboard({ view, refresh }: { view: DashboardView; refresh: () => Promise<void> }) {
-  const linked = view.account.elixiaStatus === 'ok';
+function Dashboard({
+  view,
+  refresh,
+}: {
+  view: DashboardView;
+  refresh: () => Promise<void>;
+}) {
+  const linked = view.account.elixiaStatus === "ok";
 
   return (
     <>
@@ -162,7 +180,7 @@ function Dashboard({ view, refresh }: { view: DashboardView; refresh: () => Prom
         <div>
           <h1>Elixia Booker</h1>
           <p className="sub" id="account-line">
-            {view.account.elixiaEmail || 'No gym account linked'}
+            {view.account.elixiaEmail || "No gym account linked"}
           </p>
         </div>
         <div>
@@ -170,8 +188,12 @@ function Dashboard({ view, refresh }: { view: DashboardView; refresh: () => Prom
               Neon Auth's own settings page rather than being reimplemented. */}
           <Link className="btn ghost" id="account-btn" href="/account/settings">
             Account
-          </Link>{' '}
-          <button className="ghost" id="signout-btn" onClick={() => void authClient.signOut()}>
+          </Link>{" "}
+          <button
+            className="ghost"
+            id="signout-btn"
+            onClick={() => void authClient.signOut()}
+          >
             Sign out
           </button>
         </div>
@@ -179,7 +201,7 @@ function Dashboard({ view, refresh }: { view: DashboardView; refresh: () => Prom
 
       {view.ephemeralStore && (
         <div className="banner banner-err">
-          No database configured — data is in memory and will not survive. See{' '}
+          No database configured — data is in memory and will not survive. See{" "}
           <code>SETUP.md</code>.
         </div>
       )}
@@ -190,8 +212,8 @@ function Dashboard({ view, refresh }: { view: DashboardView; refresh: () => Prom
       )}
       {!view.apiDiscovered && (
         <div className="banner banner-err">
-          The Elixia API adapter has not been configured yet, so no real booking can be made.
-          See <code>docs/api.md</code>.
+          The Elixia API adapter has not been configured yet, so no real booking
+          can be made. See <code>docs/api.md</code>.
         </div>
       )}
 
@@ -214,32 +236,42 @@ function Dashboard({ view, refresh }: { view: DashboardView; refresh: () => Prom
         <History view={view} />
       </div>
 
-      <p className="foot">Books only your own account. Retries are bounded and rate-limit aware.</p>
+      <p className="foot">
+        Books only your own account. Retries are bounded and rate-limit aware.
+      </p>
     </>
   );
 }
 
-function ElixiaLink({ view, refresh }: { view: DashboardView; refresh: () => Promise<void> }) {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+function ElixiaLink({
+  view,
+  refresh,
+}: {
+  view: DashboardView;
+  refresh: () => Promise<void>;
+}) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  if (view.account.elixiaStatus === 'ok') {
+  if (view.account.elixiaStatus === "ok") {
     return (
       <div className="card">
         <h2>Gym account</h2>
         <div className="item">
           <div className="item-main">
             <div className="item-title">{view.account.elixiaEmail}</div>
-            <div className="item-meta">Linked · credentials stored encrypted</div>
+            <div className="item-meta">
+              Linked · credentials stored encrypted
+            </div>
           </div>
           <span className="pill pill-ok">Connected</span>
           <button
             className="ghost"
             id="unlink-btn"
             onClick={async () => {
-              await api('/api/elixia', { method: 'DELETE' });
+              await api("/api/elixia", { method: "DELETE" });
               await refresh();
             }}
           >
@@ -253,9 +285,10 @@ function ElixiaLink({ view, refresh }: { view: DashboardView; refresh: () => Pro
   return (
     <div className="card">
       <h2>Link your Elixia account</h2>
-      {view.account.elixiaStatus === 'expired' && (
+      {view.account.elixiaStatus === "expired" && (
         <div className="banner banner-warn">
-          Elixia rejected the saved credentials, so booking is paused. Re-link to resume.
+          Elixia rejected the saved credentials, so booking is paused. Re-link
+          to resume.
         </div>
       )}
       {error && <div className="banner banner-err">{error}</div>}
@@ -283,14 +316,14 @@ function ElixiaLink({ view, refresh }: { view: DashboardView; refresh: () => Pro
         id="link-btn"
         disabled={busy}
         onClick={async () => {
-          setError('');
+          setError("");
           setBusy(true);
           try {
-            await api('/api/elixia', {
-              method: 'POST',
+            await api("/api/elixia", {
+              method: "POST",
               body: JSON.stringify({ email, password }),
             });
-            setPassword('');
+            setPassword("");
             await refresh();
           } catch (err) {
             setError((err as Error).message);
@@ -299,68 +332,95 @@ function ElixiaLink({ view, refresh }: { view: DashboardView; refresh: () => Pro
           }
         }}
       >
-        {busy ? 'Checking…' : 'Link account'}
+        {busy ? "Checking…" : "Link account"}
       </button>
-      <p className="sub" style={{ margin: '14px 0 0', fontSize: 13 }}>
-        Your Elixia password is stored <strong>encrypted</strong>, because the bot has to
-        re-authenticate on its own when a session expires — otherwise booking would stop
-        silently until you noticed. Unlinking erases it.
+      <p className="sub" style={{ margin: "14px 0 0", fontSize: 13 }}>
+        Your Elixia password is stored <strong>encrypted</strong>, because the
+        bot has to re-authenticate on its own when a session expires — otherwise
+        booking would stop silently until you noticed. Unlinking erases it.
       </p>
     </div>
   );
 }
 
-function ClassList({ view, refresh }: { view: DashboardView; refresh: () => Promise<void> }) {
+function ClassList({
+  view,
+  refresh,
+}: {
+  view: DashboardView;
+  refresh: () => Promise<void>;
+}) {
   if (view.subscriptions.length === 0) {
     return <p className="empty">No classes yet. Add one below.</p>;
   }
 
   return (
     <div id="subs-list">
-      {view.subscriptions.map((s) => (
-        <div className={`item${s.enabled ? '' : ' paused'}`} key={s.id}>
-          <div className="item-main">
-            <div className="item-title">{s.className}</div>
-            <div className="item-meta">
-              {s.center} · {titleCase(s.weekday)} {s.startTime}
+      {view.subscriptions.map((s) => {
+        const unlisted = describeUnlisted(s.unlistedSinceMs);
+
+        return (
+          <div className={`item${s.enabled ? "" : " paused"}`} key={s.id}>
+            <div className="item-main">
+              <div className="item-title">{s.className}</div>
+              <div className="item-meta">
+                {s.center} · {titleCase(s.weekday)} {s.startTime}
+              </div>
+              <div className="item-meta">
+                {s.enabled
+                  ? s.nextReleaseAt
+                    ? `Opens ${new Date(s.nextReleaseAt).toLocaleString()}`
+                    : "No upcoming release"
+                  : "Paused"}
+              </div>
+              {unlisted && (
+                <div className="banner banner-warn" style={{ marginBottom: 0 }}>
+                  {unlisted}
+                </div>
+              )}
             </div>
-            <div className="item-meta">
-              {s.enabled
-                ? s.nextReleaseAt
-                  ? `Opens ${new Date(s.nextReleaseAt).toLocaleString()}`
-                  : 'No upcoming release'
-                : 'Paused'}
-            </div>
+            <button
+              className="ghost"
+              onClick={async () => {
+                await api(`/api/subscriptions/${encodeURIComponent(s.id)}`, {
+                  method: "PATCH",
+                });
+                await refresh();
+              }}
+            >
+              {s.enabled ? "Pause" : "Resume"}
+            </button>
+            <button
+              className="ghost"
+              onClick={async () => {
+                await api(`/api/subscriptions/${encodeURIComponent(s.id)}`, {
+                  method: "DELETE",
+                });
+                await refresh();
+              }}
+            >
+              Remove
+            </button>
           </div>
-          <button
-            className="ghost"
-            onClick={async () => {
-              await api(`/api/subscriptions/${encodeURIComponent(s.id)}`, { method: 'PATCH' });
-              await refresh();
-            }}
-          >
-            {s.enabled ? 'Pause' : 'Resume'}
-          </button>
-          <button
-            className="ghost"
-            onClick={async () => {
-              await api(`/api/subscriptions/${encodeURIComponent(s.id)}`, { method: 'DELETE' });
-              await refresh();
-            }}
-          >
-            Remove
-          </button>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
 
-function Settings({ view, refresh }: { view: DashboardView; refresh: () => Promise<void> }) {
-  const [windowDays, setWindowDays] = useState(String(view.account.bookingWindowDays));
+function Settings({
+  view,
+  refresh,
+}: {
+  view: DashboardView;
+  refresh: () => Promise<void>;
+}) {
+  const [windowDays, setWindowDays] = useState(
+    String(view.account.bookingWindowDays),
+  );
   const [timeZone, setTimeZone] = useState(view.account.timeZone);
   const [chatId, setChatId] = useState(view.account.telegramChatId);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
 
   return (
@@ -369,14 +429,22 @@ function Settings({ view, refresh }: { view: DashboardView; refresh: () => Promi
       <div className="row row-2">
         <div>
           <label htmlFor="tier">Membership</label>
-          <select id="tier" value={windowDays} onChange={(e) => setWindowDays(e.target.value)}>
+          <select
+            id="tier"
+            value={windowDays}
+            onChange={(e) => setWindowDays(e.target.value)}
+          >
             <option value="7">Basic / Flexible — 7 days</option>
             <option value="14">Premium — 14 days</option>
           </select>
         </div>
         <div>
           <label htmlFor="tz">Timezone</label>
-          <input id="tz" value={timeZone} onChange={(e) => setTimeZone(e.target.value)} />
+          <input
+            id="tz"
+            value={timeZone}
+            onChange={(e) => setTimeZone(e.target.value)}
+          />
         </div>
       </div>
       <div className="row">
@@ -394,11 +462,11 @@ function Settings({ view, refresh }: { view: DashboardView; refresh: () => Promi
       <button
         id="save-btn"
         onClick={async () => {
-          setError('');
+          setError("");
           setSaved(false);
           try {
-            await api('/api/settings', {
-              method: 'PUT',
+            await api("/api/settings", {
+              method: "PUT",
               body: JSON.stringify({
                 bookingWindowDays: Number(windowDays),
                 timeZone,
@@ -412,7 +480,7 @@ function Settings({ view, refresh }: { view: DashboardView; refresh: () => Promi
           }
         }}
       >
-        {saved ? 'Saved' : 'Save settings'}
+        {saved ? "Saved" : "Save settings"}
       </button>
     </div>
   );
@@ -420,28 +488,38 @@ function Settings({ view, refresh }: { view: DashboardView; refresh: () => Promi
 
 function History({ view }: { view: DashboardView }) {
   if (view.history.length === 0) {
-    return <p className="empty">Nothing yet. Attempts appear here after a booking window opens.</p>;
+    return (
+      <p className="empty">
+        Nothing yet. Attempts appear here after a booking window opens.
+      </p>
+    );
   }
 
   return (
     <div id="history-list">
       {view.history.map((h, i) => {
-        const [cls, label] = OUTCOME_LABELS[h.outcome] ?? ['pill-err', h.outcome];
+        const [cls, label] = OUTCOME_LABELS[h.outcome] ?? [
+          "pill-err",
+          h.outcome,
+        ];
         const timing =
           h.firstAttemptOffsetMs === null
-            ? ''
-            : ` · fired ${h.firstAttemptOffsetMs >= 0 ? '+' : ''}${h.firstAttemptOffsetMs}ms from T-0`;
+            ? ""
+            : ` · fired ${h.firstAttemptOffsetMs >= 0 ? "+" : ""}${h.firstAttemptOffsetMs}ms from T-0`;
         return (
-          <div className="item" key={`${h.subscriptionId ?? 'gone'}-${h.atMs}-${i}`}>
+          <div
+            className="item"
+            key={`${h.subscriptionId ?? "gone"}-${h.atMs}-${i}`}
+          >
             <div className="item-main">
               <div className="item-title">
                 {h.className} · {h.classDate} {h.startTime}
               </div>
               <div className="item-meta">
                 {new Date(h.atMs).toLocaleString()}
-                {h.dryRun ? ' · dry run' : ''}
+                {h.dryRun ? " · dry run" : ""}
                 {timing}
-                {h.detail ? ` · ${h.detail}` : ''}
+                {h.detail ? ` · ${h.detail}` : ""}
               </div>
             </div>
             <span className={`pill ${cls}`}>{label}</span>

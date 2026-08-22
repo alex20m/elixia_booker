@@ -11,12 +11,15 @@ import {
   openSecret,
   reindexProfile,
   runDueBookings,
+  reviewListedClasses,
   runReindex,
   ServiceError,
   unlinkElixia,
   updateSettings,
 } from '../lib/service';
 import { releasesInRange } from '../lib/planner';
+import { MockElixiaClient } from '../lib/mock';
+import type { BookingBackend } from '../lib/elixia';
 import type { AppConfig } from '../lib/appConfig';
 import type { Profile, Subscription } from '../lib/types';
 
@@ -577,5 +580,188 @@ describe('the class catalogue', () => {
   it('needs a linked gym account, since the schedule is behind the login', async () => {
     const profile = await getOrCreateProfile(config, USER_ID);
     await expect(listCenters(config, profile, nowMs)).rejects.toMatchObject({ status: 409 });
+  });
+});
+
+describe('classes that Elixia withdraws', () => {
+  /**
+   * A class dropped from the timetable is the mirror of the bug the chooser
+   * fixed: the subscription stays in the list, resolves to nothing at T-0, and
+   * reports "too early" — indistinguishable from a booking window that has not
+   * opened. Nothing tells the owner, so this is the check that does.
+   */
+
+  /**
+   * The mock gym, with one method swapped.
+   *
+   * Spelt out rather than spread from the instance: the mock's methods live on
+   * its prototype, so `{...new MockElixiaClient()}` is an object with none of
+   * them and every call would fail somewhere far from here.
+   */
+  function gym(overrides: Partial<BookingBackend> = {}): BookingBackend {
+    const mock = new MockElixiaClient();
+    return {
+      login: (email, password, at) => mock.login(email, password, at),
+      refresh: (tokens, at) => mock.refresh(tokens, at),
+      listCenters: (tokens) => mock.listCenters(tokens),
+      listClasses: (tokens, center) => mock.listClasses(tokens, center),
+      resolveClassId: (tokens, sub, date) => mock.resolveClassId(tokens, sub, date),
+      book: (tokens, id) => mock.book(tokens, id),
+      ...overrides,
+    };
+  }
+
+  /** The mock gym, minus the classes named. */
+  function gymWithout(...withdrawn: string[]): void {
+    const mock = new MockElixiaClient();
+    config.backend = gym({
+      listClasses: async (tokens, center) =>
+        (await mock.listClasses(tokens, center)).filter((c) => !withdrawn.includes(c.className)),
+    });
+  }
+
+  const only = async (userId = USER_ID): Promise<Subscription> =>
+    (await repo.listSubscriptions(userId))[0]!;
+
+  it('flags a class that is no longer on the schedule', async () => {
+    const profile = await linkedProfile();
+    await addSubscription(config, profile, BODYPUMP, nowMs);
+    expect((await only()).unlistedSinceMs).toBeUndefined();
+
+    gymWithout('Bodypump');
+    setNow(nowMs + 86_400_000);
+    await reviewListedClasses(config, profile, nowMs);
+
+    expect((await only()).unlistedSinceMs).toBe(nowMs);
+  });
+
+  it('leaves a class that is still on the schedule alone', async () => {
+    const profile = await linkedProfile();
+    await addSubscription(config, profile, BODYPUMP, nowMs);
+
+    await reviewListedClasses(config, profile, nowMs);
+    expect((await only()).unlistedSinceMs).toBeUndefined();
+  });
+
+  it('keeps the date it was first missed, rather than resetting it nightly', async () => {
+    // "Gone since Tuesday" is the useful fact; refreshing the timestamp every
+    // night would say "gone since today" forever.
+    const profile = await linkedProfile();
+    await addSubscription(config, profile, BODYPUMP, nowMs);
+
+    gymWithout('Bodypump');
+    const firstSeen = nowMs;
+    await reviewListedClasses(config, profile, nowMs);
+
+    setNow(nowMs + 3 * 86_400_000);
+    await reviewListedClasses(config, profile, nowMs);
+    expect((await only()).unlistedSinceMs).toBe(firstSeen);
+  });
+
+  it('clears the flag when the class comes back', async () => {
+    // A class off for a holiday week is missing and then is not. Leaving it
+    // flagged would train the owner to ignore the warning.
+    const profile = await linkedProfile();
+    await addSubscription(config, profile, BODYPUMP, nowMs);
+
+    gymWithout('Bodypump');
+    await reviewListedClasses(config, profile, nowMs);
+    expect((await only()).unlistedSinceMs).toBe(nowMs);
+
+    delete config.backend;
+    await reviewListedClasses(config, profile, nowMs);
+    expect((await only()).unlistedSinceMs).toBeUndefined();
+  });
+
+  it('flags nothing when Elixia cannot be read', async () => {
+    // The dangerous failure: one unreachable night marking every class of
+    // every user as withdrawn.
+    const profile = await linkedProfile();
+    await addSubscription(config, profile, BODYPUMP, nowMs);
+
+    config.backend = gym({
+      listClasses: async () => {
+        throw new Error('elixia is down');
+      },
+    });
+
+    await expect(reviewListedClasses(config, profile, nowMs)).resolves.toBeUndefined();
+    expect((await only()).unlistedSinceMs).toBeUndefined();
+  });
+
+  it('tells the owner once, not every night', async () => {
+    const linked = await linkedProfile();
+    await repo.upsertProfile({ ...linked, telegramChatId: '4242' });
+    const withChat = (await repo.getProfile(USER_ID))!;
+    await addSubscription(config, withChat, BODYPUMP, nowMs);
+
+    const sent: string[] = [];
+    const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      sent.push(String(JSON.parse(String(init?.body)).text));
+      return new Response('{}', { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    config.telegramBotToken = 'bot-token';
+
+    try {
+      gymWithout('Bodypump');
+      await reviewListedClasses(config, withChat, nowMs);
+      setNow(nowMs + 86_400_000);
+      await reviewListedClasses(config, withChat, nowMs);
+
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toMatch(/Bodypump/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('is run for every linked profile by the nightly job', async () => {
+    const profile = await linkedProfile();
+    await addSubscription(config, profile, BODYPUMP, nowMs);
+
+    gymWithout('Bodypump');
+    await runReindex(config, nowMs);
+
+    expect((await only()).unlistedSinceMs).toBe(nowMs);
+  });
+
+  it('indexes everyone before reviewing anyone, and gives up reviewing when out of time', async () => {
+    // The review reads a ~1.5MB page per centre per user, inside a function
+    // capped at 60s. If that work were interleaved with the indexing, a slow
+    // night would kill the job partway and leave the *later* users with no
+    // computed releases at all — booking nothing, which is far worse than an
+    // unreviewed listing. So indexing is finished for everyone first, and the
+    // review is what gets dropped when the clock runs out.
+    const profile = await linkedProfile();
+    await addSubscription(config, profile, BODYPUMP, nowMs);
+    await repo.replaceDueEntries(profile.id, []);
+
+    gymWithout('Bodypump');
+    const indexed = await runReindex(config, nowMs, { deadlineMs: nowMs - 1 });
+
+    expect(indexed).toBeGreaterThan(0);
+    expect(await repo.claimDue(0, nowMs + 30 * 86_400_000)).not.toHaveLength(0);
+    expect((await only()).unlistedSinceMs).toBeUndefined();
+  });
+
+  it('reads each centre once however many classes are booked there', async () => {
+    // One read of a ~1.5MB page per centre, not per class.
+    const profile = await linkedProfile();
+    await addSubscription(config, profile, BODYPUMP, nowMs);
+    await addSubscription(config, profile, { ...BODYPUMP, weekday: 'thursday' }, nowMs);
+    await addSubscription(config, profile, { ...BODYPUMP, className: 'Yoga', weekday: 'monday', startTime: '17:00' }, nowMs);
+
+    const mock = new MockElixiaClient();
+    const centers: string[] = [];
+    config.backend = gym({
+      listClasses: async (tokens, center) => {
+        centers.push(center);
+        return mock.listClasses(tokens, center);
+      },
+    });
+
+    await reviewListedClasses(config, profile, nowMs);
+    expect(centers).toEqual(['Tapiola']);
   });
 });

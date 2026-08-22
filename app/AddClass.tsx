@@ -46,16 +46,7 @@ async function fetchRemote<T>(load: () => Promise<T>): Promise<Remote<T>> {
 export default function AddClass({ refresh }: { refresh: () => Promise<void> }) {
   const [centers, setCenters] = useState<Remote<CenterOption[]>>({ status: 'loading' });
   /** Elixia's numeric club id: filtering by it skips a whole page fetch. */
-  const [pickedCenter, setPickedCenter] = useState('');
-  /**
-   * A centre named by hand, for when the list does not have it.
-   *
-   * Held separately from what is being typed so a keystroke does not fire a
-   * ~1.5MB schedule fetch — nothing is looked up until it is submitted.
-   */
-  const [manual, setManual] = useState(false);
-  const [typed, setTyped] = useState('');
-  const [namedCenter, setNamedCenter] = useState('');
+  const [center, setCenter] = useState('');
   // Tagged with the centre it describes, so a timetable is never read as
   // belonging to a centre it was not fetched for — the same trick the
   // dashboard plays with the signed-in user, and for the same reason: without
@@ -69,10 +60,6 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
-  // One key for both routes: an id from the list, or whatever was named by
-  // hand. Everything downstream — the fetch, the tagging, the reset on change
-  // — works the same either way.
-  const center = manual ? namedCenter : pickedCenter;
 
   useEffect(() => {
     let active = true;
@@ -117,60 +104,34 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
   const options = classes?.status === 'ready' ? classes.value : [];
   const chosen = picked === '' ? undefined : options[Number(picked)];
   // Stored by name, browsed by id: the name is what a person recognises in
-  // their own list of classes, and what a subscription has always carried. A
-  // hand-named centre is stored exactly as it was entered, since that is the
-  // only spelling anything here knows.
-  const centerName = manual
-    ? namedCenter
-    : ((centers.status === 'ready' ? centers.value : []).find((c) => c.id === center)?.name ?? '');
-
-  const submitTyped = (): void => {
-    setPicked('');
-    setError('');
-    setNamedCenter(typed.trim());
-  };
+  // their own list of classes, and what a subscription has always carried.
+  const centerName =
+    (centers.status === 'ready' ? centers.value : []).find((c) => c.id === center)?.name ?? '';
 
   return (
     <div className="card">
       <h2>Add a class</h2>
       <div className="row row-2">
         <div>
-          <label htmlFor={manual ? 's-center-manual' : 's-center'}>Centre</label>
-          {manual ? (
-            <div className="row row-2" style={{ gap: 8 }}>
-              <input
-                id="s-center-manual"
-                placeholder="Circus, or a club id like 741"
-                value={typed}
-                onChange={(e) => setTyped(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') submitTyped();
-                }}
-              />
-              <button id="center-manual-find" className="ghost" onClick={submitTyped}>
-                Find classes
-              </button>
-            </div>
-          ) : (
-            <select
-              id="s-center"
-              value={pickedCenter}
-              disabled={centers.status !== 'ready'}
-              onChange={(e) => {
-                setPickedCenter(e.target.value);
-                setPicked('');
-                setError('');
-              }}
-            >
-              <option value="">{centerPlaceholder(centers)}</option>
-              {centers.status === 'ready' &&
-                centers.value.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-            </select>
-          )}
+          <label htmlFor="s-center">Centre</label>
+          <select
+            id="s-center"
+            value={center}
+            disabled={centers.status !== 'ready'}
+            onChange={(e) => {
+              setCenter(e.target.value);
+              setPicked('');
+              setError('');
+            }}
+          >
+            <option value="">{centerPlaceholder(centers)}</option>
+            {centers.status === 'ready' &&
+              centers.value.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+          </select>
         </div>
         <div>
           <label htmlFor="s-class">Class</label>
@@ -192,21 +153,6 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
           </select>
         </div>
       </div>
-
-      <p className="sub" style={{ margin: '10px 0 0', fontSize: 13 }}>
-        <button
-          id="center-manual-toggle"
-          className="ghost"
-          style={{ padding: 0, border: 0, background: 'none', textDecoration: 'underline' }}
-          onClick={() => {
-            setManual(!manual);
-            setPicked('');
-            setError('');
-          }}
-        >
-          {manual ? 'Choose from the list instead' : "My centre isn't listed"}
-        </button>
-      </p>
 
       {centers.status === 'error' && <div className="banner banner-err">{centers.message}</div>}
       {classes?.status === 'error' && <div className="banner banner-err">{classes.message}</div>}

@@ -185,7 +185,7 @@ logic never actually calls it.
 | --- | --- |
 | Endpoint (method + URL) | `GET https://www.elixia.fi/varaukset` — a server-rendered HTML page, not a JSON API. Every filter change is a full page navigation; no `xhr`/`fetch` to any listing endpoint exists (checked across both captures). **The data is still structured**: the page embeds its entire props object in one `<script data-props="true" type="application/json">` tag, and that object holds both the club list and the classes. Parsing that tag *is* the listing API. |
 | Query parameters (centre, date range, activity type, paging) | `clubIds` (e.g. `741`), `club-search`, `class-search`, `groupExerciseTypeIds`, `groupExerciseTypeCluster` (e.g. `Cardio`, `Boxing`), `instructor-search`, `timeOfDay` (e.g. `5_EVENING`). **`clubIds` is mandatory**: requested without it the page renders an "apply filters" prompt and carries no `schedule.events` at all. No date-range or paging parameter exists — the response always spans the whole window. |
-| How is a centre/club identified? | A numeric id. The full id→name mapping (226 clubs group-wide) is in the page's own filter options: `{queryName: "clubIds", options: [{value: "741", label: "Circus"}, …]}`. `lib/elixia.ts`'s `listClubOptions` reads exactly that — it is both the centre chooser's list and, via `findClubIdByName`, how a stored centre name resolves — so a user may store either the id or the club's name. **There is more than one such node** (see below), and the club id is also visible in the site's own URL as `?clubIds=` once a club is selected, which is how a user can name a club the chooser has somehow missed. |
+| How is a centre/club identified? | A numeric id. The full id→name mapping (226 clubs group-wide) is in the page's own filter options: `{queryName: "clubIds", options: [{value: "741", label: "Circus"}, …]}`. `lib/elixia.ts`'s `listClubOptions` reads exactly that — it is both the centre chooser's list and, via `findClubIdByName`, how a stored centre name resolves — so a user may store either the id or the club's name. **There is more than one such node** (see below); the club id is also visible in the site's own URL as `?clubIds=` once a club is selected, which is the quickest way to check a club by hand if the list ever looks wrong again. |
 | How is a single class instance identified? Stable across days? | `"<clubId>p<number>"`, e.g. `741p70111`. **Per-occurrence, not per-class**: the same weekly class has a different id on each date (`741p70111` on one day, `741p70095` on another). An id therefore only ever resolves for one concrete date, which is why `resolveClassId` takes a `classDate`. |
 | Class start time format — local, UTC, or offset-bearing? | **Offset-bearing ISO 8601**: `metadata.startsAt` = `"2026-08-21T17:00:00+03:00"`. `metadata.time` carries the same instant as a display string, `"17:00"`. The offset being explicit removes any DST guesswork on the listing side. |
 | Fields for capacity, booked count, waitlist length | `hasWaitingList` (bool), `waitingListCount` (int) and `isBooked` (bool) per class. There is **no capacity or booked-count field** — you cannot tell how full a class is before trying, only whether a waiting list exists and how long it is. |
@@ -221,6 +221,17 @@ rule than booking's, it is the same rule applied earlier. Two limits follow
 from the source rather than from the UI: a class Elixia has not published yet
 cannot be offered, and a class dropped from the timetable disappears from the
 chooser while any existing subscription to it keeps failing to resolve.
+
+**And it is what the nightly job checks against.** A class Elixia withdraws
+leaves its subscription behind, and the failure is indistinguishable from an
+unopened window: `resolveClassId` finds nothing, the attempt records
+`too-early`, and it does so every week. So the reindex compares each enabled
+subscription against the published timetable — one read per centre, not per
+class — and records the first moment a class was absent
+(`subscriptions.unlisted_since`), which the dashboard turns into a warning and
+clears as soon as the class is listed again. A centre that cannot be read
+changes nothing: "we could not look" is not "it is gone", and a flag that
+fires wrongly once is a flag nobody reads afterwards.
 
 **The consequence that shaped `booking.ts`.** Because an unopened class is
 absent rather than rejected, "too early" cannot come back from the booking

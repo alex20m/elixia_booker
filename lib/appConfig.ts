@@ -6,6 +6,7 @@
  */
 
 import { createMemoryRepo } from './db/memoryRepo';
+import type { BookingBackend } from './elixia';
 import type { Repo } from './db/repo';
 
 export interface AppConfig {
@@ -21,6 +22,15 @@ export interface AppConfig {
   cronSecret?: string;
   /** True when running on the in-memory repo, which does not survive requests. */
   ephemeralStore: boolean;
+  /**
+   * Overrides which backend `backendFor` builds.
+   *
+   * Nothing in the app sets this — `loadAppConfig` never does — but a test
+   * that needs a gym whose timetable changes mid-run has no other seam, and
+   * the alternative is exporting the mock's fixture data for tests to mutate,
+   * which makes every test that touches it order-dependent.
+   */
+  backend?: BookingBackend;
 }
 
 export class ConfigError extends Error {

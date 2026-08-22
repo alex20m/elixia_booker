@@ -45,7 +45,7 @@ import type {
 export const REINDEX_HORIZON_DAYS = 10;
 
 export function backendFor(config: AppConfig): BookingBackend {
-  return config.mock ? new MockElixiaClient() : new ElixiaClient();
+  return config.backend ?? (config.mock ? new MockElixiaClient() : new ElixiaClient());
 }
 
 export function timingConfig(profile: Profile): BookingConfig {
@@ -362,11 +362,8 @@ export async function addSubscription(
   // accepting one would add a row that books nothing and says nothing until
   // the user notices weeks later that they never got in.
   const offered = await listClasses(config, profile, center, nowMs);
-  const match = offered.find(
-    (option) =>
-      option.className.trim().toLowerCase() === className.toLowerCase() &&
-      option.weekday === weekday &&
-      option.startTime === normalizeTime(startTime),
+  const match = offered.find((option) =>
+    isSameClass(option, { className, weekday, startTime }),
   );
 
   if (!match) {
@@ -484,6 +481,105 @@ export async function planFor(
 // --- scheduling ------------------------------------------------------------
 
 /** Recompute one profile's upcoming releases. */
+/**
+ * Whether a published slot is the class a subscription means.
+ *
+ * The same triple `findClassId` matches on at T-0, minus the date — so if this
+ * says no, booking will fail to resolve it too. Kept in one place because two
+ * slightly different answers to "is this the same class?" would mean the
+ * chooser accepting something the nightly check then flags, or the reverse.
+ */
+export function isSameClass(
+  option: ClassOption,
+  wanted: { className: string; weekday: string; startTime: string },
+): boolean {
+  return (
+    option.className.trim().toLowerCase() === wanted.className.trim().toLowerCase() &&
+    option.weekday === wanted.weekday &&
+    option.startTime === normalizeTime(wanted.startTime)
+  );
+}
+
+/**
+ * Check each of a profile's classes against the published timetable, and
+ * record the ones that have gone.
+ *
+ * This exists because of how invisible the failure is otherwise. Elixia
+ * withdrawing a class does not delete anything here: the subscription stays,
+ * `resolveClassId` finds nothing at T-0, and the attempt is recorded as
+ * `too-early` — the very same outcome as a class whose booking window has not
+ * opened yet. Weeks of "Missed" can pass without a sign that the class simply
+ * no longer runs.
+ *
+ * Three properties matter more than the check itself:
+ *
+ *   * **One read per centre**, not per class. The timetable is a ~1.5MB page.
+ *   * **An unreadable centre changes nothing.** A night when Elixia is down
+ *     must not mark every class of every user as withdrawn — the flag would
+ *     be worthless the first time it fired wrongly, so a failed read leaves
+ *     that centre's classes exactly as they were.
+ *   * **The first absence is what is kept**, so the dashboard can say "gone
+ *     since Tuesday" rather than "gone since today", every day.
+ *
+ * Paused classes are skipped: they are not booking, so nothing is silently
+ * failing for them, and warning about one would be noise.
+ */
+export async function reviewListedClasses(
+  config: AppConfig,
+  profile: Profile,
+  nowMs: number,
+): Promise<void> {
+  if (profile.elixiaStatus !== 'ok') return;
+
+  const subscriptions = (await config.repo.listSubscriptions(profile.id)).filter((s) => s.enabled);
+  const centers = [...new Set(subscriptions.map((s) => s.center))];
+  const logger = new Logger();
+
+  for (const center of centers) {
+    let offered: ClassOption[];
+    try {
+      offered = await listClasses(config, profile, center, nowMs);
+    } catch (err) {
+      // Deliberately not a flag: "we could not look" is not "it is gone".
+      logger.log('listing.check.failed', {
+        userId: profile.id,
+        center,
+        error: (err as Error).message,
+      });
+      continue;
+    }
+
+    for (const subscription of subscriptions.filter((s) => s.center === center)) {
+      const listed = offered.some((option) => isSameClass(option, subscription));
+
+      if (listed) {
+        if (subscription.unlistedSinceMs !== undefined) {
+          await config.repo.setSubscriptionUnlisted(profile.id, subscription.id, null);
+        }
+        continue;
+      }
+
+      // Already flagged: keep the original date and stay quiet. The owner has
+      // been told once; telling them nightly is how a warning becomes noise.
+      if (subscription.unlistedSinceMs !== undefined) continue;
+
+      await config.repo.setSubscriptionUnlisted(profile.id, subscription.id, nowMs);
+      logger.log('listing.withdrawn', {
+        userId: profile.id,
+        subscriptionId: subscription.id,
+        className: subscription.className,
+      });
+      await notifyChat(
+        config.telegramBotToken,
+        profile.telegramChatId,
+        `⚠️ ${subscription.className} · ${subscription.weekday} ${subscription.startTime} ` +
+          `at ${subscription.center} is no longer on Elixia's schedule, so it cannot be booked. ` +
+          `It may have been renamed, moved or dropped — check the timetable and update it here.`,
+      );
+    }
+  }
+}
+
 export async function reindexProfile(
   config: AppConfig,
   profile: Profile,
@@ -645,19 +741,50 @@ export async function runDueBookings(
 }
 
 /** Nightly: reproject every linked profile, and drop releases long past. */
+export interface ReindexOptions {
+  /**
+   * Wall-clock instant the run must be finished by, so the listing review can
+   * be abandoned rather than the whole invocation being killed mid-flight.
+   */
+  deadlineMs?: number;
+}
+
 export async function runReindex(
   config: AppConfig,
   nowMs: number = Date.now(),
+  options: ReindexOptions = {},
 ): Promise<number> {
   const logger = new Logger();
   const profiles = await config.repo.listLinkedProfiles();
 
+  // Two passes, and the order is the point. Indexing is database-only and
+  // fast; reviewing reads a ~1.5MB page per centre per profile, inside a
+  // function with a hard duration cap. Interleaved, one slow night would kill
+  // the invocation partway through and leave every profile after that point
+  // with no computed releases — booking nothing at all, which is a far worse
+  // failure than an unreviewed listing. So every profile is indexed first,
+  // and the review is what gets dropped when the clock runs out.
   let indexed = 0;
   for (const profile of profiles) {
     indexed += await reindexProfile(config, profile, nowMs);
   }
 
+  let reviewed = 0;
+  for (const profile of profiles) {
+    if (options.deadlineMs !== undefined && Date.now() >= options.deadlineMs) break;
+    await reviewListedClasses(config, profile, nowMs);
+    reviewed += 1;
+  }
+
   const pruned = await config.repo.pruneDueEntries(nowMs - 24 * 60 * 60 * 1000);
-  logger.log('cron.reindex', { profiles: profiles.length, indexed, pruned });
+  logger.log('cron.reindex', {
+    profiles: profiles.length,
+    indexed,
+    pruned,
+    reviewed,
+    // Persistently non-zero means the job is outgrowing its window: the
+    // profiles at the end of the list are never getting reviewed.
+    reviewSkipped: profiles.length - reviewed,
+  });
   return indexed;
 }

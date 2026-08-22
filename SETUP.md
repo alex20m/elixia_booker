@@ -199,7 +199,9 @@ At <http://localhost:3000>:
 2. **Link your Elixia account** — with `MOCK_ELIXIA=1`, any email containing `@`
    and any password of 4+ characters is accepted.
 3. **Add a class** — pick a centre, then one of the classes it publishes, and
-   check the "Opens …" time looks right. With `MOCK_ELIXIA=1` the timetable is
+   check the "Opens …" time looks right. If a class is later withdrawn from
+   Elixia's timetable, the nightly reindex notices and the dashboard says so
+   next to it (and sends one Telegram message, if a chat id is set). With `MOCK_ELIXIA=1` the timetable is
    the fixed mock one in `lib/mock.ts` (Tapiola, Sello, Kamppi); against the
    real adapter it is whatever Elixia lists for that centre today.
 

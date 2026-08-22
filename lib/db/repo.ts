@@ -64,6 +64,8 @@ export interface Repo {
   createSubscription(subscription: NewSubscription): Promise<Subscription>;
   deleteSubscription(userId: string, id: string): Promise<boolean>;
   setSubscriptionEnabled(userId: string, id: string, enabled: boolean): Promise<boolean>;
+  /** Records when a class went missing from the schedule; null once it is back. */
+  setSubscriptionUnlisted(userId: string, id: string, atMs: number | null): Promise<boolean>;
 
   /** Replace a user's scheduled releases with a freshly computed set. */
   replaceDueEntries(userId: string, entries: DueEntry[]): Promise<void>;

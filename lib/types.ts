@@ -245,6 +245,15 @@ export interface Subscription {
   enabled: boolean;
   /** Overrides the profile's tier for this class only. */
   bookingWindowDays?: number;
+  /**
+   * When this class was first found missing from Elixia's published schedule,
+   * or absent while it is listed.
+   *
+   * The first moment rather than the latest, because "gone since Tuesday" is
+   * what makes the warning actionable — and because a class off for a holiday
+   * week reads very differently from one gone for a month.
+   */
+  unlistedSinceMs?: number;
   createdAtMs: number;
 }
 
