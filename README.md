@@ -7,7 +7,8 @@ the moment booking opens.
 on free tiers.
 
 You deploy it once. After that anyone you share the URL with creates an account,
-links their gym login, picks their classes, and is done.
+answers three setup questions, links their gym login, picks their classes, and
+is done.
 
 ---
 
@@ -36,6 +37,34 @@ is the opposite of what the app originally assumed:
 outside a browser at all. Everything observed says yes, but a browser capture
 cannot prove the absence of a JS challenge or TLS fingerprinting. The first
 live run is that test.
+
+---
+
+## Nothing has a default
+
+A new account is asked three things before the app will show it anything, and
+none of them has a fallback anywhere in the code or the environment:
+
+| | Why it cannot be guessed |
+|---|---|
+| **Membership** (7 or 14 days) | It is a property of the contract with Elixia. Guess low and a Premium member books a week late, every week. |
+| **Timezone** | A release instant is a wall-clock time turned into an epoch millisecond. An hour out books an hour out. |
+| **Notification channel** | With none chosen there is nowhere to send the message that matters most — that booking has stopped. |
+
+Each of those failures is silent: the app keeps running and the classes quietly
+do not get booked. A default would make every account claim an answer nobody
+gave, so instead `lib/service.ts` refuses — every endpoint answers **428
+Precondition Required** until the setup pages are finished, and `Profile`
+carries the three fields as optional so nothing can read them hopefully.
+
+The timezone and the membership are **picked from lists**
+(`lib/timezones.ts`, `lib/membership.ts`), and the server accepts only what
+those lists contain: a text field takes "Europe/Helsinky" without complaint,
+and nobody looks at it again until a class they wanted has been full for weeks.
+
+The one thing that *is* remembered for you is the centre you last booked at —
+it does not change week to week, and finding it again among 226 clubs is a
+chore in front of the decision that matters.
 
 ---
 
@@ -123,8 +152,8 @@ from T-0.
 
 ### The timing detail that matters
 
-"7 days before" is a claim about the **wall clock in Helsinki**, not elapsed
-time. Subtracting `7 × 24h` from the class instant is wrong twice a year: an hour
+"7 days before" is a claim about the **wall clock in the user's own zone** —
+the one they picked during setup — not elapsed time. Subtracting `7 × 24h` from the class instant is wrong twice a year: an hour
 early each spring (a wasted run) and **an hour late each autumn** — by which
 point a popular class is gone.
 
@@ -140,12 +169,15 @@ earlier instant, because being early is recoverable and being late is not).
 ```
 app/                    Next.js App Router
   page.tsx              the dashboard (client component)
+  Setup.tsx             the configuration pages a new account cannot skip
   handler/[...stack]    Neon Auth's own pages: sign in, reset, account settings
   api/…/route.ts        JSON API — thin: authenticate, call a service, serialise
   api/cron/tick         the booking tick, secret-guarded
   api/cron/next         peeks the next unclaimed release, for the watcher to sleep to
 lib/
   schedule.ts           DST-correct release-instant maths
+  timezones.ts          the zones on offer, and the guard that accepts only them
+  membership.ts         the two booking windows Elixia sells
   planner.ts            weekly recurrence → concrete releases
   service.ts            the app's behaviour, independent of HTTP and Postgres
   booking.ts, retry.ts  the critical path and its bounded retry loop

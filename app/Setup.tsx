@@ -280,7 +280,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
                   />
                   <p className="hint">
                     This deployment has no Telegram webhook configured, so the
-                    chat ID has to be entered by hand. See SETUP.md.
+                    chat ID has to be entered by hand.
                   </p>
                 </div>
               </div>
