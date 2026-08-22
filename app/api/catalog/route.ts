@@ -2,6 +2,13 @@ import { listCenters, listClasses } from '@/lib/service';
 import { handle, json, requireUser } from '@/lib/http';
 
 export const runtime = 'nodejs';
+// Matches every other route here, and matters more on this one: without it a
+// centre list could be served from Vercel's CDN, and a club Elixia added this
+// morning would stay invisible until the cache turned over.
+export const dynamic = 'force-dynamic';
+
+/** Keeps the browser and any proxy out of it too. */
+const NO_STORE = { 'cache-control': 'no-store' };
 
 /**
  * What the class chooser is built from: Elixia's own centres, and the weekly
@@ -19,8 +26,8 @@ export async function GET(request: Request): Promise<Response> {
     const center = new URL(request.url).searchParams.get('center');
 
     if (center === null) {
-      return json({ centers: await listCenters(config, profile, nowMs) });
+      return json({ centers: await listCenters(config, profile, nowMs) }, 200, NO_STORE);
     }
-    return json({ classes: await listClasses(config, profile, center, nowMs) });
+    return json({ classes: await listClasses(config, profile, center, nowMs) }, 200, NO_STORE);
   });
 }
