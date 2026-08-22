@@ -9,6 +9,8 @@ import {
   extractDataProps,
   findClassId,
   findClubIdByName,
+  UNGROUPED_CITY,
+  countryOfSite,
   listClubOptions,
   performElixiaLogin,
 } from '../lib/elixia';
@@ -29,33 +31,26 @@ const AUTH = 'https://fake.auth.test';
 
 const tokens: StoredTokens = { accessToken: '.SATS_GROUP_AUTH=x', expiresAtMs: NOW, updatedAtMs: NOW };
 
-function clubOptions() {
+/**
+ * One `clubIds` node, as the filter tree carries it: a group of clubs under
+ * the title of the place they are in.
+ */
+function clubGroup(title: string, clubs: Array<[string, string]>) {
   return {
+    title,
     queryName: 'clubIds',
-    options: [
-      { value: '740', label: 'Iso Omena', name: 'clubIds' },
-      { value: '741', label: 'Circus', name: 'clubIds' },
-    ],
+    options: clubs.map(([value, label]) => ({ value, label, name: 'clubIds' })),
   };
 }
 
 /**
- * A second group of clubs, because `categories` is an array: the real page
- * splits its 226 clubs across several `clubIds` nodes rather than listing them
- * all in one.
+ * Mirrors the real nesting depth, so the finder is exercised as a tree walk.
+ *
+ * The group's clubs are split across several `clubIds` nodes rather than
+ * listed in one — `categories` is an array — and those nodes sit under the
+ * country and city titles the filter groups them by. That nesting is where
+ * the chooser's country → city → centre cascade comes from.
  */
-function moreClubOptions() {
-  return {
-    queryName: 'clubIds',
-    options: [
-      { value: '742', label: 'Sello', name: 'clubIds' },
-      // Repeated from the first group, as a club served by two filters would be.
-      { value: '740', label: 'Iso Omena', name: 'clubIds' },
-    ],
-  };
-}
-
-/** Mirrors the real nesting depth, so the finder is exercised as a tree walk. */
 function filtersFixture() {
   return {
     filters: {
@@ -63,7 +58,29 @@ function filtersFixture() {
         {
           title: 'Keskus',
           formContentOptions: {
-            content: { content: [{ categories: [clubOptions(), moreClubOptions()] }] },
+            content: {
+              content: [
+                {
+                  title: 'Suomi',
+                  categories: [
+                    clubGroup('Espoo', [
+                      ['740', 'Iso Omena'],
+                      ['742', 'Sello'],
+                    ]),
+                    // Circus lives in a later group, and Iso Omena is repeated
+                    // as a club served by two filters would be.
+                    clubGroup('Helsinki', [
+                      ['741', 'Circus'],
+                      ['740', 'Iso Omena'],
+                    ]),
+                  ],
+                },
+                {
+                  title: 'Ruotsi',
+                  categories: [clubGroup('Tukholma', [['900', 'Sturebadet']])],
+                },
+              ],
+            },
           },
         },
       ],
@@ -236,12 +253,92 @@ describe('listClubOptions', () => {
   it('lists every centre the filter offers, from every group it offers them in', () => {
     // The clubs are split across several `clubIds` nodes, so stopping at the
     // first one silently hides most of the gym's centres — and hid Circus.
-    // Alphabetical because the merged order is otherwise arbitrary, and a
-    // 226-item dropdown is only usable in a predictable order.
+    // Ordered by country, then city, then name: the merged order is otherwise
+    // arbitrary, and the chooser walks the list in exactly that order.
     expect(listClubOptions(scheduleFixture())).toEqual([
-      { id: '741', name: 'Circus' },
-      { id: '740', name: 'Iso Omena' },
-      { id: '742', name: 'Sello' },
+      { id: '740', name: 'Iso Omena', country: 'Finland', city: 'Espoo' },
+      { id: '742', name: 'Sello', country: 'Finland', city: 'Espoo' },
+      { id: '741', name: 'Circus', country: 'Finland', city: 'Helsinki' },
+      { id: '900', name: 'Sturebadet', country: 'Sweden', city: 'Tukholma' },
+    ]);
+  });
+
+  it('files a club under the city of the group that carries it', () => {
+    // The whole cascade rests on this: a club filed under the wrong city is
+    // one nobody browsing to it will ever find.
+    const byName = new Map(listClubOptions(scheduleFixture()).map((c) => [c.name, c]));
+    expect(byName.get('Circus')?.city).toBe('Helsinki');
+    expect(byName.get('Sello')?.city).toBe('Espoo');
+    expect(byName.get('Sturebadet')?.country).toBe('Sweden');
+  });
+
+  it('calls a country by one name, whichever language the page names it in', () => {
+    // The page is Finnish and says "Suomi"; the default a user's last choice
+    // is saved under has to match whatever the page says next time, or the
+    // country they picked stops being recognised.
+    const countries = new Set(listClubOptions(scheduleFixture()).map((c) => c.country));
+    expect([...countries].sort()).toEqual(['Finland', 'Sweden']);
+  });
+
+  it('never mistakes the filter\'s own title for a place', () => {
+    // "Keskus" is the name of the filter, not of anywhere — it sits above
+    // every club, which is exactly what tells it apart from a location.
+    const places = listClubOptions(scheduleFixture()).flatMap((c) => [c.country, c.city]);
+    expect(places).not.toContain('Keskus');
+  });
+
+  it('groups by country alone without turning the country into a city', () => {
+    // The filter need not nest two levels deep: a page that groups its clubs
+    // by country and nothing else must still leave a country to pick, and a
+    // city step that offers something rather than the country's name again.
+    const byCountry = {
+      filters: {
+        filters: [
+          {
+            title: 'Keskus',
+            formContentOptions: {
+              content: {
+                content: [
+                  clubGroup('Suomi', [['741', 'Circus']]),
+                  clubGroup('Ruotsi', [['900', 'Sturebadet']]),
+                ],
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    expect(listClubOptions(byCountry)).toEqual([
+      { id: '741', name: 'Circus', country: 'Finland', city: UNGROUPED_CITY },
+      { id: '900', name: 'Sturebadet', country: 'Sweden', city: UNGROUPED_CITY },
+    ]);
+  });
+
+  it('falls back to the site\'s own country when the filter groups by nothing', () => {
+    // A restyled filter that drops its group titles must not leave the
+    // chooser with an empty country list and nothing pickable at all.
+    const flat = {
+      filters: {
+        filters: [
+          {
+            title: 'Keskus',
+            formContentOptions: {
+              content: { content: [clubGroup('Keskus', [['741', 'Circus']])] },
+            },
+          },
+        ],
+      },
+    };
+    expect(listClubOptions(flat)).toEqual([
+      { id: '741', name: 'Circus', country: 'Finland', city: UNGROUPED_CITY },
+    ]);
+  });
+
+  it('files clubs under the country of the site they were read from', () => {
+    const flat = { filters: { categories: [clubGroup('Keskus', [['1', 'Sturebadet']])] } };
+    expect(listClubOptions(flat, countryOfSite('https://www.sats.se')).map((c) => c.country)).toEqual([
+      'Sweden',
     ]);
   });
 
@@ -252,6 +349,21 @@ describe('listClubOptions', () => {
 
   it('is empty rather than throwing when the page carries no filter tree', () => {
     expect(listClubOptions({})).toEqual([]);
+  });
+});
+
+describe('countryOfSite', () => {
+  it('reads the country from the site each group brand runs per country', () => {
+    expect(countryOfSite('https://www.elixia.fi')).toBe('Finland');
+    expect(countryOfSite('https://www.sats.se')).toBe('Sweden');
+    expect(countryOfSite('https://www.sats.no')).toBe('Norway');
+    expect(countryOfSite('https://www.sats.dk')).toBe('Denmark');
+  });
+
+  it('falls back to the deployment\'s own country for an unrecognised host', () => {
+    // A test base URL, or a domain the group adds later: the clubs still have
+    // to land under some country, or the chooser offers nothing.
+    expect(countryOfSite('https://fake.elixia.test')).toBe('Finland');
   });
 });
 
@@ -431,9 +543,10 @@ describe('ElixiaClient.listCenters / listClasses', () => {
     }) as unknown as typeof fetch;
 
     await expect(new ElixiaClient({ fetchImpl, baseUrl: BASE }).listCenters(tokens)).resolves.toEqual([
-      { id: '741', name: 'Circus' },
-      { id: '740', name: 'Iso Omena' },
-      { id: '742', name: 'Sello' },
+      { id: '740', name: 'Iso Omena', country: 'Finland', city: 'Espoo' },
+      { id: '742', name: 'Sello', country: 'Finland', city: 'Espoo' },
+      { id: '741', name: 'Circus', country: 'Finland', city: 'Helsinki' },
+      { id: '900', name: 'Sturebadet', country: 'Sweden', city: 'Tukholma' },
     ]);
   });
 

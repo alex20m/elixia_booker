@@ -22,12 +22,19 @@ export const WEEKDAYS: readonly Weekday[] = [
 /**
  * A centre, as Elixia's own schedule filter lists it.
  *
- * Both halves are used: the id is what the schedule page filters on, the name
- * is what a person recognises and what a subscription stores.
+ * The id is what the schedule page filters on, the name is what a person
+ * recognises and what a subscription stores, and the country and city are
+ * what the chooser narrows by: 226 clubs group-wide is not a list anyone
+ * scrolls, so a centre is reached through where it is. Both places are always
+ * set — a club the filter groups by nothing still gets the site's country and
+ * a single city bucket, because a club with no place is one nobody can browse
+ * to.
  */
 export interface CenterOption {
   id: string;
   name: string;
+  country: string;
+  city: string;
 }
 
 /**
@@ -230,6 +237,24 @@ export interface Profile {
   elixiaSecret?: string;
   elixiaStatus: ElixiaStatus;
   elixiaCheckedAtMs?: number;
+  /**
+   * Where this user last chose a class from.
+   *
+   * Remembered because it does not change: someone books at their own gym,
+   * week after week, and re-picking a country and a city to reach it every
+   * time is three choices to make the one that matters. Only the place is
+   * kept — the class itself is the decision being made, so it is never
+   * prefilled.
+   *
+   * The centre is stored as Elixia's club id where it was picked from the
+   * list, and as the typed name where it was not. Absent until a first
+   * choice is made, and left alone if what it names has since disappeared
+   * from the filter — a stale default selects nothing rather than the wrong
+   * thing.
+   */
+  defaultCountry?: string;
+  defaultCity?: string;
+  defaultCenter?: string;
 }
 
 /** One class a user wants booked, every week. */

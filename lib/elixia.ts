@@ -333,53 +333,195 @@ export function extractDataProps(html: string): SchedulePageProps {
 }
 
 /**
- * Every centre the schedule page's own filter offers (226 clubs across the
- * group in the observed capture).
+ * The bucket a club falls into when the filter groups it by nothing.
  *
- * Walks the filter tree rather than indexing a fixed path: the filters object
- * is deeply nested presentation data whose shape is far more likely to be
- * rearranged than the `{queryName: 'clubIds', options: [{value, label}]}`
- * node itself.
+ * A visible, pickable bucket rather than an empty city list: the chooser walks
+ * country → city → centre, so a club with no city at all would otherwise be
+ * unreachable — a worse failure than an extra step with one option in it.
+ */
+export const UNGROUPED_CITY = 'All centres';
+
+/**
+ * The countries the group operates in, in the languages its sites name them.
+ *
+ * Two jobs, and the second is the reason the table exists rather than a
+ * regex: it decides whether a group title is a *country* or a *city*, which is
+ * what lets the same walk handle a filter that nests country → city and one
+ * that only groups by country. And it collapses every spelling onto one label,
+ * so a country saved as a default still matches after the page switches
+ * language — "Suomi" and "Finland" must not become two different countries in
+ * a dropdown, or the saved default silently stops being recognised.
+ */
+const COUNTRY_NAMES = new Map<string, string>([
+  ['finland', 'Finland'],
+  ['suomi', 'Finland'],
+  ['sweden', 'Sweden'],
+  ['sverige', 'Sweden'],
+  ['ruotsi', 'Sweden'],
+  ['norway', 'Norway'],
+  ['norge', 'Norway'],
+  ['norja', 'Norway'],
+  ['denmark', 'Denmark'],
+  ['danmark', 'Denmark'],
+  ['tanska', 'Denmark'],
+]);
+
+/** The country a group site serves, read from the domain it is served on. */
+const COUNTRY_BY_TLD = new Map<string, string>([
+  ['fi', 'Finland'],
+  ['se', 'Sweden'],
+  ['no', 'Norway'],
+  ['dk', 'Denmark'],
+]);
+
+/**
+ * Which country a site's clubs belong to, for the clubs its filter does not
+ * group by country itself.
+ *
+ * The group runs one site per country (elixia.fi, sats.se, …), so the domain
+ * is the answer wherever the page does not give one. An unrecognised host
+ * falls back to this deployment's own country rather than to nothing: a club
+ * filed under no country is a club nobody can browse to.
+ */
+export function countryOfSite(baseUrl: string): string {
+  const host = ((): string => {
+    try {
+      return new URL(baseUrl).hostname;
+    } catch {
+      return '';
+    }
+  })();
+  const tld = host.split('.').pop() ?? '';
+  return COUNTRY_BY_TLD.get(tld) ?? 'Finland';
+}
+
+const asCountry = (title: string): string | undefined =>
+  COUNTRY_NAMES.get(title.trim().toLowerCase());
+
+/** One `clubIds` node, with the titles of everything it sits under. */
+interface ClubGroup {
+  titles: string[];
+  options: Array<{ id: string; name: string }>;
+}
+
+/**
+ * Every `clubIds` node in the tree, tagged with the titles above it.
  *
  * **Every such node, not the first.** The page splits its clubs across
  * several `clubIds` nodes — `categories` is an array — so stopping at the
  * first match returns one group and silently drops the rest. That is not a
  * cosmetic loss: this is also how a stored centre name is resolved to its
  * club id, so a club in a later group stops resolving and its subscription
- * books nothing, in exactly the way an unopened class does. Ids repeat across
- * groups where a club is served by more than one filter, so the first
- * spelling of each wins and the rest collapse.
+ * books nothing, in exactly the way an unopened class does.
  *
- * Sorted by name because the merged order is otherwise an artefact of how the
+ * Walks the tree rather than indexing a fixed path: the filters object is
+ * deeply nested presentation data whose shape is far more likely to be
+ * rearranged than the `{queryName: 'clubIds', options: [{value, label}]}` node
+ * itself. The titles come along because the nesting is the only place the
+ * page says *where* a club is.
+ */
+function collectClubGroups(props: SchedulePageProps): ClubGroup[] {
+  const groups: ClubGroup[] = [];
+
+  const walk = (node: unknown, titles: string[]): void => {
+    if (node === null || typeof node !== 'object') return;
+
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item, titles);
+      return;
+    }
+
+    const record = node as Record<string, unknown>;
+    // A node's own title describes what is inside it, so it counts for the
+    // clubs on this node as well as for those further down.
+    const title = typeof record['title'] === 'string' ? record['title'].trim() : '';
+    const here = title ? [...titles, title] : titles;
+
+    if (record['queryName'] === 'clubIds' && Array.isArray(record['options'])) {
+      const options = (record['options'] as Array<Record<string, unknown>>)
+        .map((option) => ({
+          id: typeof option['value'] === 'string' ? option['value'] : '',
+          name: typeof option['label'] === 'string' ? option['label'].trim() : '',
+        }))
+        .filter((option) => option.id && option.name);
+      if (options.length > 0) groups.push({ titles: here, options });
+    }
+
+    for (const value of Object.values(record)) walk(value, here);
+  };
+
+  walk(props.filters ?? props, []);
+  return groups;
+}
+
+/** How many leading titles every group shares — the filter's own headings. */
+function sharedTitleDepth(groups: ClubGroup[]): number {
+  if (groups.length === 0) return 0;
+  const [first, ...rest] = groups as [ClubGroup, ...ClubGroup[]];
+  let depth = 0;
+  while (
+    depth < first.titles.length &&
+    rest.every((group) => group.titles[depth] === first.titles[depth])
+  ) {
+    depth += 1;
+  }
+  // A single group keeps nothing: one `clubIds` node holding the whole group's
+  // clubs is not a city, so its title is a heading like any other.
+  return depth;
+}
+
+/**
+ * Every centre the schedule page's own filter offers (226 clubs across the
+ * group in the observed capture), each filed under a country and a city.
+ *
+ * The location comes from the nesting, because that is the only place the page
+ * states it: the titles a `clubIds` node sits under are the country and city
+ * its clubs are grouped by. Two rules keep that honest:
+ *
+ *  - Titles shared by *every* group are the filter's own headings ("Keskus"),
+ *    not places, so they are dropped. Deriving that from the tree rather than
+ *    hard-coding the word means a renamed or translated heading does not turn
+ *    into a country.
+ *  - A title is a country only if it names one (`COUNTRY_NAMES`); anything
+ *    else is a city. That is what makes the same walk work whether the filter
+ *    nests country → city, groups by country alone, or groups by city alone.
+ *
+ * Clubs the page groups by nothing still get a country — the site's own, since
+ * the group runs one site per country — and land in `UNGROUPED_CITY`, so the
+ * cascade always has something to offer.
+ *
+ * Ids repeat across groups where a club is served by more than one filter, so
+ * the first listing of each wins and the rest collapse. Sorted by country,
+ * city and name, because the merged order is otherwise an artefact of how the
  * page happens to nest its filters, and a list this long is only navigable in
  * a predictable one. An absent or restyled tree yields an empty list rather
  * than throwing — the caller says what a missing centre list means, and for
  * the chooser that is "nothing to offer", not a crash.
  */
-export function listClubOptions(props: SchedulePageProps): CenterOption[] {
+export function listClubOptions(
+  props: SchedulePageProps,
+  fallbackCountry = countryOfSite(ENDPOINTS.baseUrl),
+): CenterOption[] {
+  const groups = collectClubGroups(props);
+  const shared = sharedTitleDepth(groups);
   const byId = new Map<string, CenterOption>();
 
-  const walk = (node: unknown): void => {
-    if (node === null || typeof node !== 'object') return;
+  for (const group of groups) {
+    const path = group.titles.slice(shared);
+    const country = path.map(asCountry).find((name) => name !== undefined) ?? fallbackCountry;
+    const city = [...path].reverse().find((title) => !asCountry(title)) ?? UNGROUPED_CITY;
 
-    if (Array.isArray(node)) {
-      for (const item of node) walk(item);
-      return;
+    for (const option of group.options) {
+      if (!byId.has(option.id)) byId.set(option.id, { ...option, country, city });
     }
+  }
 
-    const record = node as Record<string, unknown>;
-    if (record['queryName'] === 'clubIds' && Array.isArray(record['options'])) {
-      for (const option of record['options'] as Array<Record<string, unknown>>) {
-        const id = typeof option['value'] === 'string' ? option['value'] : '';
-        const name = typeof option['label'] === 'string' ? option['label'].trim() : '';
-        if (id && name && !byId.has(id)) byId.set(id, { id, name });
-      }
-    }
-    for (const value of Object.values(record)) walk(value);
-  };
-
-  walk(props.filters ?? props);
-  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return [...byId.values()].sort(
+    (a, b) =>
+      a.country.localeCompare(b.country) ||
+      a.city.localeCompare(b.city) ||
+      a.name.localeCompare(b.name),
+  );
 }
 
 /**
@@ -721,7 +863,13 @@ export class ElixiaClient implements BookingBackend {
    * chooser has to offer before the user has picked anything.
    */
   async listCenters(tokens: StoredTokens): Promise<CenterOption[]> {
-    return listClubOptions(await this.fetchPage(tokens, `${this.baseUrl}${ENDPOINTS.schedule}`));
+    // The site's own country is what clubs the filter groups by nothing fall
+    // back to, so it is read from the base URL this client was pointed at
+    // rather than from the compiled-in default.
+    return listClubOptions(
+      await this.fetchPage(tokens, `${this.baseUrl}${ENDPOINTS.schedule}`),
+      countryOfSite(this.baseUrl),
+    );
   }
 
   /**

@@ -24,6 +24,22 @@ import type {
 } from './types';
 
 /**
+ * Two cities in one country and one in another, so the chooser's country →
+ * city → centre cascade is exercisable by hand: a single city everywhere
+ * would let a broken cascade still look right.
+ */
+const MOCK_CENTERS: CenterOption[] = [
+  { id: '740', name: 'Tapiola', country: 'Finland', city: 'Espoo' },
+  { id: '741', name: 'Sello', country: 'Finland', city: 'Espoo' },
+  { id: '742', name: 'Kamppi', country: 'Finland', city: 'Helsinki' },
+  { id: '743', name: 'Sturebadet', country: 'Sweden', city: 'Stockholm' },
+];
+
+function slots(className: string, startTime: string, days: Weekday[]): ClassOption[] {
+  return days.map((weekday) => ({ className, weekday, startTime }));
+}
+
+/**
  * A timetable, because a mock gym that accepts any class name would hide the
  * one thing the chooser exists to enforce: that a class has to be on the
  * schedule before it can be subscribed to.
@@ -33,16 +49,6 @@ import type {
  * "full" lands on the waiting list, anything containing "busy" is refused once
  * as too-early first.
  */
-const MOCK_CENTERS: CenterOption[] = [
-  { id: '740', name: 'Tapiola' },
-  { id: '741', name: 'Sello' },
-  { id: '742', name: 'Kamppi' },
-];
-
-function slots(className: string, startTime: string, days: Weekday[]): ClassOption[] {
-  return days.map((weekday) => ({ className, weekday, startTime }));
-}
-
 const MOCK_TIMETABLE: ClassOption[] = [
   ...slots('Bodypump', '09:00', ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']),
   ...slots('Bodypump', '18:00', ['tuesday', 'thursday']),
