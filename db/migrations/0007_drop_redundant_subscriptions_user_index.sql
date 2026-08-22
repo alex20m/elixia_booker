@@ -1,0 +1,33 @@
+-- ---------------------------------------------------------------------------
+-- subscriptions: drop subscriptions_user, which indexes nothing new
+-- ---------------------------------------------------------------------------
+--
+-- `0001` created two indexes on this table:
+--
+--   subscriptions_unique_class (user_id, lower(class_name), lower(center),
+--                               weekday, start_time)  -- unique
+--   subscriptions_user         (user_id)
+--
+-- The second is a prefix of the first. Postgres serves `where user_id = $1`
+-- from the leftmost column of a composite index, and the later columns being
+-- expressions does not change that — checked against real Postgres before
+-- writing this, by dropping the index and re-planning the repo's own
+-- `listSubscriptions` query: the plan switches from an index scan on
+-- subscriptions_user to one on subscriptions_unique_class, at the same cost.
+--
+-- So it buys no read and costs every write: each insert, delete and centre
+-- rename maintains a second btree for nothing.
+--
+-- Safe to drop in the same deploy as any code change, unlike a column: SQL
+-- names indexes only when creating them, so the still-serving deployment
+-- cannot notice. Nothing here depends on it — the uniqueness that stops a
+-- user adding one class twice belongs to subscriptions_unique_class, which
+-- stays.
+--
+-- Not a candidate, for the record: due_entries carries a plain and a partial
+-- index on release_at that look similarly redundant, and are not. The
+-- watcher's "next unclaimed release" query matches unclaimed *or*
+-- expired-claim rows, which the partial index cannot serve on its own —
+-- dropping the plain one turns that lookup into a bitmap scan and a sort.
+
+drop index if exists public.subscriptions_user;

@@ -434,6 +434,49 @@ describe('due entries', () => {
   });
 });
 
+describe('the indexes the schema carries', () => {
+  /**
+   * An index nobody reads still costs every write, and a *missing* one is
+   * invisible until the table is large. Both mistakes are made in migrations,
+   * where nothing else checks them — so the two facts the schema currently
+   * rests on are pinned here, against the same real Postgres the repo's
+   * queries run on.
+   */
+  const indexesOn = async (table: string): Promise<Map<string, string>> => {
+    const rows = (
+      await db.query<{ indexname: string; indexdef: string }>(
+        `select indexname, indexdef from pg_indexes
+         where schemaname = 'public' and tablename = $1`,
+        [table],
+      )
+    ).rows;
+    return new Map(rows.map((row) => [row.indexname, row.indexdef]));
+  };
+
+  it('looks a user\'s subscriptions up by the leftmost column of the unique index', async () => {
+    // This is what makes a second index on (user_id) redundant, and it is a
+    // property of the *unique* index rather than of anything in the app: put
+    // another column first and every "my classes" read loses its index with
+    // no test but this one noticing.
+    const definition = (await indexesOn('subscriptions')).get('subscriptions_unique_class');
+    expect(definition).toMatch(/\(user_id[,)]/);
+  });
+
+  it('carries no second index on subscriptions (user_id)', async () => {
+    const names = [...(await indexesOn('subscriptions')).keys()].sort();
+    expect(names).toEqual(['subscriptions_pkey', 'subscriptions_unique_class']);
+  });
+
+  it('keeps both release_at indexes on due_entries, which are not the same', async () => {
+    // The partial one covers unclaimed rows; the plain one is what the
+    // watcher's "unclaimed *or* expired claim" lookup falls back on. Dropping
+    // the plain one as a lookalike turns that into a bitmap scan and a sort.
+    const names = [...(await indexesOn('due_entries')).keys()];
+    expect(names).toContain('due_entries_release');
+    expect(names).toContain('due_entries_unclaimed_release');
+  });
+});
+
 describe('booking history', () => {
   const attempt = (atMs: number, subscriptionId: string | null, outcome = 'booked') => ({
     atMs,
