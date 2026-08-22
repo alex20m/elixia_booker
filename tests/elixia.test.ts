@@ -457,6 +457,21 @@ describe('ElixiaClient.listCenters / listClasses', () => {
     });
   });
 
+  it('reads the schedule with caching off, so a centre added today shows up today', async () => {
+    // The chooser's freshness is entirely this flag's doing. A cached page
+    // would keep offering last week's centres and timetable — and, worse,
+    // would keep *hiding* a class whose booking window has just opened, which
+    // is the one moment the booking engine reads this same page.
+    const inits: RequestInit[] = [];
+    const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      inits.push(init ?? {});
+      return new Response(pageHtml(unfilteredFixture()), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await new ElixiaClient({ fetchImpl, baseUrl: BASE }).listCenters(tokens);
+    expect(inits.map((i) => i.cache)).toEqual(['no-store']);
+  });
+
   it('says which centre was unknown rather than returning an empty timetable', async () => {
     // An empty list would read as "this centre has no classes", sending the
     // user looking for a fault at the gym rather than at the name.

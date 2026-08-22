@@ -684,6 +684,12 @@ export class ElixiaClient implements BookingBackend {
         accept: 'text/html',
         referer: `${this.baseUrl}${ENDPOINTS.schedule}`,
       },
+      // Explicit rather than relying on the framework's current default. Every
+      // reader of this page wants *now*: the chooser would otherwise offer a
+      // stale timetable, and the booking engine reads the same page at T-0 to
+      // find a class that appears only at the instant its window opens — a
+      // cached copy there would miss the booking entirely.
+      cache: 'no-store',
     });
     if (!response.ok) {
       throw new Error(`Elixia schedule: HTTP ${response.status} fetching ${url}`);
