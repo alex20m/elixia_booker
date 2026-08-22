@@ -61,6 +61,10 @@ cookie code.
   that lives only in the app's environment, never in the database. A database
   dump is inert without it.
 - **Elixia session tokens** — sealed in the same record.
+- **Where you last chose a class from** — country, city and centre, kept in
+  plain text so the chooser can start there next time. Not the class: that is
+  the decision being made each time, and a prefilled one is a subscription
+  nobody meant to create.
 
 Keeping the gym password is a deliberate trade-off, not laziness: the bot runs
 unattended for weeks, and re-authenticating is the only way to survive a session
