@@ -3,8 +3,8 @@
 -- ---------------------------------------------------------------------------
 --
 -- Two changes, both additive, because this migration runs during the Vercel
--- build while the *previous* deployment is still serving requests (see
--- SETUP.md). Every statement here has to leave that older code working:
+-- build while the *previous* deployment is still serving requests. Every
+-- statement here has to leave that older code working:
 --
 --   * `notify_channel` and `notify_email` are new columns with a default and a
 --     null, so the old INSERT — which names neither — still succeeds, and the

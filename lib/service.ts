@@ -165,7 +165,7 @@ export async function startTelegramLink(
   if (!config.telegramBotUsername) {
     throw new ServiceError(
       'This deployment has no Telegram bot configured. Set TELEGRAM_BOT_USERNAME, ' +
-        'TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET — see SETUP.md.',
+        'TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET.',
       500,
     );
   }

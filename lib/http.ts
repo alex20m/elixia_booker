@@ -128,7 +128,7 @@ export function assertCronAuthorised(request: Request, secret = process.env.CRON
  * This is the app's only route that answers a caller with no session, so the
  * secret is all there is. Telegram attaches it to every update as
  * `X-Telegram-Bot-Api-Secret-Token`, having been given it once at `setWebhook`
- * time — see SETUP.md.
+ * time.
  *
  * Checked before the body is read, let alone parsed or looked up, so an
  * unauthorised caller costs nothing and learns nothing. A deployment that

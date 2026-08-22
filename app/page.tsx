@@ -10,7 +10,7 @@ export default function Page() {
         <h1>Elixia Booker</h1>
         <div className="banner banner-err">
           Neon Auth is not configured. Set <code>NEON_AUTH_BASE_URL</code> and{' '}
-          <code>NEON_AUTH_COOKIE_SECRET</code>, then reload. See <code>SETUP.md</code>.
+          <code>NEON_AUTH_COOKIE_SECRET</code>, then reload.
         </div>
       </>
     );
