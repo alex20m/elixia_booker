@@ -23,7 +23,15 @@ import { DuplicateSubscriptionError } from './db/repo';
 import { releasesFor, releasesInRange } from './planner';
 import { executeBooking, describeReport } from './booking';
 import { Logger } from './logger';
-import { notifyChat } from './notify';
+import { channelFor, notifyUser } from './notify';
+import {
+  LINK_TOKEN_TTL_MS,
+  TOKEN_PATTERN,
+  hashLinkToken,
+  isValidChatId,
+  newLinkToken,
+  telegramDeepLink,
+} from './telegramLink';
 import { DEFAULT_TIMINGS } from './config';
 import { needsRefresh } from './tokens';
 import { UnknownCenterError, WEEKDAYS } from './types';
@@ -34,6 +42,7 @@ import type {
   CenterOption,
   ClassOption,
   DueEntry,
+  NotifyChannel,
   Profile,
   SealedElixiaSecret,
   StoredTokens,
@@ -80,18 +89,170 @@ export class ServiceError extends Error {
 export async function getOrCreateProfile(
   config: AppConfig,
   userId: string,
+  /**
+   * The address this account signed in with, when the caller has a session to
+   * hand. It is what makes email a zero-setup default: a user is reachable
+   * from their first request, before they have opened Settings — which matters
+   * most for the one alert they cannot afford to miss, that booking has
+   * stopped because their gym credentials expired.
+   */
+  email?: string,
 ): Promise<Profile> {
   const existing = await config.repo.getProfile(userId);
-  if (existing) return existing;
+  if (existing) {
+    // Backfill, never overwrite: a profile that predates this field has
+    // nowhere to send, but one whose owner chose a different address chose it
+    // deliberately, and signing in must not undo that.
+    if (!email || existing.notifyEmail) return existing;
+
+    const filled: Profile = { ...existing, notifyEmail: email };
+    await config.repo.upsertProfile(filled);
+    return filled;
+  }
 
   const profile: Profile = {
     id: userId,
     bookingWindowDays: config.defaultBookingWindowDays,
     timeZone: config.defaultTimeZone,
+    notifyChannel: 'email',
+    ...(email ? { notifyEmail: email } : {}),
     elixiaStatus: 'unlinked',
   };
   await config.repo.upsertProfile(profile);
   return profile;
+}
+
+// --- notification channels -------------------------------------------------
+
+const NOTIFY_CHANNELS: readonly NotifyChannel[] = ['email', 'telegram', 'none'];
+
+/**
+ * Deliberately permissive: the authority on whether an address works is the
+ * mail that reaches it, and a stricter pattern rejects real addresses. This
+ * only catches what is plainly not one, so nobody saves a typo and waits for
+ * alerts that were never deliverable.
+ */
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EMAIL_MAX_CHARS = 254;
+
+/**
+ * Whether this deployment can offer the one-tap connect flow.
+ *
+ * All three are needed and each fails differently without the others: no
+ * username and there is no link to send anyone to, no token and nothing can be
+ * sent, no webhook secret and the endpoint that learns the chat id refuses
+ * every caller. Where it is false the UI falls back to asking for a chat id by
+ * hand, which is how deployments configured before any of this still work.
+ */
+export function telegramConnectConfigured(config: AppConfig): boolean {
+  return Boolean(
+    config.telegramBotToken && config.telegramBotUsername && config.telegramWebhookSecret,
+  );
+}
+
+/**
+ * Begin connecting a Telegram chat: mint a token, remember its hash, and hand
+ * back the deep link that carries it.
+ *
+ * The token travels to Telegram and comes back through the webhook, which is
+ * what ties an anonymous `/start` to this account — see lib/telegramLink.ts.
+ */
+export async function startTelegramLink(
+  config: AppConfig,
+  profile: Profile,
+  nowMs: number,
+): Promise<{ url: string; expiresAtMs: number }> {
+  if (!config.telegramBotUsername) {
+    throw new ServiceError(
+      'This deployment has no Telegram bot configured. Set TELEGRAM_BOT_USERNAME, ' +
+        'TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET — see SETUP.md.',
+      500,
+    );
+  }
+
+  const token = newLinkToken();
+  const expiresAtMs = nowMs + LINK_TOKEN_TTL_MS;
+  await config.repo.createTelegramLink(profile.id, hashLinkToken(token), expiresAtMs, nowMs);
+
+  return { url: telegramDeepLink(config.telegramBotUsername, token), expiresAtMs };
+}
+
+/**
+ * Finish connecting: spend the token and bind the chat that presented it.
+ *
+ * Called from the public webhook, so it treats every input as hostile and
+ * answers with the same 'expired' for an unknown token, a spent one, an
+ * expired one and a malformed one. Distinguishing them would tell a caller
+ * probing the endpoint which of its guesses had once been real.
+ *
+ * Connecting also switches the user to Telegram, because tapping Connect is
+ * the choice — asking them to come back to Settings and pick the channel again
+ * would leave the common case one silent step short of working.
+ */
+export async function completeTelegramLink(
+  config: AppConfig,
+  token: string,
+  chatId: string,
+  nowMs: number,
+): Promise<'linked' | 'expired'> {
+  if (!TOKEN_PATTERN.test(token)) return 'expired';
+
+  const userId = await config.repo.claimTelegramLink(hashLinkToken(token), nowMs);
+  if (!userId) return 'expired';
+
+  const profile = await config.repo.getProfile(userId);
+  if (!profile) return 'expired';
+
+  await config.repo.upsertProfile({
+    ...profile,
+    telegramChatId: chatId,
+    notifyChannel: 'telegram',
+  });
+  return 'linked';
+}
+
+/**
+ * Tell a user something, and write down when that did not happen.
+ *
+ * The send's result used to be discarded. That made every silent failure mode
+ * indistinguishable from "nothing to report": a revoked bot token, a user who
+ * blocked the bot, an unverified sender domain — each stops every alert
+ * permanently, and the first one anybody would have missed is the alert saying
+ * booking itself had stopped. The send stays best-effort, because the booking
+ * it describes has already happened; what changes is that the reason survives
+ * in the log.
+ */
+async function announce(
+  config: AppConfig,
+  profile: Profile,
+  logger: Logger,
+  text: string,
+): Promise<void> {
+  const result = await notifyUser(config, profile, text);
+  if (result.sent) return;
+
+  logger.log('notify.unsent', {
+    userId: profile.id,
+    channel: channelFor(profile),
+    reason: result.reason ?? 'unknown',
+  });
+}
+
+/**
+ * Forget a connected chat.
+ *
+ * Someone on Telegram who disconnects is moved to email rather than left on a
+ * channel with nowhere to send: the alternative is a user who believes they
+ * are covered and hears nothing.
+ */
+export async function disconnectTelegram(config: AppConfig, profile: Profile): Promise<Profile> {
+  const updated: Profile = {
+    ...profile,
+    telegramChatId: undefined,
+    ...(channelFor(profile) === 'telegram' ? { notifyChannel: 'email' as const } : {}),
+  };
+  await config.repo.upsertProfile(updated);
+  return updated;
 }
 
 // --- linking the Elixia account --------------------------------------------
@@ -286,10 +447,17 @@ export interface DashboardView {
   account: {
     bookingWindowDays: number;
     timeZone: string;
+    notifyChannel: NotifyChannel;
+    notifyEmail: string;
     telegramChatId: string;
     elixiaEmail: string;
     elixiaStatus: Profile['elixiaStatus'];
   };
+  /**
+   * Whether this deployment can offer the one-tap connect flow. False falls
+   * the UI back to asking for a chat id by hand.
+   */
+  telegramConnect: boolean;
   subscriptions: Array<Subscription & { nextReleaseAt: string | null }>;
   history: BookingHistoryEntry[];
   dryRun: boolean;
@@ -310,6 +478,8 @@ export async function buildDashboard(
     account: {
       bookingWindowDays: profile.bookingWindowDays,
       timeZone: profile.timeZone,
+      notifyChannel: channelFor(profile),
+      notifyEmail: profile.notifyEmail ?? '',
       telegramChatId: profile.telegramChatId ?? '',
       elixiaEmail: profile.elixiaEmail ?? '',
       elixiaStatus: profile.elixiaStatus,
@@ -322,6 +492,7 @@ export async function buildDashboard(
       ).find((r) => r.releaseEpochMs > nowMs);
       return { ...s, nextReleaseAt: next ? new Date(next.releaseEpochMs).toISOString() : null };
     }),
+    telegramConnect: telegramConnectConfigured(config),
     history: await config.repo.listHistory(profile.id),
     dryRun: config.dryRun,
     apiDiscovered: API_DISCOVERED || config.mock,
@@ -425,7 +596,13 @@ export async function mutateSubscription(
 export async function updateSettings(
   config: AppConfig,
   profile: Profile,
-  input: { bookingWindowDays?: unknown; timeZone?: unknown; telegramChatId?: unknown },
+  input: {
+    bookingWindowDays?: unknown;
+    timeZone?: unknown;
+    notifyChannel?: unknown;
+    notifyEmail?: unknown;
+    telegramChatId?: unknown;
+  },
   nowMs: number,
 ): Promise<Profile> {
   const bookingWindowDays = Number(input.bookingWindowDays);
@@ -440,11 +617,69 @@ export async function updateSettings(
     throw new ServiceError(`Not a valid timezone: ${timeZone}`, 400);
   }
 
-  const telegramChatId = String(input.telegramChatId ?? '').trim();
+  // Throughout: a field the request does not carry means "not part of this
+  // form", never "reset it". A caller that sends only a booking window must
+  // not thereby move a Telegram user onto email, wipe their address, or
+  // disconnect their chat — and a settings form is free to grow or shrink
+  // without every omission becoming a silent write.
+  let notifyChannel = channelFor(profile);
+  if (input.notifyChannel !== undefined) {
+    notifyChannel = String(input.notifyChannel).trim() as NotifyChannel;
+    if (!NOTIFY_CHANNELS.includes(notifyChannel)) {
+      throw new ServiceError(`Not a notification channel: ${notifyChannel}`, 400);
+    }
+  }
+
+  let notifyEmail = profile.notifyEmail;
+  if (input.notifyEmail !== undefined) {
+    const raw = String(input.notifyEmail).trim();
+    if (raw && (raw.length > EMAIL_MAX_CHARS || !EMAIL_PATTERN.test(raw))) {
+      throw new ServiceError('That does not look like an email address', 400);
+    }
+    notifyEmail = raw || undefined;
+  }
+
+  // Checked against the values that will actually be stored, so clearing an
+  // address while on email is refused even though each half looks fine alone.
+  // Accepting it would leave someone believing they are covered while every
+  // alert is dropped for want of anywhere to send it.
+  //
+  // Only when the request actually concerns notifications, though: a profile
+  // that arrived in this state — created before there was an address to store,
+  // say — must not have its timezone save rejected over a field the user did
+  // not touch and cannot see from where they are standing.
+  const touchesNotifications =
+    input.notifyChannel !== undefined || input.notifyEmail !== undefined;
+  if (touchesNotifications && notifyChannel === 'email' && !notifyEmail) {
+    throw new ServiceError(
+      'Add an email address to send notifications to, or choose another channel',
+      400,
+    );
+  }
+
+  // The chat id belongs to the connect flow, but a deployment without the
+  // webhook still needs the manual field to work, blank included.
+  let telegramChatId = profile.telegramChatId;
+  if (input.telegramChatId !== undefined) {
+    const raw = String(input.telegramChatId).trim();
+    if (!raw) {
+      telegramChatId = undefined;
+    } else if (!isValidChatId(raw)) {
+      throw new ServiceError(
+        'A Telegram chat ID is a number, not a username — connect the chat instead',
+        400,
+      );
+    } else {
+      telegramChatId = raw;
+    }
+  }
+
   const updated: Profile = {
     ...profile,
     bookingWindowDays,
     timeZone,
+    notifyChannel,
+    ...(notifyEmail ? { notifyEmail } : { notifyEmail: undefined }),
     ...(telegramChatId ? { telegramChatId } : { telegramChatId: undefined }),
   };
 
@@ -616,9 +851,10 @@ export async function reviewListedClasses(
         subscriptionId: subscription.id,
         className: subscription.className,
       });
-      await notifyChat(
-        config.telegramBotToken,
-        profile.telegramChatId,
+      await announce(
+        config,
+        profile,
+        logger,
         `⚠️ ${subscription.className} · ${subscription.weekday} ${subscription.startTime} ` +
           `at ${subscription.center} is no longer on Elixia's schedule, so it cannot be booked. ` +
           `It may have been renamed, moved or dropped — check the timetable and update it here.`,
@@ -728,9 +964,10 @@ export async function runDueBookings(
         userId,
         error: err instanceof DecryptionError ? 'decryption failed' : (err as Error).message,
       });
-      await notifyChat(
-        config.telegramBotToken,
-        profile.telegramChatId,
+      await announce(
+        config,
+        profile,
+        logger,
         '🚨 Elixia rejected your saved credentials and booking is paused. Re-link your account to resume.',
       );
       continue;
@@ -779,7 +1016,7 @@ export async function runDueBookings(
         dryRun: report.dryRun,
       });
 
-      await notifyChat(config.telegramBotToken, profile.telegramChatId, describeReport(report));
+      await announce(config, profile, logger, describeReport(report));
       handled += 1;
     }
   }

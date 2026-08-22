@@ -26,13 +26,14 @@ import type {
   BookingHistoryEntry,
   DueEntry,
   ElixiaStatus,
+  NotifyChannel,
   Profile,
   Subscription,
   Weekday,
 } from '../types';
 
 const PROFILE_COLUMNS = `
-  id, booking_window_days, time_zone, telegram_chat_id,
+  id, booking_window_days, time_zone, notify_channel, notify_email, telegram_chat_id,
   elixia_email, elixia_secret, elixia_status, elixia_checked_at, default_center
 `;
 
@@ -48,6 +49,8 @@ const toProfile = (row: SqlRow): Profile => ({
   id: str(row.id),
   bookingWindowDays: num(row.booking_window_days),
   timeZone: str(row.time_zone),
+  ...(row.notify_channel ? { notifyChannel: str(row.notify_channel) as NotifyChannel } : {}),
+  ...(row.notify_email ? { notifyEmail: str(row.notify_email) } : {}),
   ...(row.telegram_chat_id ? { telegramChatId: str(row.telegram_chat_id) } : {}),
   ...(row.elixia_email ? { elixiaEmail: str(row.elixia_email) } : {}),
   ...(row.elixia_secret ? { elixiaSecret: str(row.elixia_secret) } : {}),
@@ -132,13 +135,15 @@ export function createNeonRepo(sql: Sql): Repo {
       // sitting in the row it was supposed to erase.
       await sql.query(
         `insert into public.profiles (
-           id, booking_window_days, time_zone, telegram_chat_id,
+           id, booking_window_days, time_zone, notify_channel, notify_email, telegram_chat_id,
            elixia_email, elixia_secret, elixia_status, elixia_checked_at, default_center
          )
-         values ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::timestamptz, $11)
          on conflict (id) do update set
            booking_window_days = excluded.booking_window_days,
            time_zone = excluded.time_zone,
+           notify_channel = excluded.notify_channel,
+           notify_email = excluded.notify_email,
            telegram_chat_id = excluded.telegram_chat_id,
            elixia_email = excluded.elixia_email,
            elixia_secret = excluded.elixia_secret,
@@ -149,6 +154,11 @@ export function createNeonRepo(sql: Sql): Repo {
           profile.id,
           profile.bookingWindowDays,
           profile.timeZone,
+          // The column is NOT NULL with its own default, so an unset channel
+          // is written as the default rather than left to the upsert's
+          // `excluded` value, which would be null on the update path.
+          profile.notifyChannel ?? 'email',
+          profile.notifyEmail ?? null,
           profile.telegramChatId ?? null,
           profile.elixiaEmail ?? null,
           profile.elixiaSecret ?? null,
@@ -318,6 +328,42 @@ export function createNeonRepo(sql: Sql): Repo {
         [iso(beforeMs)],
       );
       return rows.length;
+    },
+
+    async createTelegramLink(userId, tokenHash, expiresAtMs, nowMs) {
+      // Both statements in one transaction: between the delete and the insert
+      // this user has no pending link, and a reader that saw that gap would
+      // conclude a connect attempt that is actually in progress had failed.
+      // The sweep of expired rows rides along, so nothing else has to own it.
+      await sql.transaction([
+        {
+          text: `delete from public.telegram_link_tokens
+                  where user_id = $1 or expires_at <= $2::timestamptz`,
+          params: [userId, iso(nowMs)],
+        },
+        {
+          text: `insert into public.telegram_link_tokens (token_hash, user_id, expires_at)
+                 values ($1, $2, $3::timestamptz)`,
+          params: [tokenHash, userId, iso(expiresAtMs)],
+        },
+      ]);
+    },
+
+    async claimTelegramLink(tokenHash, nowMs) {
+      // One statement, so two requests presenting the same token cannot both
+      // be handed the account: exactly one DELETE returns the row. Expiry is
+      // part of the predicate rather than a check afterwards, but the row goes
+      // either way — a token that has been presented is spent.
+      const rows = await sql.query(
+        `delete from public.telegram_link_tokens
+          where token_hash = $1
+          returning user_id, expires_at`,
+        [tokenHash],
+      );
+
+      const row = rows[0];
+      if (!row) return null;
+      return toMs(row.expires_at) > nowMs ? str(row.user_id) : null;
     },
 
     async appendHistory(userId, entry) {

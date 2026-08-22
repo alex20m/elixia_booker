@@ -92,6 +92,8 @@ describe('profiles', () => {
       profile(ALICE, {
         bookingWindowDays: 14,
         timeZone: 'Europe/Stockholm',
+        notifyChannel: 'telegram',
+        notifyEmail: 'alerts@example.com',
         telegramChatId: '12345',
         elixiaEmail: 'gym@example.com',
         elixiaSecret: 'sealed-blob',
@@ -105,6 +107,8 @@ describe('profiles', () => {
       id: ALICE,
       bookingWindowDays: 14,
       timeZone: 'Europe/Stockholm',
+      notifyChannel: 'telegram',
+      notifyEmail: 'alerts@example.com',
       telegramChatId: '12345',
       elixiaEmail: 'gym@example.com',
       elixiaSecret: 'sealed-blob',
@@ -546,5 +550,77 @@ describe('booking history', () => {
     const history = await repo.listHistory(ALICE);
     expect(history).toHaveLength(1);
     expect(history[0]?.subscriptionId).toBeNull();
+  });
+});
+
+/**
+ * Pending Telegram links.
+ *
+ * These rows are what make the connect flow safe to expose on a public
+ * endpoint, so the properties asserted here are the security ones: a token
+ * works once, stops working when it expires, and only ever names the account
+ * it was minted for.
+ */
+describe('telegram link tokens', () => {
+  const HASH = 'f'.repeat(64);
+  const OTHER = 'e'.repeat(64);
+  const NOW = Date.UTC(2026, 5, 1, 12, 0);
+  const SOON = NOW + 10 * 60_000;
+
+  it('hands the waiting account back to whoever presents the token', async () => {
+    await repo.createTelegramLink(ALICE, HASH, SOON, NOW);
+
+    expect(await repo.claimTelegramLink(HASH, NOW)).toBe(ALICE);
+  });
+
+  it('lets a token be claimed only once, so a leaked link cannot be reused', async () => {
+    await repo.createTelegramLink(ALICE, HASH, SOON, NOW);
+
+    expect(await repo.claimTelegramLink(HASH, NOW)).toBe(ALICE);
+    expect(await repo.claimTelegramLink(HASH, NOW)).toBeNull();
+  });
+
+  it('refuses a token that has expired, however valid it once was', async () => {
+    await repo.createTelegramLink(ALICE, HASH, SOON, NOW);
+
+    expect(await repo.claimTelegramLink(HASH, SOON + 1)).toBeNull();
+  });
+
+  it('refuses a token nobody minted', async () => {
+    expect(await repo.claimTelegramLink(HASH, NOW)).toBeNull();
+  });
+
+  it('names the account the token was minted for, not some other one', async () => {
+    await repo.createTelegramLink(BOB, HASH, SOON, NOW);
+
+    expect(await repo.claimTelegramLink(HASH, NOW)).toBe(BOB);
+  });
+
+  it('invalidates a user’s earlier link when they start connecting again', async () => {
+    // Otherwise every abandoned attempt leaves a working token behind, and the
+    // window in which one can be used stops being the ten minutes advertised.
+    await repo.createTelegramLink(ALICE, HASH, SOON, NOW);
+    await repo.createTelegramLink(ALICE, OTHER, SOON, NOW);
+
+    expect(await repo.claimTelegramLink(HASH, NOW)).toBeNull();
+    expect(await repo.claimTelegramLink(OTHER, NOW)).toBe(ALICE);
+  });
+
+  it('sweeps links that expired long ago, so abandoned attempts do not pile up', async () => {
+    await repo.createTelegramLink(ALICE, HASH, SOON, NOW);
+
+    // Bob connecting much later is what triggers the sweep; Alice's token is
+    // by then long dead and its row has no reason to survive.
+    await repo.createTelegramLink(BOB, OTHER, SOON + 60 * 60_000, SOON + 1);
+
+    expect(await repo.claimTelegramLink(HASH, NOW)).toBeNull();
+  });
+
+  it('leaves another user’s pending link alone', async () => {
+    await repo.createTelegramLink(ALICE, HASH, SOON, NOW);
+    await repo.createTelegramLink(BOB, OTHER, SOON, NOW);
+
+    expect(await repo.claimTelegramLink(HASH, NOW)).toBe(ALICE);
+    expect(await repo.claimTelegramLink(OTHER, NOW)).toBe(BOB);
   });
 });

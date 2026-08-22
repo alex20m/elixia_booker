@@ -83,6 +83,37 @@ export interface Repo {
   /** Housekeeping: drop entries whose release is long past. */
   pruneDueEntries(beforeMs: number): Promise<number>;
 
+  /**
+   * Begin a Telegram connect attempt, replacing whatever this user had pending.
+   *
+   * Takes the *hash* of the token, never the token: see lib/telegramLink.ts.
+   * Replacing rather than accumulating is what keeps a token's usable life to
+   * the advertised window — an abandoned attempt must not leave a working link
+   * behind it. Expired rows for *other* users are swept at the same time, so
+   * abandoned attempts do not accumulate without anything owning their removal.
+   *
+   * `nowMs` comes from the caller rather than from the database's `now()`, the
+   * same way `claimDue` takes it: a repo that reads two different clocks — the
+   * caller's on one operation and the server's on another — behaves one way
+   * under test and another in production, and the disagreement shows up as
+   * rows vanishing early.
+   */
+  createTelegramLink(
+    userId: string,
+    tokenHash: string,
+    expiresAtMs: number,
+    nowMs: number,
+  ): Promise<void>;
+  /**
+   * Consume a pending link, returning the user it belonged to, or null if the
+   * token is unknown, already used, or expired.
+   *
+   * Single-use has to hold against two requests arriving together — the
+   * webhook is public and a retry is one network hiccup away — so the read and
+   * the delete are one statement, not a check followed by a write.
+   */
+  claimTelegramLink(tokenHash: string, nowMs: number): Promise<string | null>;
+
   appendHistory(userId: string, entry: BookingHistoryEntry): Promise<void>;
   listHistory(userId: string, limit?: number): Promise<BookingHistoryEntry[]>;
 }
