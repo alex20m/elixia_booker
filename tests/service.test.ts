@@ -734,7 +734,9 @@ describe('classes that Elixia withdraws', () => {
 
   it('tells the owner once, not every night', async () => {
     const linked = await linkedProfile();
-    await repo.upsertProfile({ ...linked, telegramChatId: '4242' });
+    // The channel is explicit now: holding a chat id no longer implies alerts
+    // go to Telegram, since every profile also has an email address.
+    await repo.upsertProfile({ ...linked, telegramChatId: '4242', notifyChannel: 'telegram' });
     const withChat = (await repo.getProfile(USER_ID))!;
     await addSubscription(config, withChat, BODYPUMP, nowMs);
 

@@ -339,16 +339,91 @@ history if you want to know it is healthy.
 
 ---
 
-## 9. Telegram notifications (optional)
+## 9. Notifications
 
-1. Message [@BotFather](https://t.me/BotFather) → `/newbot` → copy the token.
-2. Add `TELEGRAM_BOT_TOKEN` to Vercel and redeploy.
-3. Message your new bot, then open
-   `https://api.telegram.org/bot<TOKEN>/getUpdates` and copy `message.chat.id`.
-4. Paste that chat ID into **Settings** in the app.
+Each user picks their channel in **Settings**: **Email** (the default),
+**Telegram**, or **Off**. Neither is required — without any of it the app still
+books and logs, it just can't tell anyone about it.
 
-One bot serves everyone; each user supplies their own chat ID. Without it the
-app still books and logs — it just can't tell you about it.
+### 9a. Email — the default (recommended)
+
+Email is the default because it needs nothing from the user: the address comes
+from the account they signed up with, so a new user is reachable before they
+have opened Settings. That matters most for the one alert nobody can afford to
+miss — that booking has *stopped*, because their Elixia session expired.
+
+You need a Resend API key and a verified sender domain:
+
+```bash
+# 1. Sign up at resend.com and mint an API key (browser — see "by hand" below).
+# 2. Verify the domain you will send from, which means adding the DNS records
+#    Resend gives you. On Cloudflare, with the API token from step 8:
+ZONE=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  "https://api.cloudflare.com/client/v4/zones?name=$DOMAIN" | jq -r '.result[0].id')
+
+# Repeat for each record Resend lists (SPF TXT, DKIM TXT, and its MX):
+curl -s -X POST -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  -H 'content-type: application/json' \
+  "https://api.cloudflare.com/client/v4/zones/$ZONE/dns_records" \
+  -d '{"type":"TXT","name":"resend._domainkey","content":"<value from Resend>"}'
+
+# 3. Tell the app:
+add RESEND_API_KEY    "re_..."                       # step 5's helper
+add NOTIFY_FROM_EMAIL "Elixia Booker <bot@$DOMAIN>"
+```
+
+Then **redeploy** — environment variables only reach a running deployment when
+one is built after they are set.
+
+> **The sender domain is not optional.** Resend's test sender only delivers to
+> your own account address, so without a verified domain every other user's
+> alerts silently fail. Failures are logged as `notify.unsent` with a reason,
+> which is where to look when someone reports hearing nothing.
+
+### 9b. Telegram — one tap, if you want your phone to buzz
+
+Email arrives when it arrives; Telegram buzzes immediately. Setting it up costs
+three variables and a webhook:
+
+1. Message [@BotFather](https://t.me/BotFather) → `/newbot` → copy the token
+   and note the bot's `@username`.
+2. Generate a webhook secret and add all three:
+
+   ```bash
+   TELEGRAM_WEBHOOK_SECRET=$(openssl rand -hex 32)
+
+   add TELEGRAM_BOT_TOKEN      "<token from BotFather>"
+   add TELEGRAM_BOT_USERNAME   "elixia_booker_bot"     # no @
+   add TELEGRAM_WEBHOOK_SECRET "$TELEGRAM_WEBHOOK_SECRET"
+   ```
+
+3. Redeploy, then point Telegram at the app — **once**:
+
+   ```bash
+   curl -s "https://api.telegram.org/bot<TOKEN>/setWebhook" \
+     -d "url=https://<your-app>/api/telegram/webhook" \
+     -d "secret_token=$TELEGRAM_WEBHOOK_SECRET"
+   # {"ok":true,"result":true,"description":"Webhook was set"}
+
+   curl -s "https://api.telegram.org/bot<TOKEN>/getWebhookInfo"
+   # check `pending_update_count` and `last_error_message`
+   ```
+
+From then on a user picks **Telegram** in Settings, taps **Connect Telegram**,
+and taps **Start** in the app that opens. That's it — no chat IDs, no JSON.
+
+**Why the secret matters.** `/api/telegram/webhook` is the only route in the app
+that answers a caller with no session, because Telegram cannot have one. The
+secret is what separates a real update from anyone else's POST: the app rejects
+every request whose `X-Telegram-Bot-Api-Secret-Token` header doesn't match, and
+a deployment that never set one refuses *everything* rather than falling open.
+Rotating it means setting the variable, redeploying, and re-running `setWebhook`
+— in that order, or updates bounce in between.
+
+**Without a webhook**, Settings falls back to asking for a chat ID by hand
+(find it via `https://api.telegram.org/bot<TOKEN>/getUpdates` after messaging
+the bot). That URL contains your bot token, so don't hand it to anyone else —
+which is exactly why the connect flow exists.
 
 ---
 
@@ -433,8 +508,10 @@ Everything else is a command. These are gated on a human by the provider:
 - **Accepting a Marketplace integration's terms**, if the CLI asks.
 - **Registering the domain and pointing its nameservers at Cloudflare**, for a
   custom domain.
-- **Creating the Telegram bot** — BotFather is a chat, and your chat ID exists
-  only once you have messaged it.
+- **Creating the Telegram bot** — BotFather is a chat. (Your users' chat IDs
+  are *not* manual any more: they tap Connect in Settings.)
+- **Minting the Resend API key**, and confirming the sender domain once its DNS
+  records are in place — the records themselves are a command, above.
 - **Linking your gym account** — done in the app, once, by whoever owns it.
 
 ---
@@ -453,6 +530,11 @@ Everything else is a command. These are gated on a human by the provider:
 - [ ] `vercel env pull .env.local` works and `npm run dev` comes up configured
 - [ ] `APP_URL` and `CRON_SECRET` set on GitHub, **the watcher verified by a
       manual run**
+- [ ] Notifications reach you: `RESEND_API_KEY` and `NOTIFY_FROM_EMAIL` set with
+      the sender domain verified, or Telegram connected — and a booking (or a
+      `DRY_RUN` one) actually delivered
+- [ ] If using Telegram: `setWebhook` run against the deployed URL, and
+      `getWebhookInfo` showing no `last_error_message`
 - [ ] **Pull request** and **Main** green, Vercel's Git deploys left enabled
 - [ ] Account created, gym account linked, one class added
 - [ ] Booking window matches your tier — 7 normal, 14 Premium. The app defaults

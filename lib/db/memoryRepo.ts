@@ -26,6 +26,7 @@ export function createMemoryRepo(): MemoryRepo {
   const subscriptions = new Map<string, Subscription>();
   const dueEntries: StoredDueEntry[] = [];
   const history = new Map<string, BookingHistoryEntry[]>();
+  const telegramLinks = new Map<string, { userId: string; expiresAtMs: number }>();
   let nextId = 1;
 
   const duplicateKey = (s: {
@@ -48,6 +49,24 @@ export function createMemoryRepo(): MemoryRepo {
 
     async listLinkedProfiles() {
       return [...profiles.values()].filter((p) => p.elixiaStatus === 'ok');
+    },
+
+    async createTelegramLink(userId, tokenHash, expiresAtMs, nowMs) {
+      // One pending link per user, so an abandoned attempt cannot leave a
+      // second working token behind it; expired rows go at the same time.
+      for (const [hash, link] of telegramLinks) {
+        if (link.userId === userId || link.expiresAtMs <= nowMs) telegramLinks.delete(hash);
+      }
+      telegramLinks.set(tokenHash, { userId, expiresAtMs });
+    },
+
+    async claimTelegramLink(tokenHash, nowMs) {
+      const link = telegramLinks.get(tokenHash);
+      if (!link) return null;
+      // Deleted whether or not it was still valid: a token that has been
+      // presented is spent either way.
+      telegramLinks.delete(tokenHash);
+      return link.expiresAtMs > nowMs ? link.userId : null;
     },
 
     async listSubscriptions(userId) {

@@ -54,7 +54,13 @@ export async function requireUser(): Promise<Session> {
   // dashboard warns about it, because that data does not survive.
   const sql = neonSql();
   const config = loadAppConfig(sql ? { repo: createNeonRepo(sql) } : {});
-  const profile = await getOrCreateProfile(config, user.id);
+  // The address comes from the session because it is already verified there,
+  // and because a user who has to type it in before notifications work is a
+  // user whose notifications do not work.
+  const email = typeof (user as { email?: unknown }).email === 'string'
+    ? (user as { email: string }).email
+    : undefined;
+  const profile = await getOrCreateProfile(config, user.id, email);
 
   return { config, profile, nowMs: Date.now() };
 }
@@ -111,6 +117,34 @@ export function assertCronAuthorised(request: Request, secret = process.env.CRON
   const header = request.headers.get('authorization') ?? '';
   const provided = header.startsWith('Bearer ') ? header.slice(7) : '';
 
+  if (!timingSafeEqual(provided, secret)) {
+    throw new ServiceError('Unauthorized', 401);
+  }
+}
+
+/**
+ * Guard the Telegram webhook.
+ *
+ * This is the app's only route that answers a caller with no session, so the
+ * secret is all there is. Telegram attaches it to every update as
+ * `X-Telegram-Bot-Api-Secret-Token`, having been given it once at `setWebhook`
+ * time — see SETUP.md.
+ *
+ * Checked before the body is read, let alone parsed or looked up, so an
+ * unauthorised caller costs nothing and learns nothing. A deployment that
+ * never configured a secret refuses everyone rather than falling open: the
+ * alternative would let anyone bind their own chat to whichever account
+ * happened to be part-way through connecting.
+ */
+export function assertTelegramWebhookAuthorised(
+  request: Request,
+  secret = process.env.TELEGRAM_WEBHOOK_SECRET,
+): void {
+  if (!secret) {
+    throw new ServiceError('TELEGRAM_WEBHOOK_SECRET is not configured on this deployment', 500);
+  }
+
+  const provided = request.headers.get('x-telegram-bot-api-secret-token') ?? '';
   if (!timingSafeEqual(provided, secret)) {
     throw new ServiceError('Unauthorized', 401);
   }

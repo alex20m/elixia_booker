@@ -408,7 +408,20 @@ function ClassList({
   );
 }
 
-function Settings({
+/**
+ * Where a user says how they want to be told about their bookings.
+ *
+ * Email is the default and needs nothing: the address arrives with the
+ * account. Telegram is one tap — the Connect button asks the server for a deep
+ * link and opens it, and the chat id comes back through the webhook, so nobody
+ * has to read one out of a JSON document.
+ *
+ * The manual chat-id field survives for deployments with no webhook
+ * configured, which is the only state in which this form still writes a chat
+ * id itself. Everywhere else it deliberately omits the field, because posting
+ * a blank one would disconnect the chat on every save.
+ */
+export function Settings({
   view,
   refresh,
 }: {
@@ -419,9 +432,43 @@ function Settings({
     String(view.account.bookingWindowDays),
   );
   const [timeZone, setTimeZone] = useState(view.account.timeZone);
+  const [channel, setChannel] = useState(view.account.notifyChannel);
+  const [email, setEmail] = useState(view.account.notifyEmail);
   const [chatId, setChatId] = useState(view.account.telegramChatId);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
+  const [awaitingTap, setAwaitingTap] = useState(false);
+
+  const connected = Boolean(view.account.telegramChatId);
+  // The one-tap flow needs a bot, a webhook and a secret. Without them the old
+  // manual field is the only way Telegram can work at all.
+  const canConnect = view.telegramConnect;
+
+  const connect = async () => {
+    setError("");
+    try {
+      const { url } = await api<{ url: string }>("/api/telegram/link", {
+        method: "POST",
+      });
+      // A new tab, not a redirect: losing the dashboard on the way to Telegram
+      // would mean coming back to a page that has to be found again.
+      window.open(url, "_blank", "noopener,noreferrer");
+      setAwaitingTap(true);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const disconnect = async () => {
+    setError("");
+    try {
+      await api("/api/telegram/link", { method: "DELETE" });
+      setAwaitingTap(false);
+      await refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
 
   return (
     <div className="card">
@@ -447,17 +494,89 @@ function Settings({
           />
         </div>
       </div>
-      <div className="row">
+      <div className="row row-2">
         <div>
-          <label htmlFor="tg">Telegram chat ID (optional)</label>
-          <input
-            id="tg"
-            placeholder="Leave blank for no notifications"
-            value={chatId}
-            onChange={(e) => setChatId(e.target.value)}
-          />
+          <label htmlFor="notify-channel">Notifications</label>
+          <select
+            id="notify-channel"
+            value={channel}
+            onChange={(e) =>
+              setChannel(e.target.value as DashboardView["account"]["notifyChannel"])
+            }
+          >
+            <option value="email">Email</option>
+            <option value="telegram">Telegram</option>
+            <option value="none">Off</option>
+          </select>
         </div>
+        {channel === "email" && (
+          <div>
+            <label htmlFor="notify-email">Email address</label>
+            <input
+              id="notify-email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+          </div>
+        )}
       </div>
+
+      {channel === "telegram" && canConnect && (
+        <div className="row">
+          <div>
+            {connected ? (
+              <p className="hint">
+                Connected to Telegram chat {view.account.telegramChatId}.{" "}
+                <button id="tg-disconnect" className="link" onClick={disconnect}>
+                  Disconnect
+                </button>
+              </p>
+            ) : (
+              <>
+                <button id="tg-connect" onClick={connect}>
+                  Connect Telegram
+                </button>
+                {awaitingTap && (
+                  <p className="hint">
+                    Tap <strong>Start</strong> in Telegram, then{" "}
+                    <button id="tg-check" className="link" onClick={refresh}>
+                      check again
+                    </button>
+                    . The link is good for ten minutes.
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {channel === "telegram" && !canConnect && (
+        <div className="row">
+          <div>
+            <label htmlFor="tg">Telegram chat ID</label>
+            <input
+              id="tg"
+              placeholder="e.g. 123456789"
+              value={chatId}
+              onChange={(e) => setChatId(e.target.value)}
+            />
+            <p className="hint">
+              This deployment has no Telegram webhook configured, so the chat ID
+              has to be entered by hand. See SETUP.md.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {channel === "none" && (
+        <p className="hint">
+          Bookings still run — you just will not be told about them, including
+          when your Elixia session expires and booking stops.
+        </p>
+      )}
+
       {error && <div className="banner banner-err">{error}</div>}
       <button
         id="save-btn"
@@ -470,7 +589,12 @@ function Settings({
               body: JSON.stringify({
                 bookingWindowDays: Number(windowDays),
                 timeZone,
-                telegramChatId: chatId,
+                notifyChannel: channel,
+                notifyEmail: email,
+                // Only where this form owns the value. Sending it when the
+                // connect flow does would post a blank on every save and
+                // disconnect the chat the user just linked.
+                ...(canConnect ? {} : { telegramChatId: chatId }),
               }),
             });
             setSaved(true);

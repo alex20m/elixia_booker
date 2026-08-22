@@ -14,6 +14,21 @@ export interface AppConfig {
   /** base64 32 bytes. Seals stored Elixia credentials. */
   encryptionKey: string;
   telegramBotToken?: string;
+  /**
+   * The bot's @username. Needed only to build the connect deep link — the
+   * token cannot be derived from it, and it is not a secret.
+   */
+  telegramBotUsername?: string;
+  /**
+   * Shared secret Telegram echoes back on every webhook call, and the only
+   * thing separating a real update from anyone else's POST to that public
+   * route. Without it the connect flow stays switched off.
+   */
+  telegramWebhookSecret?: string;
+  /** Resend API key. Email notifications are inert without one. */
+  resendApiKey?: string;
+  /** The verified sender notification email comes from. */
+  notifyFromEmail?: string;
   dryRun: boolean;
   mock: boolean;
   defaultBookingWindowDays: number;
@@ -89,6 +104,14 @@ export function loadAppConfig(options: LoadOptions = {}): AppConfig {
     ...(process.env.TELEGRAM_BOT_TOKEN
       ? { telegramBotToken: process.env.TELEGRAM_BOT_TOKEN }
       : {}),
+    ...(process.env.TELEGRAM_BOT_USERNAME
+      ? { telegramBotUsername: process.env.TELEGRAM_BOT_USERNAME }
+      : {}),
+    ...(process.env.TELEGRAM_WEBHOOK_SECRET
+      ? { telegramWebhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET }
+      : {}),
+    ...(process.env.RESEND_API_KEY ? { resendApiKey: process.env.RESEND_API_KEY } : {}),
+    ...(process.env.NOTIFY_FROM_EMAIL ? { notifyFromEmail: process.env.NOTIFY_FROM_EMAIL } : {}),
     dryRun: flag(process.env.DRY_RUN),
     mock: flag(process.env.MOCK_ELIXIA),
     defaultBookingWindowDays: Number(process.env.DEFAULT_BOOKING_WINDOW_DAYS ?? '7'),

@@ -220,11 +220,41 @@ export interface SealedElixiaSecret {
 /** Whether a user's Elixia account is usable right now. */
 export type ElixiaStatus = 'unlinked' | 'ok' | 'expired';
 
+/**
+ * Where a user's booking alerts go.
+ *
+ * `email` is the default because it is the only one that works without the
+ * user doing anything: the address comes from the account they signed up with.
+ * `telegram` has to be connected first, and until it is there is nowhere to
+ * send. `none` is a real choice, not an absence — someone who never wants to
+ * hear from the bot should be able to say so rather than leave a channel
+ * half-configured and wonder why it is quiet.
+ */
+export type NotifyChannel = 'email' | 'telegram' | 'none';
+
 /** One account, keyed by the Neon Auth user id. */
 export interface Profile {
   id: string;
   bookingWindowDays: number;
   timeZone: string;
+  /**
+   * Absent means the default, `email`. Profiles written before notifications
+   * had a choice have no value stored, and the column's own default makes
+   * every row read back from Postgres explicit — so this is undefined only for
+   * a profile still in memory. Read it through `channelFor`, never directly.
+   */
+  notifyChannel?: NotifyChannel;
+  /**
+   * Where `email` notifications go. Seeded from the Neon Auth session on first
+   * sight, so a new account is reachable before it has opened Settings, and
+   * overridable afterwards — the gym account, the login and the inbox that
+   * should receive alerts are not always the same address.
+   */
+  notifyEmail?: string;
+  /**
+   * The user's own Telegram chat, learned from the connect flow rather than
+   * typed in — see lib/telegramLink.ts for why that distinction matters.
+   */
   telegramChatId?: string;
   /** Shown in the UI so the user can see which gym account is linked. */
   elixiaEmail?: string;
