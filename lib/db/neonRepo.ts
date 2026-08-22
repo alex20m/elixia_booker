@@ -38,7 +38,7 @@ const PROFILE_COLUMNS = `
 
 const SUBSCRIPTION_COLUMNS = `
   id, user_id, class_name, center, weekday, start_time,
-  priority, enabled, booking_window_days, created_at
+  priority, enabled, booking_window_days, unlisted_since, created_at
 `;
 
 const str = (value: unknown): string => String(value);
@@ -67,6 +67,7 @@ const toSubscription = (row: SqlRow): Subscription => ({
   ...(row.booking_window_days !== null && row.booking_window_days !== undefined
     ? { bookingWindowDays: num(row.booking_window_days) }
     : {}),
+  ...(row.unlisted_since ? { unlistedSinceMs: toMs(row.unlisted_since) } : {}),
   createdAtMs: toMs(row.created_at),
 });
 
@@ -216,6 +217,18 @@ export function createNeonRepo(sql: Sql): Repo {
            where user_id = $1 and id = $2::uuid
            returning id`,
           [userId, id, enabled],
+        ),
+      );
+      return rows.length > 0;
+    },
+
+    async setSubscriptionUnlisted(userId, id, atMs) {
+      const rows = await rowsOrNoneForBadId(() =>
+        sql.query(
+          `update public.subscriptions set unlisted_since = $3
+           where user_id = $1 and id = $2::uuid
+           returning id`,
+          [userId, id, atMs === null ? null : new Date(atMs).toISOString()],
         ),
       );
       return rows.length > 0;

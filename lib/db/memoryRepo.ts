@@ -100,6 +100,14 @@ export function createMemoryRepo(): MemoryRepo {
       return true;
     },
 
+    async setSubscriptionUnlisted(userId, id, atMs) {
+      const existing = subscriptions.get(id);
+      if (!existing || existing.userId !== userId) return false;
+      const { unlistedSinceMs: _dropped, ...rest } = existing;
+      subscriptions.set(id, atMs === null ? rest : { ...rest, unlistedSinceMs: atMs });
+      return true;
+    },
+
     async replaceDueEntries(userId, entries) {
       for (let i = dueEntries.length - 1; i >= 0; i--) {
         if (dueEntries[i]!.userId === userId) dueEntries.splice(i, 1);

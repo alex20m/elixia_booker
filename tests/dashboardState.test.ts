@@ -3,6 +3,7 @@ import {
   ApiError,
   apiRequest,
   dashboardScreen,
+  describeUnlisted,
   loadDashboard,
   type DashboardLoad,
 } from '@/lib/dashboardState';
@@ -120,5 +121,25 @@ describe('dashboardScreen', () => {
     expect(
       dashboardScreen({ sessionPending: false, signedIn: true, load: { status: 'ok', view: VIEW } }),
     ).toEqual({ kind: 'dashboard', view: VIEW });
+  });
+});
+
+describe('describeUnlisted', () => {
+  it('says nothing about a class that is still on the schedule', () => {
+    expect(describeUnlisted(undefined)).toBeNull();
+  });
+
+  it('dates the absence, so a holiday week reads differently from a closure', () => {
+    const since = Date.parse('2026-08-18T03:00:00Z');
+    const message = describeUnlisted(since)!;
+
+    expect(message).toContain(new Date(since).toLocaleDateString());
+    expect(message).toMatch(/nothing can be booked/i);
+  });
+
+  it('does not claim the class was deleted, which is more than absence proves', () => {
+    // Elixia not publishing a class is all this app can see. Saying it was
+    // cancelled would be a guess the owner then acts on.
+    expect(describeUnlisted(Date.now())).toMatch(/renamed, moved or dropped/i);
   });
 });

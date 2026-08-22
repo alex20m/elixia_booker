@@ -222,6 +222,17 @@ from the source rather than from the UI: a class Elixia has not published yet
 cannot be offered, and a class dropped from the timetable disappears from the
 chooser while any existing subscription to it keeps failing to resolve.
 
+**And it is what the nightly job checks against.** A class Elixia withdraws
+leaves its subscription behind, and the failure is indistinguishable from an
+unopened window: `resolveClassId` finds nothing, the attempt records
+`too-early`, and it does so every week. So the reindex compares each enabled
+subscription against the published timetable — one read per centre, not per
+class — and records the first moment a class was absent
+(`subscriptions.unlisted_since`), which the dashboard turns into a warning and
+clears as soon as the class is listed again. A centre that cannot be read
+changes nothing: "we could not look" is not "it is gone", and a flag that
+fires wrongly once is a flag nobody reads afterwards.
+
 **The consequence that shaped `booking.ts`.** Because an unopened class is
 absent rather than rejected, "too early" cannot come back from the booking
 call — it shows up as *resolution failing*. So resolving the class id is no
