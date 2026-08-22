@@ -50,14 +50,25 @@ export class ApiError extends Error {
 export type DashboardLoad =
   | { status: 'ok'; view: DashboardView }
   | { status: 'signed-out' }
+  | { status: 'setup' }
   | { status: 'error'; message: string };
 
 /** What the visitor should be looking at. */
 export type Screen =
   | { kind: 'loading' }
   | { kind: 'signed-out' }
+  | { kind: 'setup' }
   | { kind: 'error'; message: string }
   | { kind: 'dashboard'; view: DashboardView };
+
+/**
+ * The status every guarded endpoint answers with until setup is finished.
+ *
+ * A status rather than a flag in the body, because it has to work from *any* of
+ * them: whichever request a half-configured session happens to make first, the
+ * answer routes to the same place.
+ */
+export const SETUP_REQUIRED_STATUS = 428;
 
 /**
  * Call one of this app's own JSON endpoints.
@@ -96,6 +107,10 @@ export async function loadDashboard(): Promise<DashboardLoad> {
   } catch (err) {
     if (err instanceof ApiError) {
       if (err.status === 401) return { status: 'signed-out' };
+      // Not an error either: the account simply has not been set up yet, and
+      // the message about a precondition is no use to someone who has not been
+      // shown the pages that meet it.
+      if (err.status === SETUP_REQUIRED_STATUS) return { status: 'setup' };
       return { status: 'error', message: err.message };
     }
     // Anything else is the request never completing — a dropped connection, a
@@ -122,6 +137,8 @@ export function dashboardScreen({ sessionPending, signedIn, load }: ScreenInput)
       return { kind: 'dashboard', view: load.view };
     case 'signed-out':
       return { kind: 'signed-out' };
+    case 'setup':
+      return { kind: 'setup' };
     case 'error':
       return { kind: 'error', message: load.message };
   }

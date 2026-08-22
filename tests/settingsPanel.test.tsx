@@ -181,4 +181,30 @@ describe('Settings notifications', () => {
 
     expect(requests[0]!.body).toMatchObject({ telegramChatId: '555' });
   });
+
+  it('is a timezone picker, not a box to mistype a zone into', async () => {
+    // The old text field accepted "Europe/Helsinky" and every other near-miss,
+    // and a wrong zone books at the wrong minute for as long as nobody looks.
+    render(view());
+
+    const zone = byId<HTMLSelectElement>('tz')!;
+    expect(zone.tagName).toBe('SELECT');
+    expect([...zone.options].map((o) => o.value)).toContain('Europe/Stockholm');
+    expect(zone.value).toBe('Europe/Helsinki');
+  });
+
+  it('warns when Telegram is chosen but no chat is connected', async () => {
+    // Disconnecting no longer moves anyone to email, so this is the state a
+    // user can genuinely be left in — and being left in it silently is exactly
+    // the failure: they believe they are covered and hear nothing.
+    render(view({ notifyChannel: 'telegram', telegramChatId: '' }));
+
+    expect(container.textContent).toMatch(/not being delivered/i);
+  });
+
+  it('says nothing of the sort once the chat is connected', async () => {
+    render(view({ notifyChannel: 'telegram', telegramChatId: '555' }));
+
+    expect(container.textContent).not.toMatch(/not being delivered/i);
+  });
 });

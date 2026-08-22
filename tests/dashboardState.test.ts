@@ -46,6 +46,16 @@ describe('loadDashboard', () => {
     expect(await loadDashboard()).toEqual({ status: 'signed-out' });
   });
 
+  it('reads a 428 as an account that still has to be set up, not as an error', async () => {
+    // The status is the whole routing decision: nothing is wrong with the
+    // request or the session, so showing the server's message on an error card
+    // would leave the visitor reading about a precondition with no way to meet
+    // it. They get the setup pages instead.
+    stubFetch(async () => respond(428, { error: 'Finish setting up your account first' }));
+
+    expect(await loadDashboard()).toEqual({ status: 'setup' });
+  });
+
   it('reports an unreachable server rather than surfacing a fetch internal', async () => {
     stubFetch(async () => {
       throw new TypeError('Failed to fetch');
@@ -115,6 +125,12 @@ describe('dashboardScreen', () => {
     expect(
       dashboardScreen({ sessionPending: false, signedIn: true, load: { status: 'signed-out' } }),
     ).toEqual({ kind: 'signed-out' });
+  });
+
+  it('shows the setup pages to an account that has not been through them', () => {
+    expect(
+      dashboardScreen({ sessionPending: false, signedIn: true, load: { status: 'setup' } }),
+    ).toEqual({ kind: 'setup' });
   });
 
   it('shows the dashboard once it loads', () => {
