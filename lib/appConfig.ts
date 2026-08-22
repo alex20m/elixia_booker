@@ -31,8 +31,11 @@ export interface AppConfig {
   notifyFromEmail?: string;
   dryRun: boolean;
   mock: boolean;
-  defaultBookingWindowDays: number;
-  defaultTimeZone: string;
+  // There is deliberately no default booking window and no default timezone
+  // here. Both were operator-set environment variables, which made every
+  // account in a deployment start life claiming the same membership tier and
+  // the same city — a claim nobody made and nothing checked. They are asked
+  // for during setup instead; see lib/service.ts `completeSetup`.
   /** Shared secret the cron endpoints require. */
   cronSecret?: string;
   /** True when running on the in-memory repo, which does not survive requests. */
@@ -114,8 +117,6 @@ export function loadAppConfig(options: LoadOptions = {}): AppConfig {
     ...(process.env.NOTIFY_FROM_EMAIL ? { notifyFromEmail: process.env.NOTIFY_FROM_EMAIL } : {}),
     dryRun: flag(process.env.DRY_RUN),
     mock: flag(process.env.MOCK_ELIXIA),
-    defaultBookingWindowDays: Number(process.env.DEFAULT_BOOKING_WINDOW_DAYS ?? '7'),
-    defaultTimeZone: process.env.DEFAULT_TIMEZONE ?? 'Europe/Helsinki',
     ...(process.env.CRON_SECRET ? { cronSecret: process.env.CRON_SECRET } : {}),
     ephemeralStore: options.repo === undefined,
   };

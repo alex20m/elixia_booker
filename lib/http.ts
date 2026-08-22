@@ -10,8 +10,8 @@ import { loadAppConfig, ConfigError, type AppConfig } from './appConfig';
 import { neonAuth } from './auth/neonAuth';
 import { neonSql } from './db/neon';
 import { createNeonRepo } from './db/neonRepo';
-import { getOrCreateProfile, ServiceError } from './service';
-import type { Profile } from './types';
+import { getOrCreateProfile, requireConfigured, ServiceError } from './service';
+import type { ConfiguredProfile, Profile } from './types';
 
 export const json = (data: unknown, status = 200, headers: Record<string, string> = {}): Response =>
   new Response(JSON.stringify(data), {
@@ -25,6 +25,19 @@ export interface Session {
   config: AppConfig;
   profile: Profile;
   nowMs: number;
+  /**
+   * The address this account signed in with, when the session carries one.
+   *
+   * Passed along rather than written to the profile: the setup pages offer it
+   * as the notification address so nobody retypes what they just signed in
+   * with, and it becomes stored only when they submit that page.
+   */
+  email?: string;
+}
+
+/** A session whose account has been through setup. */
+export interface ConfiguredSession extends Session {
+  profile: ConfiguredProfile;
 }
 
 /**
@@ -54,15 +67,30 @@ export async function requireUser(): Promise<Session> {
   // dashboard warns about it, because that data does not survive.
   const sql = neonSql();
   const config = loadAppConfig(sql ? { repo: createNeonRepo(sql) } : {});
-  // The address comes from the session because it is already verified there,
-  // and because a user who has to type it in before notifications work is a
-  // user whose notifications do not work.
-  const email = typeof (user as { email?: unknown }).email === 'string'
-    ? (user as { email: string }).email
-    : undefined;
-  const profile = await getOrCreateProfile(config, user.id, email);
+  const profile = await getOrCreateProfile(config, user.id);
+  const email =
+    typeof (user as { email?: unknown }).email === 'string'
+      ? (user as { email: string }).email
+      : undefined;
 
-  return { config, profile, nowMs: Date.now() };
+  return { config, profile, nowMs: Date.now(), ...(email ? { email } : {}) };
+}
+
+/**
+ * The same, for every route that cannot work until the account is set up.
+ *
+ * Which is nearly all of them: with no booking window and no timezone there is
+ * no instant to compute, and with no channel there is nowhere to say what
+ * happened. Those routes get a `ConfiguredProfile` and stop having to wonder
+ * whether the values they are reading were ever chosen.
+ *
+ * The exceptions are the routes setup itself needs — /api/setup, and the
+ * Telegram connect endpoint it uses to finish the notifications page — which
+ * take `requireUser` instead.
+ */
+export async function requireConfiguredUser(): Promise<ConfiguredSession> {
+  const session = await requireUser();
+  return { ...session, profile: requireConfigured(session.profile) };
 }
 
 /** Run a handler, mapping known failures onto statuses. */

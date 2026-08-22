@@ -79,13 +79,15 @@ export interface NotifyConfig {
 export type NotifyTarget = Pick<Profile, 'notifyChannel' | 'notifyEmail' | 'telegramChatId'>;
 
 /**
- * The channel a profile is on.
+ * The channel a profile is on, or nothing at all.
  *
- * One place decides what an absent value means, so a profile written before
- * the setting existed behaves identically to one that chose the default.
+ * There is deliberately no fallback. An absent channel means the account has
+ * not been through setup, and picking one on its behalf here would defeat the
+ * point of asking: whichever this function guessed would then be the app's
+ * default, however loudly the setup pages insisted there wasn't one.
  */
-export function channelFor(profile: NotifyTarget): NotifyChannel {
-  return profile.notifyChannel ?? 'email';
+export function channelFor(profile: NotifyTarget): NotifyChannel | undefined {
+  return profile.notifyChannel;
 }
 
 /**
@@ -118,7 +120,12 @@ export async function notifyUser(
   text: string,
   options: DeliverOptions = {},
 ): Promise<NotifyResult> {
-  switch (channelFor(profile)) {
+  const channel = channelFor(profile);
+  if (!channel) {
+    return { sent: false, reason: 'this account has not chosen a notification channel yet' };
+  }
+
+  switch (channel) {
     case 'none':
       return { sent: false, reason: 'notifications are switched off for this user' };
 

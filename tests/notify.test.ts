@@ -113,7 +113,11 @@ describe('notifyUser', () => {
   const spyFetch = (): ReturnType<typeof vi.fn> =>
     vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
 
-  it('emails a user who has expressed no preference, so a new account is reachable', async () => {
+  it('sends nowhere for a user who has not chosen a channel, and says so', async () => {
+    // There is no fallback channel. An account that has not been through setup
+    // has not nominated an inbox or a chat, and picking one here — email, say,
+    // because the address happens to be known — would quietly reinstate the
+    // default the setup pages exist to abolish.
     const fetchImpl = spyFetch();
 
     const result = await notifyUser(
@@ -123,8 +127,9 @@ describe('notifyUser', () => {
       { fetchImpl: fetchImpl as unknown as typeof fetch },
     );
 
-    expect(result).toEqual({ sent: true });
-    expect(hostOf(fetchImpl)).toBe('api.resend.com');
+    expect(result.sent).toBe(false);
+    expect(result.reason).toMatch(/channel/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it('sends to Telegram when that is what the user chose', async () => {
