@@ -3,9 +3,9 @@ import { createMemoryRepo } from '@/lib/db/memoryRepo';
 import type { Profile } from '@/lib/types';
 
 /**
- * /api/preferences is where the chooser's country, city and centre survive
- * between visits, so what matters is the round trip: what a PUT stores is what
- * the next GET hands back.
+ * /api/preferences is where the chooser's centre survives between visits, so
+ * what matters is the round trip: what a PUT stores is what the next GET
+ * hands back.
  *
  * Auth is stubbed — no session exists in a test process — but the route, the
  * service and a real repo all run, and the profile is re-read from that repo
@@ -41,26 +41,24 @@ const read = async (): Promise<unknown> => (await (await GET()).json());
 
 describe('/api/preferences', () => {
   it('has nothing to offer a user who has never chosen', async () => {
-    expect(await read()).toEqual({ defaults: { country: '', city: '', center: '' } });
+    expect(await read()).toEqual({ defaults: { center: '' } });
   });
 
   it('hands back on the next visit exactly what was saved', async () => {
-    await put({ country: 'Finland', city: 'Espoo', center: '740' });
+    await put({ center: '740' });
 
-    expect(await read()).toEqual({
-      defaults: { country: 'Finland', city: 'Espoo', center: '740' },
-    });
+    expect(await read()).toEqual({ defaults: { center: '740' } });
   });
 
-  it('clears the narrower choices when a blank arrives, rather than keeping them', async () => {
-    await put({ country: 'Finland', city: 'Espoo', center: '740' });
-    await put({ country: 'Sweden', city: '', center: '' });
+  it('clears the centre when a blank arrives, rather than keeping the old one', async () => {
+    await put({ center: '740' });
+    await put({ center: '' });
 
-    expect(await read()).toEqual({ defaults: { country: 'Sweden', city: '', center: '' } });
+    expect(await read()).toEqual({ defaults: { center: '' } });
   });
 
-  it('refuses a value too long to be a place', async () => {
-    const response = await put({ country: 'x'.repeat(300), city: '', center: '' });
+  it('refuses a value too long to be a centre', async () => {
+    const response = await put({ center: 'x'.repeat(300) });
     expect(response.status).toBe(400);
   });
 });

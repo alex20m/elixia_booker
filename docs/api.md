@@ -205,35 +205,23 @@ across groups. If the centre list ever looks short again, this is the first
 thing to check, and the count is the tell: it should be in the low hundreds,
 not a couple of dozen.
 
-**The nesting above those nodes is the only place the page says *where* a club
-is**, and the chooser needs it: 226 clubs is not a dropdown anyone finds their
-own gym in, so the form asks for a country, then a city, then a club.
-`listClubOptions` therefore carries each `clubIds` node's ancestor titles down
-with it and reads them as a location, under two rules that keep it honest
-against a tree whose shape can change:
+**There is no club location anywhere in the page.** A version of the chooser
+narrowed the list by country, then city, then club — which is how 226 clubs
+ought to be navigated — reading both from the titles the `clubIds` nodes sit
+under, since no field carries them. Against the live page every club came back
+under one country and one city: the walk found no location titles to read, and
+the shipped result was a three-step form whose first two steps each offered a
+single meaningless option. It was reverted; the chooser is one flat list that
+remembers the last centre instead.
 
-- Titles shared by *every* group are the filter's own headings ("Keskus"), not
-  places, so they are dropped. Deriving that from the tree beats hard-coding
-  the word: a renamed or translated heading would otherwise become a country.
-- A title is a country only if it *names* one, matched against the Nordic
-  country names in the group's own languages ("Suomi" and "Finland" collapse
-  onto one label). Everything else is a city. That is what makes one walk cope
-  with a filter that nests country → city, one that groups by country alone,
-  and one that groups by city alone.
-
-Clubs the filter groups by nothing still get a country — the site's own, since
-the group runs one site per country — and land in a single `All centres`
-bucket, so the cascade always has something to offer rather than going blank.
-
-**What is not verified here.** Both captures predate the cascade, and the
-capture harness was deleted once discovery finished (see the change log), so
-the *titles* above the `clubIds` nodes are read from a tree whose real headings
-nobody has looked at since. The parser is built to degrade rather than to
-guess: the worst case is every club under the
-site's country and one city bucket, which is the flat list the chooser had
-before. If the country or city step ever offers exactly one meaningless option,
-this is the paragraph to come back to — capture the schedule page and look at
-what the `categories` entries are titled.
+So, for whoever tries again: `label` is a bare club name ("Circus"), not
+"Helsinki Circus", and the nesting above a `clubIds` node carries the filter's
+own headings rather than places. Grouping needs a source of geography this
+page does not have — the club pages elsewhere on the site, or a hard-coded
+mapping — and neither is worth it without a fresh capture proving what is
+actually there. Verified in production on 2026-08-22, against clubs a real
+account can see; not from a capture, because the site is unreachable from the
+sandbox this was built in, which is how it shipped blind in the first place.
 
 The generalisable half, since it cost a released bug: turning a *search* into a
 *listing* is not a refactor. The original walk short-circuited on a match and
@@ -471,3 +459,4 @@ building.
 | 2026-08-20 | Real discovery run (login, schedule navigation, two live bookings). §1, §2, §5, §6 filled in; `lib/elixia.ts` rewritten to match (real login flow, real `/api/book` shape). §4 (schedule listing) still blocked — the capture's body cap cut it off, so the re-run below was needed. | Claude |
 | 2026-08-21 | Second capture with the raised cap. §4 settled: the listing is the page's embedded `data-props` JSON, `clubIds` is mandatory, class ids are per-occurrence, and an unopened class is absent rather than rejected. The run also caught a real `409`, which turned §5's error taxonomy from guesses into the site's own published `errorMessages` map — and showed error text is localized Finnish, so classification moved to status codes only. `resolveClassId` implemented; `API_DISCOVERED = true`. Waitlist branching removed throughout: booking is a single call whose waiting-list placement counts as success (§6). The capture harness and its output were then deleted — its job was discovering an unknown API, and this document is now the record. | Claude |
 | 2026-08-22 | §4 gained how a club's **country and city** are derived: from the titles above each `clubIds` node, with shared titles dropped as filter headings and a title counted as a country only if it names one. The chooser now narrows by country → city → centre, and remembers all three. Unverified against a live capture — see the note in §4 for what breaking looks like and how to check. | Claude |
+| 2026-08-22 | The chooser was changed to narrow by country → city → centre, reading both from the titles above each `clubIds` node — the only candidate source, since no field carries a club's location. In production it collapsed to one country and one city: **there are no location titles in the tree**. Reverted to the flat list, keeping only the remembered last centre. §4 records what is not there, so the next attempt starts from a capture rather than from the same guess. | Claude |

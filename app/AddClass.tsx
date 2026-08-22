@@ -22,15 +22,15 @@ import type { CenterOption, ClassOption } from '@/lib/types';
  * than three fields a user has to keep consistent with each other. The server
  * checks the same thing again — this is a chooser, not the guard.
  *
- * The centre is reached the way the schedule page's own filter groups it:
- * country, then city, then club. That is not decoration — the filter carries
- * every club in the group, 226 of them, and one flat dropdown of that length
- * is a list nobody finds their own gym in. The three answers are also the same
- * every week for anyone who trains where they train, so each is saved as it is
- * picked and offered back next time.
+ * The centre is remembered between visits, because it does not change:
+ * someone books at their own gym week after week, and picking it out of 226
+ * clubs is a chore in front of the choice that actually matters. It was worth
+ * more than that — country → city → club is how a list this long ought to be
+ * navigated — but the schedule page carries no club locations to build that
+ * from, so the list stays flat and the memory does the work instead.
  *
- * The class is deliberately not among what is saved. It is the one thing being
- * decided here, and a prefilled one is a subscription nobody meant to create.
+ * The class is deliberately not remembered. It is the one thing being decided
+ * here, and a prefilled one is a subscription nobody meant to create.
  */
 
 /**
@@ -54,14 +54,8 @@ async function fetchRemote<T>(load: () => Promise<T>): Promise<Remote<T>> {
   }
 }
 
-/** First occurrence wins, so the catalogue's own ordering is kept. */
-const distinct = (values: string[]): string[] => [...new Set(values)];
-
 export default function AddClass({ refresh }: { refresh: () => Promise<void> }) {
   const [centers, setCenters] = useState<Remote<CenterOption[]>>({ status: 'loading' });
-  /** The cascade down to a club: each one narrows what the next may offer. */
-  const [country, setCountry] = useState('');
-  const [city, setCity] = useState('');
   /** Elixia's numeric club id: filtering by it skips a whole page fetch. */
   const [center, setCenter] = useState('');
   // Tagged with the centre it describes, so a timetable is never read as
@@ -86,7 +80,7 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
     void (async () => {
       const [remote, saved] = await Promise.all([
         fetchRemote(async () => (await api<{ centers: CenterOption[] }>('/api/catalog')).centers),
-        // A place that cannot be read is a lost convenience, not a broken
+        // A centre that cannot be read is a lost convenience, not a broken
         // chooser: everything still works, it just starts empty.
         api<{ defaults: CenterDefaults }>('/api/preferences')
           .then((body) => body.defaults)
@@ -99,28 +93,15 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
     })();
 
     /**
-     * Re-walk a saved place against the list Elixia offers *today*.
+     * Select the remembered centre, but only if Elixia still offers it.
      *
-     * Each step is applied only if it still exists, and the club's current
-     * country and city are preferred over the saved spellings — a club that
-     * was refiled under another city should reopen where it is now, and a club
-     * that has closed should leave the cascade as far along as it can still
-     * legitimately go rather than selecting nothing or something wrong.
+     * Checked against today's list rather than trusted: clubs come and go,
+     * and a select whose value no option carries renders blank while the form
+     * believes a centre is chosen — so it would fetch a dead club's timetable
+     * and open on an error about a centre the visitor never picked.
      */
     function applySaved(options: CenterOption[], saved: CenterDefaults): void {
-      const club = options.find((option) => option.id === saved.center);
-      if (club) {
-        setCountry(club.country);
-        setCity(club.city);
-        setCenter(club.id);
-        return;
-      }
-
-      if (!options.some((option) => option.country === saved.country)) return;
-      setCountry(saved.country);
-      if (options.some((o) => o.country === saved.country && o.city === saved.city)) {
-        setCity(saved.city);
-      }
+      if (options.some((option) => option.id === saved.center)) setCenter(saved.center);
     }
 
     return () => {
@@ -150,13 +131,6 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
   }, [center]);
 
   const all = centers.status === 'ready' ? centers.value : [];
-  // The catalogue arrives sorted by country, city and name, so narrowing it
-  // keeps that order without sorting anything again here.
-  const countries = distinct(all.map((option) => option.country));
-  const cities = distinct(
-    all.filter((option) => option.country === country).map((option) => option.city),
-  );
-  const inCity = all.filter((option) => option.country === country && option.city === city);
 
   // Anything not tagged with the selected centre is still on its way, which is
   // what makes the switch immediate rather than one render behind.
@@ -172,101 +146,45 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
   const centerName = all.find((c) => c.id === center)?.name ?? '';
 
   /**
-   * Remember the place, at every step rather than only on a completed add.
-   *
-   * All three values go together and a blank clears, so what comes back can
-   * always be re-walked in order: saving a country without clearing the city
-   * under the old one would hand the next visit a cascade whose steps
-   * contradict each other.
+   * Remember the centre, as soon as it is picked rather than on a completed
+   * add: choosing a gym and then thinking better of the class is still the
+   * same gym next week.
    *
    * Nothing is awaited and a failure is swallowed on purpose. This is the
    * memory of a choice, not the choice — the form works either way, and an
    * error banner about a preference would sit next to a class that added
    * perfectly well.
    */
-  const remember = (next: CenterDefaults): void => {
-    void api('/api/preferences', { method: 'PUT', body: JSON.stringify(next) }).catch(() => {});
-  };
-
-  const chooseCountry = (value: string): void => {
-    setCountry(value);
-    setCity('');
-    setCenter('');
-    setPicked('');
-    setError('');
-    remember({ country: value, city: '', center: '' });
-  };
-
-  const chooseCity = (value: string): void => {
-    setCity(value);
-    setCenter('');
-    setPicked('');
-    setError('');
-    remember({ country, city: value, center: '' });
-  };
-
   const chooseCenter = (value: string): void => {
     setCenter(value);
     setPicked('');
     setError('');
-    remember({ country, city, center: value });
+    void api('/api/preferences', {
+      method: 'PUT',
+      body: JSON.stringify({ center: value } satisfies CenterDefaults),
+    }).catch(() => {});
   };
 
   return (
     <div className="card">
       <h2>Add a class</h2>
-      <div className="row row-3">
-        <div>
-          <label htmlFor="s-country">Country</label>
-          <select
-            id="s-country"
-            value={country}
-            disabled={centers.status !== 'ready'}
-            onChange={(e) => chooseCountry(e.target.value)}
-          >
-            <option value="">{countryPlaceholder(centers)}</option>
-            {countries.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label htmlFor="s-city">City</label>
-          <select
-            id="s-city"
-            value={city}
-            disabled={!country}
-            onChange={(e) => chooseCity(e.target.value)}
-          >
-            <option value="">{country ? 'Choose a city' : 'Choose a country first'}</option>
-            {cities.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
-        </div>
+      <div className="row row-2">
         <div>
           <label htmlFor="s-center">Centre</label>
           <select
             id="s-center"
             value={center}
-            disabled={!city}
+            disabled={centers.status !== 'ready'}
             onChange={(e) => chooseCenter(e.target.value)}
           >
-            <option value="">{city ? 'Choose a centre' : 'Choose a city first'}</option>
-            {inCity.map((option) => (
+            <option value="">{centerPlaceholder(centers)}</option>
+            {all.map((option) => (
               <option key={option.id} value={option.id}>
                 {option.name}
               </option>
             ))}
           </select>
         </div>
-      </div>
-
-      <div className="row">
         <div>
           <label htmlFor="s-class">Class</label>
           <select
@@ -328,10 +246,10 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
   );
 }
 
-function countryPlaceholder(centers: Remote<CenterOption[]>): string {
+function centerPlaceholder(centers: Remote<CenterOption[]>): string {
   if (centers.status === 'loading') return 'Loading centres…';
   if (centers.status === 'error') return 'Could not load centres';
-  return 'Choose a country';
+  return 'Choose a centre';
 }
 
 function classPlaceholder(center: string, classes: Remote<ClassOption[]> | null): string {

@@ -23,16 +23,11 @@ import type {
   Weekday,
 } from './types';
 
-/**
- * Two cities in one country and one in another, so the chooser's country →
- * city → centre cascade is exercisable by hand: a single city everywhere
- * would let a broken cascade still look right.
- */
+/** Enough centres to tell the remembered one from the rest by hand. */
 const MOCK_CENTERS: CenterOption[] = [
-  { id: '740', name: 'Tapiola', country: 'Finland', city: 'Espoo' },
-  { id: '741', name: 'Sello', country: 'Finland', city: 'Espoo' },
-  { id: '742', name: 'Kamppi', country: 'Finland', city: 'Helsinki' },
-  { id: '743', name: 'Sturebadet', country: 'Sweden', city: 'Stockholm' },
+  { id: '740', name: 'Tapiola' },
+  { id: '741', name: 'Sello' },
+  { id: '742', name: 'Kamppi' },
 ];
 
 function slots(className: string, startTime: string, days: Weekday[]): ClassOption[] {
