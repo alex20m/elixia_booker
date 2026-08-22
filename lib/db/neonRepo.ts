@@ -34,7 +34,8 @@ import type {
 
 const PROFILE_COLUMNS = `
   id, booking_window_days, time_zone, notify_channel, notify_email, telegram_chat_id,
-  elixia_email, elixia_secret, elixia_status, elixia_checked_at, default_center
+  elixia_email, elixia_secret, elixia_status, elixia_checked_at, default_center,
+  configured_at
 `;
 
 const SUBSCRIPTION_COLUMNS = `
@@ -45,10 +46,16 @@ const SUBSCRIPTION_COLUMNS = `
 const str = (value: unknown): string => String(value);
 const num = (value: unknown): number => Number(value);
 
+// Absent, not coerced: `num(null)` is 0 and `str(null)` is "null", and both
+// would sail past a check for "has a value" as a booking window of zero days
+// and a timezone no formatter can resolve. A profile that has not been through
+// setup has to read back as one.
 const toProfile = (row: SqlRow): Profile => ({
   id: str(row.id),
-  bookingWindowDays: num(row.booking_window_days),
-  timeZone: str(row.time_zone),
+  ...(row.booking_window_days !== null && row.booking_window_days !== undefined
+    ? { bookingWindowDays: num(row.booking_window_days) }
+    : {}),
+  ...(row.time_zone ? { timeZone: str(row.time_zone) } : {}),
   ...(row.notify_channel ? { notifyChannel: str(row.notify_channel) as NotifyChannel } : {}),
   ...(row.notify_email ? { notifyEmail: str(row.notify_email) } : {}),
   ...(row.telegram_chat_id ? { telegramChatId: str(row.telegram_chat_id) } : {}),
@@ -57,6 +64,7 @@ const toProfile = (row: SqlRow): Profile => ({
   elixiaStatus: str(row.elixia_status) as ElixiaStatus,
   ...(row.elixia_checked_at ? { elixiaCheckedAtMs: toMs(row.elixia_checked_at) } : {}),
   ...(row.default_center ? { defaultCenter: str(row.default_center) } : {}),
+  ...(row.configured_at ? { configuredAtMs: toMs(row.configured_at) } : {}),
 });
 
 const toSubscription = (row: SqlRow): Subscription => ({
@@ -136,9 +144,10 @@ export function createNeonRepo(sql: Sql): Repo {
       await sql.query(
         `insert into public.profiles (
            id, booking_window_days, time_zone, notify_channel, notify_email, telegram_chat_id,
-           elixia_email, elixia_secret, elixia_status, elixia_checked_at, default_center
+           elixia_email, elixia_secret, elixia_status, elixia_checked_at, default_center,
+           configured_at
          )
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::timestamptz, $11)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::timestamptz, $11, $12::timestamptz)
          on conflict (id) do update set
            booking_window_days = excluded.booking_window_days,
            time_zone = excluded.time_zone,
@@ -149,15 +158,16 @@ export function createNeonRepo(sql: Sql): Repo {
            elixia_secret = excluded.elixia_secret,
            elixia_status = excluded.elixia_status,
            elixia_checked_at = excluded.elixia_checked_at,
-           default_center = excluded.default_center`,
+           default_center = excluded.default_center,
+           configured_at = excluded.configured_at`,
         [
           profile.id,
-          profile.bookingWindowDays,
-          profile.timeZone,
-          // The column is NOT NULL with its own default, so an unset channel
-          // is written as the default rather than left to the upsert's
-          // `excluded` value, which would be null on the update path.
-          profile.notifyChannel ?? 'email',
+          // Null where the user has not chosen yet — the columns lost their
+          // defaults in 0009 precisely so that state can be stored honestly
+          // rather than dressed up as a membership tier nobody signed for.
+          profile.bookingWindowDays ?? null,
+          profile.timeZone ?? null,
+          profile.notifyChannel ?? null,
           profile.notifyEmail ?? null,
           profile.telegramChatId ?? null,
           profile.elixiaEmail ?? null,
@@ -165,6 +175,7 @@ export function createNeonRepo(sql: Sql): Repo {
           profile.elixiaStatus,
           profile.elixiaCheckedAtMs ? iso(profile.elixiaCheckedAtMs) : null,
           profile.defaultCenter ?? null,
+          profile.configuredAtMs ? iso(profile.configuredAtMs) : null,
         ],
       );
     },

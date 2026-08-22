@@ -100,6 +100,7 @@ describe('profiles', () => {
         elixiaStatus: 'ok',
         elixiaCheckedAtMs: Date.UTC(2026, 3, 2, 8, 30),
         defaultCenter: '740',
+        configuredAtMs: Date.UTC(2026, 3, 1, 7, 0),
       }),
     );
 
@@ -115,7 +116,36 @@ describe('profiles', () => {
       elixiaStatus: 'ok',
       elixiaCheckedAtMs: Date.UTC(2026, 3, 2, 8, 30),
       defaultCenter: '740',
+      configuredAtMs: Date.UTC(2026, 3, 1, 7, 0),
     });
+  });
+
+  it('stores an account that has chosen nothing yet as having chosen nothing', async () => {
+    // The columns lost their defaults so this state can exist in the database
+    // rather than being dressed up as a membership tier and a city nobody
+    // named. Reading it back has to preserve that: `num(null)` is 0 and
+    // `str(null)` is the string "null", and either would sail past a check for
+    // "has a value" — as a zero-day booking window, and a timezone no
+    // formatter can resolve.
+    await repo.upsertProfile({ id: BOB, elixiaStatus: 'unlinked' });
+
+    expect(await repo.getProfile(BOB)).toEqual({ id: BOB, elixiaStatus: 'unlinked' });
+  });
+
+  it('lets an account that has finished setup be told apart from one that has not', async () => {
+    await repo.upsertProfile({ id: BOB, elixiaStatus: 'unlinked' });
+    expect((await repo.getProfile(BOB))?.configuredAtMs).toBeUndefined();
+
+    await repo.upsertProfile({
+      id: BOB,
+      bookingWindowDays: 7,
+      timeZone: 'Europe/Helsinki',
+      notifyChannel: 'none',
+      elixiaStatus: 'unlinked',
+      configuredAtMs: Date.UTC(2026, 3, 1, 7, 0),
+    });
+
+    expect((await repo.getProfile(BOB))?.configuredAtMs).toBe(Date.UTC(2026, 3, 1, 7, 0));
   });
 
   it('remembers which centre a user last chose from, across sessions', async () => {
