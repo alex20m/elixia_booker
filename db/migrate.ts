@@ -17,8 +17,8 @@ import { config as loadEnvFiles } from 'dotenv';
 import { runner } from 'node-pg-migrate';
 
 // Next loads .env.local for `npm run dev`; a plain tsx script does not, and
-// `vercel env pull` writes there — so without this, the command SETUP.md tells
-// you to run would report no DATABASE_URL while the file sits next to it.
+// `vercel env pull` writes there — so without this, `npm run migrate` would
+// report no DATABASE_URL while the file sits next to it.
 // Existing variables win, which is what makes CI's exported ones authoritative.
 loadEnvFiles({ path: ['.env.local', '.env'], quiet: true });
 
@@ -30,7 +30,7 @@ async function main(): Promise<void> {
   if (!databaseUrl) {
     throw new Error(
       'DATABASE_URL is not set. Locally: `npx vercel env pull .env.local`, then ' +
-        '`npm run migrate`. See SETUP.md.',
+        '`npm run migrate`.',
     );
   }
 

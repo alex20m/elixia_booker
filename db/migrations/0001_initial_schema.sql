@@ -3,7 +3,7 @@
 -- Applied by `npm run migrate` (node-pg-migrate), and automatically on every
 -- merge to main. Editing it once it has run anywhere does nothing: migrations
 -- are recorded by file name and never applied twice. Schema changes go in a
--- new numbered file beside this one (see SETUP.md).
+-- new numbered file beside this one.
 --
 -- Three things shape it:
 --

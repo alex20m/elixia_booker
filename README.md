@@ -9,8 +9,6 @@ on free tiers.
 You deploy it once. After that anyone you share the URL with creates an account,
 links their gym login, picks their classes, and is done.
 
-👉 **[SETUP.md](SETUP.md) is the step-by-step guide.** Start there.
-
 ---
 
 ## The Elixia API is discovered
@@ -37,8 +35,7 @@ is the opposite of what the app originally assumed:
 **One thing discovery could not settle:** whether the booking call works from
 outside a browser at all. Everything observed says yes, but a browser capture
 cannot prove the absence of a JS challenge or TLS fingerprinting. The first
-live run is that test — see
-[SETUP.md step 10](SETUP.md#10-go-live-against-the-real-elixia-api).
+live run is that test.
 
 ---
 
@@ -216,7 +213,7 @@ Two workflows run those same four commands: `.github/workflows/pull-request.yml`
 on every pull request, and `.github/workflows/main.yml` on every push to `main`.
 Neither deploys — **Vercel's Git integration is the only route to production**,
 building each pull request as a preview and each push to `main` as production,
-on its own. See [SETUP.md step 7](SETUP.md#how-deploying-works).
+on its own.
 
 That makes the pull-request run the gate that actually holds: by the time
 `main.yml` goes red, Vercel has already deployed the commit. Merge on green, and
