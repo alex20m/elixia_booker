@@ -23,6 +23,15 @@ import { PlusIcon } from './components/icons';
  * than three fields a user has to keep consistent with each other. The server
  * checks the same thing again — this is a chooser, not the guard.
  *
+ * The choice is made in the order a person actually makes it: where, then
+ * what, then when. A single list of every published slot put those last two
+ * questions in one row, so a centre running twenty classes across the week
+ * offered a hundred lines to scroll, with each class scattered through them —
+ * finding "the Wednesday Bodypump" meant reading past every other class to
+ * find out which days Bodypump even runs. Splitting it means the class list is
+ * as long as the centre has classes, and the times are only the times that one
+ * class runs.
+ *
  * The centre is remembered between visits, because it does not change:
  * someone books at their own gym week after week, and picking it out of 226
  * clubs is a chore in front of the choice that actually matters. It was worth
@@ -55,6 +64,20 @@ async function fetchRemote<T>(load: () => Promise<T>): Promise<Remote<T>> {
   }
 }
 
+/**
+ * How two spellings of the same class are recognised as one.
+ *
+ * The timetable is free text filed by whoever set the class up, so the same
+ * class can arrive as "Bodypump" one day and "BODYPUMP  60" — well, "Bodypump"
+ * with a stray double space — the next. Grouping on the raw string would list
+ * it twice, which is exactly the duplication this step exists to remove. Same
+ * normalisation the schedule parser dedupes slots with.
+ */
+const sameClass = (value: string): string => value.trim().toLowerCase().replace(/\s+/g, ' ');
+
+/** Identifies a slot within one class, and survives the list being refetched. */
+const slotKey = (option: ClassOption): string => `${option.weekday}|${option.startTime}`;
+
 export default function AddClass({ refresh }: { refresh: () => Promise<void> }) {
   const [centers, setCenters] = useState<Remote<CenterOption[]>>({ status: 'loading' });
   /** Elixia's numeric club id: filtering by it skips a whole page fetch. */
@@ -67,8 +90,10 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
   const [loaded, setLoaded] = useState<{ center: string; remote: Remote<ClassOption[]> } | null>(
     null,
   );
-  /** Index into the loaded classes; '' means nothing picked yet. */
-  const [picked, setPicked] = useState('');
+  /** The class being booked, as it is spelled on the timetable. */
+  const [className, setClassName] = useState('');
+  /** Which of that class's weekly slots, as `weekday|HH:MM`. */
+  const [slot, setSlot] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -141,10 +166,36 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
       ? loaded.remote
       : { status: 'loading' };
   const options = classes?.status === 'ready' ? classes.value : [];
-  const chosen = picked === '' ? undefined : options[Number(picked)];
+
+  // Alphabetical, not timetable order: the timetable is sorted by weekday, so
+  // leaving it alone would scatter the names and put the whole point of this
+  // step — finding one class by name — back where it started.
+  const byName = new Map(options.map((option) => [sameClass(option.className), option.className]));
+  const names = [...byName.values()].sort((a, b) => a.localeCompare(b));
+  // Left in timetable order, which is weekday then time — the order a week
+  // reads in.
+  const slots = className
+    ? options.filter((option) => sameClass(option.className) === sameClass(className))
+    : [];
+  const chosen = slots.find((option) => slotKey(option) === slot);
   // Stored by name, browsed by id: the name is what a person recognises in
   // their own list of classes, and what a subscription has always carried.
   const centerName = all.find((c) => c.id === center)?.name ?? '';
+
+  /**
+   * Changing the class drops the time with it.
+   *
+   * Not tidiness: two classes at the same centre routinely share a start time,
+   * so a slot kept across the change stays a valid-looking selection and adds
+   * a class on a day the new one may not run at all — the failure the whole
+   * chooser exists to prevent, reintroduced by the step that was meant to make
+   * it easier.
+   */
+  const chooseClass = (value: string): void => {
+    setClassName(value);
+    setSlot('');
+    setError('');
+  };
 
   /**
    * Remember the centre, as soon as it is picked rather than on a completed
@@ -158,8 +209,7 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
    */
   const chooseCenter = (value: string): void => {
     setCenter(value);
-    setPicked('');
-    setError('');
+    chooseClass('');
     void api('/api/preferences', {
       method: 'PUT',
       body: JSON.stringify({ center: value } satisfies CenterDefaults),
@@ -171,7 +221,9 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
       <div className="card-head">
         <div>
           <h2 className="card-title">Add a class</h2>
-          <p className="card-sub">Pick your gym, then the weekly slot you want held.</p>
+          <p className="card-sub">
+            Pick your gym and the class, then the weekly slot you want held.
+          </p>
         </div>
       </div>
 
@@ -196,24 +248,38 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
           <label htmlFor="s-class">Class</label>
           <select
             id="s-class"
-            value={picked}
-            disabled={options.length === 0}
-            onChange={(e) => {
-              setPicked(e.target.value);
-              setError('');
-            }}
+            value={className}
+            disabled={names.length === 0}
+            onChange={(e) => chooseClass(e.target.value)}
           >
             <option value="">{classPlaceholder(center, classes)}</option>
-            {options.map((option, index) => (
-              <option
-                key={`${option.className}|${option.weekday}|${option.startTime}`}
-                value={index}
-              >
-                {option.className} · {titleCase(option.weekday)} {option.startTime}
+            {names.map((name) => (
+              <option key={sameClass(name)} value={name}>
+                {name}
               </option>
             ))}
           </select>
         </div>
+      </div>
+
+      <div className="field mt-s">
+        <label htmlFor="s-slot">Day and time</label>
+        <select
+          id="s-slot"
+          value={slot}
+          disabled={slots.length === 0}
+          onChange={(e) => {
+            setSlot(e.target.value);
+            setError('');
+          }}
+        >
+          <option value="">{slotPlaceholder(className, slots.length)}</option>
+          {slots.map((option) => (
+            <option key={slotKey(option)} value={slotKey(option)}>
+              {titleCase(option.weekday)} {option.startTime}
+            </option>
+          ))}
+        </select>
       </div>
 
       {centers.status === 'error' && (
@@ -250,7 +316,7 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
                 startTime: chosen.startTime,
               }),
             });
-            setPicked('');
+            chooseClass('');
             await refresh();
           } catch (err) {
             setError((err as Error).message);
@@ -282,4 +348,13 @@ function classPlaceholder(center: string, classes: Remote<ClassOption[]> | null)
   if (!classes || classes.status === 'loading') return 'Loading classes…';
   if (classes.status === 'error') return 'Could not load classes';
   return classes.value.length === 0 ? 'No classes published here' : 'Choose a class';
+}
+
+function slotPlaceholder(className: string, count: number): string {
+  if (!className) return 'Choose a class first';
+  // A chosen class with no slots is not reachable from the pickers — the name
+  // came out of the timetable — but a class picked just as the centre changes
+  // renders one frame of it, and "choose a day and time" over an empty list is
+  // the same broken-looking page as before.
+  return count === 0 ? 'No times published' : 'Choose a day and time';
 }
