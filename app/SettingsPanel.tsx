@@ -5,15 +5,17 @@ import { apiRequest as api } from '@/lib/dashboardState';
 import { MEMBERSHIP_OPTIONS } from '@/lib/membership';
 import { TIME_ZONE_GROUPS } from '@/lib/timezones';
 import type { DashboardView } from '@/lib/service';
+import { TelegramConnect } from './components/TelegramConnect';
 
 /**
  * Booking settings and where alerts go — the two groups of answers the setup
  * pages collected, in one place so they can be changed later.
  *
  * Email is the default and needs nothing: the address arrives with the
- * account. Telegram is one tap — the Connect button asks the server for a deep
+ * account. Telegram is one tap — the Connect control asks the server for a deep
  * link and opens it, and the chat id comes back through the webhook, so nobody
- * has to read one out of a JSON document.
+ * has to read one out of a JSON document. That control is shared with the setup
+ * wizard, which asks for the same thing in the same words.
  *
  * The manual chat-id field survives for deployments with no webhook
  * configured, which is the only state in which this form still writes a chat
@@ -34,35 +36,15 @@ export function SettingsPanel({
   const [chatId, setChatId] = useState(view.account.telegramChatId);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
-  const [awaitingTap, setAwaitingTap] = useState(false);
 
   const connected = Boolean(view.account.telegramChatId);
   // The one-tap flow needs a bot, a webhook and a secret. Without them the old
   // manual field is the only way Telegram can work at all.
   const canConnect = view.telegramConnect;
 
-  const connect = async () => {
-    setError('');
-    try {
-      const { url } = await api<{ url: string }>('/api/telegram/link', { method: 'POST' });
-      // A new tab, not a redirect: losing the dashboard on the way to Telegram
-      // would mean coming back to a page that has to be found again.
-      window.open(url, '_blank', 'noopener,noreferrer');
-      setAwaitingTap(true);
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  };
-
   const disconnect = async () => {
-    setError('');
-    try {
-      await api('/api/telegram/link', { method: 'DELETE' });
-      setAwaitingTap(false);
-      await refresh();
-    } catch (err) {
-      setError((err as Error).message);
-    }
+    await api('/api/telegram/link', { method: 'DELETE' });
+    await refresh();
   };
 
   return (
@@ -159,29 +141,12 @@ export function SettingsPanel({
 
         {channel === 'telegram' && canConnect && (
           <div className="mt-s">
-            {connected ? (
-              <p className="hint">
-                Connected to Telegram chat {view.account.telegramChatId}.{' '}
-                <button id="tg-disconnect" className="link" onClick={disconnect}>
-                  Disconnect
-                </button>
-              </p>
-            ) : (
-              <>
-                <button id="tg-connect" className="btn-secondary" onClick={connect}>
-                  Connect Telegram
-                </button>
-                {awaitingTap && (
-                  <p className="hint mt-xs">
-                    Tap <strong>Start</strong> in Telegram, then{' '}
-                    <button id="tg-check" className="link" onClick={refresh}>
-                      check again
-                    </button>
-                    . The link is good for ten minutes.
-                  </p>
-                )}
-              </>
-            )}
+            <TelegramConnect
+              chatId={view.account.telegramChatId}
+              check={refresh}
+              onError={setError}
+              onDisconnect={disconnect}
+            />
           </div>
         )}
 
