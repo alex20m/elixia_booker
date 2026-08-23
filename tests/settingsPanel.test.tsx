@@ -67,6 +67,17 @@ const choose = async (id: string, value: string): Promise<void> => {
   });
 };
 
+const type = async (id: string, value: string): Promise<void> => {
+  const input = byId<HTMLInputElement>(id)!;
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+    setter.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+};
+
+const label = (id: string): string => byId(id)!.textContent!;
+
 beforeEach(() => {
   container = document.createElement('div');
   document.body.append(container);
@@ -234,5 +245,66 @@ describe('Settings notifications', () => {
     render(view({ notifyChannel: 'telegram', telegramChatId: '555' }));
 
     expect(container.textContent).not.toMatch(/not being delivered/i);
+  });
+});
+
+describe('Settings save button', () => {
+  it('stops saying "Saved" once the channel is changed again', async () => {
+    // The acknowledgement used to stick for the life of the panel, so a user
+    // who saved, then switched channel, was looking at a button that claimed
+    // their unsaved choice was already stored — and walked away from it.
+    render(view());
+
+    await click('save-btn');
+    expect(label('save-btn')).toBe('Saved');
+
+    await choose('notify-channel', 'none');
+
+    expect(label('save-btn')).toBe('Save settings');
+  });
+
+  it('stops saying "Saved" once the address is edited again', async () => {
+    render(view());
+
+    await click('save-btn');
+    expect(label('save-btn')).toBe('Saved');
+
+    await type('notify-email', 'bob@example.com');
+
+    expect(label('save-btn')).toBe('Save settings');
+  });
+
+  it('saves once when the button is pressed again mid-request', async () => {
+    // Two PUTs for one intent, and the second raced the refresh the first
+    // triggered. An impatient second press on a slow connection is the normal
+    // way to get here, not an edge case.
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: string, init?: RequestInit) => {
+      requests.push({
+        url,
+        method: init?.method ?? 'GET',
+        body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      });
+      await pending;
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof fetch);
+
+    render(view());
+
+    await click('save-btn');
+    expect(label('save-btn')).toBe('Saving…');
+
+    await click('save-btn');
+
+    await act(async () => {
+      finish();
+      await pending;
+    });
+
+    expect(requests.filter((r) => r.url === '/api/settings')).toHaveLength(1);
+    expect(label('save-btn')).toBe('Saved');
   });
 });
