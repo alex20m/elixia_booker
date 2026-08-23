@@ -1,180 +1,644 @@
-:root {
-  --bg: #f6f7f9;
-  --panel: #ffffff;
-  --text: #16181d;
-  --muted: #6b7280;
-  --border: #e3e6ea;
-  --accent: #1f6feb;
-  --accent-text: #ffffff;
-  --ok: #10794a;
-  --ok-bg: #e6f5ee;
-  --warn: #9a3412;
-  --warn-bg: #fdf0e7;
-  --err: #b42318;
-  --err-bg: #fdeceb;
-  --radius: 10px;
+/*
+ * The whole visual system, in one file.
+ *
+ * Two rules keep it that way. **Everything is a token**: no component picks a
+ * colour, a radius or a shadow of its own, so light and dark are two lists of
+ * values rather than two sets of components. And **the class names describe the
+ * thing, not the look** — `.btn-danger`, not `.btn-red` — so a palette change is
+ * a change here and nowhere else.
+ *
+ * The dark palette is selected by a `dark` class on <html>, which is what
+ * next-themes writes (see lib/theme.ts) and what the blocking script in the
+ * layout writes before the first paint. The media query underneath it is the
+ * fallback for the one page that renders with no theme script at all — the
+ * "auth is not configured" error page — and is scoped so an explicit light
+ * choice still wins on a dark OS.
+ */
 
-  /* @neondatabase/auth-ui reads these names on :root and falls back to its own
-     defaults when absent (see its "theme-safe" fallback pattern), so only the
-     ones that map cleanly onto an existing token are set here. --border and
-     --radius already match by name and are picked up without repeating them. */
+/* ------------------------------------------------------------------ font -- */
+
+/*
+ * Plus Jakarta Sans, served from this app rather than from Google.
+ *
+ * Self-hosted for three reasons, in order: it is one fewer third party seeing
+ * every visitor's IP address; the file is on the same connection as the rest of
+ * the page, so it arrives with it; and the build does not need the network to
+ * succeed, which a build-time font loader would make it need.
+ *
+ * One variable file per subset covers 400-800, so weight is free — a heading
+ * and a caption cost the same download. Licensed under the SIL Open Font
+ * License; see public/fonts/OFL.txt.
+ */
+
+@font-face {
+  font-family: 'Plus Jakarta Sans';
+  font-style: normal;
+  font-weight: 400 800;
+  font-display: swap;
+  src: url('/fonts/plus-jakarta-sans-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Plus Jakarta Sans';
+  font-style: normal;
+  font-weight: 400 800;
+  font-display: swap;
+  src: url('/fonts/plus-jakarta-sans-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* ---------------------------------------------------------------- tokens -- */
+
+:root {
+  color-scheme: light;
+
+  --font-sans: 'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system,
+    'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+
+  --bg: #f5f5fa;
+  --surface: #ffffff;
+  --surface-2: #f2f2f8;
+  --surface-3: #e9e9f3;
+  --text: #16161f;
+  --text-2: #494958;
+  --muted: #74748c;
+  --border: #e6e6f0;
+  --border-strong: #d5d5e3;
+
+  --accent: #5b45e0;
+  --accent-hover: #4a36c9;
+  --accent-fg: #ffffff;
+  --accent-soft: #efebfd;
+  --accent-line: #ded5fb;
+
+  --ok: #0d7a51;
+  --ok-soft: #e2f5ed;
+  --warn: #8a4a06;
+  --warn-soft: #fdf1e2;
+  --err: #b3261e;
+  --err-soft: #fdecea;
+
+  --ring: color-mix(in srgb, var(--accent) 45%, transparent);
+  --shadow-sm: 0 1px 2px rgb(20 20 45 / 6%);
+  --shadow-md: 0 10px 30px -12px rgb(20 20 45 / 22%);
+  --shadow-pop: 0 18px 50px -16px rgb(20 20 45 / 32%);
+
+  --radius-sm: 10px;
+  --radius: 14px;
+  --radius-lg: 20px;
+  --pill: 999px;
+
+  --measure: 44rem;
+  --bar-h: 3.5rem;
+
+  /* The mark's own colours. Fixed rather than themed: an app icon is a
+     constant, and a logo that changes with the palette stops being a logo. */
+  --brand-tile: #14141f;
+  --brand-ink: #ffffff;
+  --brand-accent: #a695ff;
+
+  /* Bridged onto @neondatabase/auth-ui, which reads these names off :root and
+     falls back to its own defaults when they are absent. Only the ones with a
+     clean counterpart here are set — the rest of its surface stays its own. */
   --background: var(--bg);
   --foreground: var(--text);
   --primary: var(--accent);
-  --primary-foreground: var(--accent-text);
+  --primary-foreground: var(--accent-fg);
   --destructive: var(--err);
-  --ring: var(--accent);
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1115;
-    --panel: #171a21;
-    --text: #e8eaed;
-    --muted: #9aa3af;
-    --border: #262b34;
-    --accent: #4d8ef7;
-    --accent-text: #0b0d10;
+  :root:not(.light) {
+    color-scheme: dark;
+
+    --bg: #0a0a11;
+    --surface: #14141f;
+    --surface-2: #1b1b2a;
+    --surface-3: #24243a;
+    --text: #ecebf6;
+    --text-2: #b7b6cb;
+    --muted: #8c8ba6;
+    --border: #262639;
+    --border-strong: #363652;
+
+    --accent: #a695ff;
+    --accent-hover: #b8abff;
+    --accent-fg: #14102a;
+    --accent-soft: #201c3a;
+    --accent-line: #322c58;
+
     --ok: #4ade80;
-    --ok-bg: #10291d;
+    --ok-soft: #10291d;
     --warn: #fbbf24;
-    --warn-bg: #2a2010;
-    --err: #f87171;
-    --err-bg: #2b1416;
+    --warn-soft: #2b2110;
+    --err: #fb7185;
+    --err-soft: #2d1420;
+
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
+    --shadow-md: 0 10px 30px -12px rgb(0 0 0 / 65%);
+    --shadow-pop: 0 18px 50px -16px rgb(0 0 0 / 75%);
   }
 }
 
-* {
+:root.dark {
+  color-scheme: dark;
+
+  --bg: #0a0a11;
+  --surface: #14141f;
+  --surface-2: #1b1b2a;
+  --surface-3: #24243a;
+  --text: #ecebf6;
+  --text-2: #b7b6cb;
+  --muted: #8c8ba6;
+  --border: #262639;
+  --border-strong: #363652;
+
+  --accent: #a695ff;
+  --accent-hover: #b8abff;
+  --accent-fg: #14102a;
+  --accent-soft: #201c3a;
+  --accent-line: #322c58;
+
+  --ok: #4ade80;
+  --ok-soft: #10291d;
+  --warn: #fbbf24;
+  --warn-soft: #2b2110;
+  --err: #fb7185;
+  --err-soft: #2d1420;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
+  --shadow-md: 0 10px 30px -12px rgb(0 0 0 / 65%);
+  --shadow-pop: 0 18px 50px -16px rgb(0 0 0 / 75%);
+}
+
+/* ------------------------------------------------------------------ base -- */
+
+*,
+*::before,
+*::after {
   box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
   margin: 0;
-  padding: 24px 16px 64px;
+  min-height: 100dvh;
   background: var(--bg);
   color: var(--text);
-  font: 15px/1.55 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-sans);
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  letter-spacing: -0.006em;
+  -webkit-font-smoothing: antialiased;
 }
 
-.wrap {
-  max-width: 720px;
-  margin: 0 auto;
+h1,
+h2,
+h3 {
+  margin: 0;
+  letter-spacing: -0.022em;
+  line-height: 1.2;
+  font-weight: 700;
 }
 
 h1 {
-  font-size: 22px;
-  margin: 0 0 4px;
-  letter-spacing: -0.01em;
+  font-size: 1.5rem;
 }
 
 h2 {
-  font-size: 15px;
-  margin: 0 0 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--muted);
-  font-weight: 600;
+  font-size: 1.0625rem;
 }
 
-.sub {
-  color: var(--muted);
-  margin: 0 0 24px;
-  font-size: 14px;
+h3 {
+  font-size: 0.9375rem;
 }
+
+p {
+  margin: 0;
+}
+
+a {
+  color: var(--accent);
+  text-underline-offset: 2px;
+}
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.8125em;
+  background: var(--surface-2);
+  border-radius: 6px;
+  padding: 0.1em 0.35em;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Touch targets never smaller than a fingertip: this app is used on a phone,
+   often in a hurry, and a 28px tap target is the difference between pausing a
+   class and deleting it. */
+button,
+a.btn,
+select,
+input {
+  min-height: 2.75rem;
+}
+
+/* --------------------------------------------------------------- layout --- */
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+.appbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter: saturate(1.6) blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+
+.appbar-inner {
+  max-width: var(--measure);
+  margin: 0 auto;
+  min-height: var(--bar-h);
+  padding: 0 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.appbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.main {
+  flex: 1;
+  width: 100%;
+  max-width: var(--measure);
+  margin: 0 auto;
+  padding: 1.25rem 1rem calc(5.5rem + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* The centred, narrow column the setup pages and the sign-in panel live in.
+   They are one decision at a time, so they get less width, not more. */
+.main-narrow {
+  max-width: 30rem;
+  padding-bottom: 3rem;
+  justify-content: center;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.cluster {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.grid-2 {
+  display: grid;
+  gap: 0.75rem;
+}
+
+@media (min-width: 34rem) {
+  .grid-2 {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.spread {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+/* ------------------------------------------------------------- brand ------ */
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.brand-mark {
+  display: block;
+  flex: none;
+  border-radius: 28%;
+  box-shadow: var(--shadow-sm);
+}
+
+.brand-name {
+  font-size: 1rem;
+}
+
+.brand-lg .brand-name {
+  font-size: 1.375rem;
+}
+
+/* --------------------------------------------------------------- tabs ----- */
+
+/*
+ * One control in two places: a thumb-reachable bar across the bottom of a
+ * phone, and a quiet row of pills under the header on a desktop. Same markup —
+ * a second copy would be a second thing to keep in step, and the one that is
+ * not on screen is the one that rots.
+ */
+.tabs {
+  position: fixed;
+  inset: auto 0 0;
+  z-index: 20;
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.375rem 0.5rem calc(0.375rem + env(safe-area-inset-bottom));
+  background: color-mix(in srgb, var(--bg) 94%, transparent);
+  backdrop-filter: saturate(1.6) blur(14px);
+  border-top: 1px solid var(--border);
+}
+
+.tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.125rem;
+  min-height: 3rem;
+  padding: 0.375rem 0.25rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+
+.tab[aria-current='page'] {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.tab-count {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (min-width: 46rem) {
+  .tabs {
+    position: sticky;
+    top: var(--bar-h);
+    inset-inline: auto;
+    /* `width` is not redundant beside `max-width`: an auto cross-axis margin
+       inside the column flex container switches the bar from stretching to
+       shrink-to-fit, which would centre three pills under a left-aligned logo
+       instead of lining them up with the content below. */
+    width: 100%;
+    max-width: var(--measure);
+    margin: 0 auto;
+    padding: 0.5rem 1rem;
+    border-top: 0;
+    border-bottom: 1px solid var(--border);
+    gap: 0.375rem;
+  }
+
+  .tab {
+    flex: 0 0 auto;
+    flex-direction: row;
+    gap: 0.4rem;
+    min-height: 2.25rem;
+    padding: 0.375rem 0.85rem;
+    border-radius: var(--pill);
+    font-size: 0.8125rem;
+  }
+
+  .main {
+    padding-bottom: 3rem;
+  }
+}
+
+/* --------------------------------------------------------------- cards ---- */
 
 .card {
-  background: var(--panel);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 20px;
-  margin-bottom: 16px;
+  padding: 1.125rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.875rem;
+}
+
+.card-title {
+  font-size: 0.9375rem;
+  font-weight: 700;
+}
+
+.card-sub,
+.hint {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.section-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 0 0.25rem;
+}
+
+/* -------------------------------------------------------------- controls -- */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  min-width: 0;
 }
 
 label {
-  display: block;
-  font-size: 13px;
-  color: var(--muted);
-  margin-bottom: 5px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-2);
 }
 
 input,
 select {
   width: 100%;
-  padding: 9px 11px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--bg);
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
   color: var(--text);
   font: inherit;
-  font-size: 14px;
+  font-size: 0.9375rem;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+select {
+  /* The native picker is kept on purpose: on a phone it is a full-height wheel
+     the OS already knows how to drive, and no scripted listbox comes close. */
+  appearance: none;
+  padding-right: 2.25rem;
+  background-image: linear-gradient(45deg, transparent 50%, currentcolor 50%),
+    linear-gradient(135deg, currentcolor 50%, transparent 50%);
+  background-position: right 1.05rem center, right 0.8rem center;
+  background-size: 0.3rem 0.3rem, 0.3rem 0.3rem;
+  background-repeat: no-repeat;
 }
 
 input:focus,
 select:focus {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--ring);
 }
 
-.row {
-  display: grid;
-  gap: 12px;
-  margin-bottom: 12px;
+input::placeholder {
+  color: var(--muted);
 }
 
-.row-2 {
-  grid-template-columns: 1fr 1fr;
-}
-
-.row-3 {
-  grid-template-columns: 1fr 1fr 1fr;
-}
-
-@media (max-width: 560px) {
-  .row-2,
-  .row-3 {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* `a.btn` exists because the sign-in and account links navigate to Neon Auth's
-   own pages. Those are navigations, not actions, so they must be anchors —
-   openable in a new tab, and reachable the way every other link is — while
-   still looking like the buttons beside them. */
+/* `a.btn` exists because signing in and reaching the account pages are
+   navigations to Neon Auth's own routes, not actions. They stay anchors —
+   openable in a new tab, reachable like every other link — and only borrow the
+   look of the buttons beside them. */
 button,
 a.btn {
-  padding: 9px 16px;
-  border: 0;
-  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.625rem 1rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
   background: var(--accent);
-  color: var(--accent-text);
+  color: var(--accent-fg);
   font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-a.btn {
-  display: inline-block;
+  font-size: 0.9375rem;
+  font-weight: 650;
   text-decoration: none;
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease,
+    transform 0.08s ease, opacity 0.12s ease;
 }
 
 button:hover:not(:disabled),
 a.btn:hover {
-  filter: brightness(1.08);
+  background: var(--accent-hover);
+}
+
+button:active:not(:disabled),
+a.btn:active {
+  transform: scale(0.985);
 }
 
 button:disabled {
-  opacity: 0.6;
-  cursor: default;
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
-button.ghost,
-a.btn.ghost {
+.btn-block {
+  width: 100%;
+}
+
+button.btn-secondary,
+a.btn.btn-secondary {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+button.btn-secondary:hover:not(:disabled),
+a.btn.btn-secondary:hover {
+  background: var(--surface-3);
+}
+
+button.btn-quiet,
+a.btn.btn-quiet {
   background: transparent;
-  color: var(--muted);
-  border: 1px solid var(--border);
-  font-weight: 500;
-  padding: 6px 12px;
-  font-size: 13px;
+  color: var(--text-2);
+  border-color: var(--border-strong);
+  font-weight: 600;
+}
+
+button.btn-quiet:hover:not(:disabled),
+a.btn.btn-quiet:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+button.btn-danger {
+  background: transparent;
+  color: var(--err);
+  border-color: color-mix(in srgb, var(--err) 35%, transparent);
+}
+
+button.btn-danger:hover:not(:disabled) {
+  background: var(--err-soft);
+}
+
+button.btn-sm,
+a.btn.btn-sm {
+  min-height: 2.25rem;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8125rem;
+  border-radius: 0.5rem;
+}
+
+/* A square control carrying only an icon — the theme switch, the close on a
+   sheet. Labelled with aria-label, never with a title alone. */
+button.btn-icon {
+  width: 2.5rem;
+  min-height: 2.5rem;
+  padding: 0;
+  background: transparent;
+  color: var(--text-2);
+  border-radius: var(--radius-sm);
+}
+
+button.btn-icon:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
 }
 
 /* An action that reads as part of a sentence — "then check again" — rather than
@@ -182,116 +646,301 @@ a.btn.ghost {
    than going somewhere; only its appearance is borrowed from a link. */
 button.link {
   display: inline;
+  min-height: 0;
   padding: 0;
+  border: 0;
   background: none;
   color: var(--accent);
-  font-weight: 500;
+  font-weight: 600;
   text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
-/* The line under a field saying what the choice costs. The setup pages lean on
-   these: the three questions they ask are exactly the ones people answer wrongly
-   when nothing explains them. */
-.hint {
-  color: var(--muted);
-  font-size: 13px;
-  margin: 6px 0 0;
+button.link:hover:not(:disabled) {
+  background: none;
+  color: var(--accent-hover);
 }
 
-.item {
+/* ---------------------------------------------------------------- lists --- */
+
+.list {
   display: flex;
+  flex-direction: column;
+}
+
+/*
+ * Wraps rather than squeezes. On a phone a class name, its centre and two
+ * actions do not fit on one line, and the flex default is to crush the text
+ * into a four-line column beside the buttons. Letting the actions drop to
+ * their own line keeps both readable — and keeps the tap targets full size,
+ * which is the half that matters when the button beside Pause is Remove.
+ */
+.row {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--border);
+  gap: 0.75rem;
+  padding: 0.875rem 0;
+  border-top: 1px solid var(--border);
 }
 
-.item:last-child {
-  border-bottom: 0;
+.row:first-child {
+  border-top: 0;
+  padding-top: 0;
 }
 
-.item-main {
-  flex: 1;
+.row:last-child {
+  padding-bottom: 0;
+}
+
+.row-main {
+  flex: 1 1 60%;
   min-width: 0;
 }
 
-.item-title {
-  font-weight: 600;
+.row-title {
+  font-weight: 650;
+  overflow-wrap: anywhere;
 }
 
-.item-meta {
-  font-size: 13px;
+.row-meta {
   color: var(--muted);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
 }
 
-.paused {
+.row-actions {
+  display: flex;
+  gap: 0.375rem;
+  flex: none;
+  margin-left: auto;
+}
+
+.is-paused {
   opacity: 0.55;
-}
-
-.pill {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 99px;
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.pill-ok {
-  background: var(--ok-bg);
-  color: var(--ok);
-}
-
-.pill-warn {
-  background: var(--warn-bg);
-  color: var(--warn);
-}
-
-.pill-err {
-  background: var(--err-bg);
-  color: var(--err);
-}
-
-.banner {
-  padding: 12px 14px;
-  border-radius: 8px;
-  margin-bottom: 16px;
-  font-size: 14px;
-}
-
-.banner-err {
-  background: var(--err-bg);
-  color: var(--err);
-}
-
-.banner-warn {
-  background: var(--warn-bg);
-  color: var(--warn);
 }
 
 .empty {
   color: var(--muted);
-  font-size: 14px;
-  padding: 8px 0;
+  font-size: 0.875rem;
+  text-align: center;
+  padding: 1.5rem 0.5rem;
 }
 
-.topbar {
+/* --------------------------------------------------------------- status --- */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex: none;
+  padding: 0.15rem 0.55rem;
+  border-radius: var(--pill);
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.pill-ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.pill-warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.pill-err {
+  background: var(--err-soft);
+  color: var(--err);
+}
+
+.pill-neutral {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.banner {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 16px;
+  gap: 0.6rem;
+  padding: 0.75rem 0.875rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  line-height: 1.45;
+  border: 1px solid transparent;
 }
 
-code {
-  font-size: 12px;
-  background: var(--bg);
-  padding: 1px 5px;
-  border-radius: 4px;
+.banner-err {
+  background: var(--err-soft);
+  color: var(--err);
+  border-color: color-mix(in srgb, var(--err) 22%, transparent);
 }
+
+.banner-warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 22%, transparent);
+}
+
+.banner-info {
+  background: var(--accent-soft);
+  color: var(--text);
+  border-color: var(--accent-line);
+}
+
+.banner strong {
+  font-weight: 700;
+}
+
+/* ---------------------------------------------------------------- steps --- */
+
+.steps {
+  display: flex;
+  gap: 0.375rem;
+  margin-bottom: 1rem;
+}
+
+.step-dot {
+  flex: 1;
+  height: 0.25rem;
+  border-radius: var(--pill);
+  background: var(--surface-3);
+}
+
+.step-dot.is-done {
+  background: var(--accent);
+}
+
+/* ----------------------------------------------------------- install ------ */
+
+/*
+ * The install offer. Deliberately loud once — a bordered, accented card rather
+ * than a line of text — because a PWA nobody notices they can install is a PWA
+ * nobody installs. It disappears for good once the app is running installed.
+ */
+.install {
+  border: 1px solid var(--accent-line);
+  background: linear-gradient(
+    135deg,
+    var(--accent-soft),
+    color-mix(in srgb, var(--surface) 70%, var(--accent-soft))
+  );
+}
+
+.install-steps {
+  margin: 0.75rem 0 0;
+  padding-left: 1.1rem;
+  color: var(--text-2);
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.install-steps li::marker {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+
+/* ----------------------------------------------------------------- hero --- */
+
+/* The one place type is allowed to be large: the first screen a signed-out
+   visitor sees, and the top of setup. Everywhere else the content is a list. */
+.hero {
+  padding: 1rem 0.25rem 0.25rem;
+}
+
+.hero h1 {
+  font-size: clamp(1.75rem, 6vw, 2.25rem);
+  letter-spacing: -0.03em;
+}
+
+.hero-sub {
+  margin-top: 0.625rem;
+  color: var(--muted);
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  max-width: 34ch;
+}
+
+.brand-name-accent {
+  color: var(--accent);
+}
+
+/* Fills the row beside a Back button, and is the whole row without one. */
+.btn-grow {
+  flex: 1;
+}
+
+/* ------------------------------------------------------------ segmented --- */
+
+/*
+ * Three states of one setting, shown at once. A radiogroup rather than a
+ * dropdown because there are exactly three and they are worth seeing: the
+ * point of an appearance control is that the choice is visible.
+ */
+.segmented {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.segment {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 2.375rem;
+  padding: 0.375rem 0.5rem;
+  border: 0;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.segment:hover:not([aria-checked='true']) {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.segment[aria-checked='true'] {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
+/* --------------------------------------------------------------- footer --- */
 
 .foot {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 0.75rem;
   text-align: center;
-  margin-top: 28px;
+  padding: 0.5rem 0 0;
+}
+
+/* Screen-reader-only, for the labels an icon-only control still owes. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
