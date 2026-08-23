@@ -1,7 +1,7 @@
 import { AccountView } from '@neondatabase/auth-ui';
 import { accountViewPaths } from '@neondatabase/auth-ui/server';
-import Link from 'next/link';
 import { Brand } from '../../components/Brand';
+import { BackButton } from '../../components/BackButton';
 
 /**
  * Account settings — password changes, email addresses, account deletion —
@@ -25,9 +25,7 @@ export default async function AccountPage({ params }: { params: Promise<{ path: 
       <header className="appbar">
         <div className="appbar-inner">
           <Brand />
-          <Link className="btn btn-quiet btn-sm" href="/">
-            Back
-          </Link>
+          <BackButton />
         </div>
       </header>
       <main className="main main-narrow account-shell">

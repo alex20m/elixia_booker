@@ -5,6 +5,7 @@ import {
   dashboardScreen,
   describeUnlisted,
   loadDashboard,
+  tabFromSearch,
   type DashboardLoad,
 } from '@/lib/dashboardState';
 import type { DashboardView } from '@/lib/service';
@@ -157,5 +158,24 @@ describe('describeUnlisted', () => {
     // Elixia not publishing a class is all this app can see. Saying it was
     // cancelled would be a guess the owner then acts on.
     expect(describeUnlisted(Date.now())).toMatch(/renamed, moved or dropped/i);
+  });
+});
+
+describe('tabFromSearch', () => {
+  // Regression coverage for a real bug: the dashboard used to always open on
+  // the Classes tab, so leaving Settings for /account/security to change a
+  // password and clicking Back landed the visitor back on Classes instead of
+  // where they had been.
+  it('reopens the tab named in the query string', () => {
+    expect(tabFromSearch('?tab=settings')).toBe('settings');
+    expect(tabFromSearch('?tab=activity')).toBe('activity');
+  });
+
+  it('defaults to classes when there is no tab param', () => {
+    expect(tabFromSearch('')).toBe('classes');
+  });
+
+  it('defaults to classes rather than trusting an unrecognized value', () => {
+    expect(tabFromSearch('?tab=not-a-real-tab')).toBe('classes');
   });
 });
