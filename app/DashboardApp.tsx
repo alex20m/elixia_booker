@@ -12,6 +12,7 @@ import {
   type DashboardLoad,
 } from '@/lib/dashboardState';
 import type { DashboardView } from '@/lib/service';
+import { AccountCard } from './AccountCard';
 import AddClass from './AddClass';
 import Setup from './Setup';
 import { SettingsPanel } from './SettingsPanel';
@@ -335,21 +336,7 @@ function SettingsTab({
 
       <InstallCard />
 
-      <section className="card">
-        <div className="card-head">
-          <h2 className="card-title">Account</h2>
-        </div>
-        <div className="stack">
-          {/* Password changes, email addresses and account deletion all live in
-              Neon Auth's own settings page rather than being reimplemented. */}
-          <Link className="btn btn-secondary btn-block" id="account-btn" href="/account/settings">
-            Email, password and sign-in
-          </Link>
-          <button className="btn-quiet btn-block" onClick={() => void authClient.signOut()}>
-            Sign out
-          </button>
-        </div>
-      </section>
+      <AccountCard />
 
       <p className="foot">Books only your own account. Retries are bounded and rate-limit aware.</p>
     </>

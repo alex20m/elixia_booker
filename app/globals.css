@@ -208,6 +208,30 @@
   --destructive: var(--danger);
 }
 
+/* The rest of @neondatabase/auth-ui's surface, scoped to .account-shell
+   (app/account/[path]/page.tsx) rather than :root: it reads --accent for
+   every hover, focus and loading-skeleton state it paints, and this app's
+   own --accent is the coral call-to-action colour. Left unscoped, that turns
+   sidebar hovers and skeleton placeholders solid coral instead of a neutral
+   tone. Card/popover/muted are unbridged for the same reason as above — they
+   have no counterpart worth reusing everywhere — but do here, so the account
+   pages read as part of the app instead of falling back to generic
+   light/dark greys next to it. */
+.account-shell {
+  --card: var(--surface);
+  --card-foreground: var(--text);
+  --popover: var(--surface);
+  --popover-foreground: var(--text);
+  --secondary: var(--surface-nested);
+  --secondary-foreground: var(--text);
+  --muted: var(--surface-nested);
+  --muted-foreground: var(--text-alt);
+  --accent: var(--surface-nested);
+  --accent-foreground: var(--text);
+  --input: var(--border);
+  --ring: var(--border-strong);
+}
+
 /* The dark values, written once and applied from two selectors: the class the
    theme script sets, and the OS preference for the one page that has no script. */
 @media (prefers-color-scheme: dark) {
