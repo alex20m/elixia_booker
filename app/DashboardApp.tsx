@@ -232,7 +232,7 @@ function Dashboard({
     <Shell
       actions={
         <>
-          <InstallButton onManual={() => selectTab('settings')} />
+          <InstallButton />
           <NavMenu sections={SECTIONS} current={tab} onSelect={selectTab} />
         </>
       }
