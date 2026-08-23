@@ -13,6 +13,11 @@ import AddClass from '@/app/AddClass';
  * through a stubbed catalogue and assert on what the form can produce, not on
  * how it is wired.
  *
+ * The choice is made in three steps — centre, then what to train, then when —
+ * so the tests follow the same order, and pin the thing that makes a stepped
+ * form dangerous: a leftover selection from the previous step, which is how a
+ * pair that exists nowhere on the timetable gets submitted.
+ *
  * The centre is remembered between visits — the same gym every week, out of
  * 226 — so these tests pin both halves of that: what is saved as it is
  * chosen, and what is offered back on the next visit. The class is never
@@ -25,8 +30,13 @@ const CENTERS = [
   { id: '742', name: 'Kamppi' },
 ];
 
+// Two classes, each running twice a week, and one time they share: enough for
+// "which class" and "which slot" to be genuinely separate questions, and for a
+// slot index carried across a class change to land on the wrong row.
 const TAPIOLA_CLASSES = [
   { className: 'Bodypump', weekday: 'monday', startTime: '09:00' },
+  { className: 'Yoga', weekday: 'monday', startTime: '18:00' },
+  { className: 'Bodypump', weekday: 'wednesday', startTime: '17:00' },
   { className: 'Yoga', weekday: 'wednesday', startTime: '17:00' },
 ];
 
@@ -127,6 +137,8 @@ async function choose(id: string, value: string): Promise<void> {
 }
 
 const chooseCenter = (center: string): Promise<void> => choose('s-center', center);
+const chooseClass = (className: string): Promise<void> => choose('s-class', className);
+const chooseSlot = (slot: string): Promise<void> => choose('s-slot', slot);
 
 async function clickAdd(): Promise<void> {
   await act(async () => {
@@ -148,42 +160,26 @@ describe('finding a centre', () => {
   });
 });
 
-describe('the class chooser', () => {
-  it('offers only the classes the chosen centre publishes', async () => {
+describe('choosing what to train', () => {
+  it('offers each class the centre publishes once, however often it runs', async () => {
+    // The first question is *what*, so a class that runs twice a week is one
+    // choice here — repeating it per slot is the flat list this step exists to
+    // break up.
     await render();
     await chooseCenter('740');
 
-    expect(optionLabels('s-class').join('|')).toMatch(/Bodypump.*Monday.*09:00/);
-    expect(optionLabels('s-class').join('|')).toMatch(/Yoga.*Wednesday.*17:00/);
-    // One row per published slot, plus the "choose one" placeholder.
-    expect(select('s-class').options).toHaveLength(TAPIOLA_CLASSES.length + 1);
+    expect(optionLabels('s-class').filter((label) => label === 'Bodypump')).toHaveLength(1);
+    expect(optionLabels('s-class').filter((label) => label === 'Yoga')).toHaveLength(1);
+    // One row per distinct class, plus the "choose one" placeholder.
+    expect(select('s-class').options).toHaveLength(3);
   });
 
-  it('submits the weekday and time of the class that was picked', async () => {
-    // The point of the whole exercise: what is stored is a slot Elixia listed,
-    // not a name, day and time assembled independently of each other.
+  it('keeps days and times out of the class step', async () => {
     await render();
     await chooseCenter('740');
-    await choose('s-class', '1');
-    await clickAdd();
 
-    expect(posts).toEqual([
-      {
-        url: '/api/subscriptions',
-        body: { className: 'Yoga', center: 'Tapiola', weekday: 'wednesday', startTime: '17:00' },
-      },
-    ]);
-  });
-
-  it('cannot add anything before a class is picked', async () => {
-    await render();
-    expect(addDisabled()).toBe(true);
-
-    await chooseCenter('740');
-    expect(addDisabled()).toBe(true);
-
-    await choose('s-class', '0');
-    expect(addDisabled()).toBe(false);
+    expect(optionLabels('s-class').join('|')).not.toMatch(/\d\d:\d\d/);
+    expect(optionLabels('s-class').join('|')).not.toMatch(/monday/i);
   });
 
   it('says a centre publishes nothing rather than showing an empty picker', async () => {
@@ -205,11 +201,76 @@ describe('the class chooser', () => {
 
     await render();
     await chooseCenter('740');
-    await choose('s-class', '0');
+    await chooseClass('Bodypump');
     await choose('s-center', '741');
 
     expect(optionLabels('s-class').join('|')).not.toMatch(/Bodypump/);
     expect(optionLabels('s-class').join('|')).toMatch(/Loading/);
+    expect(select('s-slot').disabled).toBe(true);
+    expect(addDisabled()).toBe(true);
+  });
+});
+
+describe('choosing when', () => {
+  it('waits for a class before offering any times', async () => {
+    await render();
+    await chooseCenter('740');
+
+    expect(select('s-slot').disabled).toBe(true);
+    expect(select('s-slot').options[0]?.textContent).toMatch(/class/i);
+  });
+
+  it('offers only the days and times the chosen class actually runs', async () => {
+    await render();
+    await chooseCenter('740');
+    await chooseClass('Yoga');
+
+    const labels = optionLabels('s-slot').slice(1);
+    expect(labels).toEqual(['Monday 18:00', 'Wednesday 17:00']);
+  });
+
+  it('submits the weekday and time of the slot that was picked', async () => {
+    // The point of the whole exercise: what is stored is a slot Elixia listed,
+    // not a name, day and time assembled independently of each other.
+    await render();
+    await chooseCenter('740');
+    await chooseClass('Yoga');
+    await chooseSlot('wednesday|17:00');
+    await clickAdd();
+
+    expect(posts).toEqual([
+      {
+        url: '/api/subscriptions',
+        body: { className: 'Yoga', center: 'Tapiola', weekday: 'wednesday', startTime: '17:00' },
+      },
+    ]);
+  });
+
+  it('cannot add anything before a slot is picked', async () => {
+    await render();
+    expect(addDisabled()).toBe(true);
+
+    await chooseCenter('740');
+    expect(addDisabled()).toBe(true);
+
+    await chooseClass('Bodypump');
+    expect(addDisabled()).toBe(true);
+
+    await chooseSlot('monday|09:00');
+    expect(addDisabled()).toBe(false);
+  });
+
+  it('forgets the chosen time when the class changes under it', async () => {
+    // Both classes run on Wednesday at 17:00, so a slot kept across the change
+    // stays selectable and submits happily — as the other class, which is not
+    // what anyone picked.
+    await render();
+    await chooseCenter('740');
+    await chooseClass('Yoga');
+    await chooseSlot('wednesday|17:00');
+    await chooseClass('Bodypump');
+
+    expect(select('s-slot').value).toBe('');
     expect(addDisabled()).toBe(true);
   });
 
@@ -245,13 +306,16 @@ describe('remembering where you train', () => {
   it('never remembers the class, which is the one thing being decided', async () => {
     defaults = { center: '740' };
     await render();
-    await choose('s-class', '0');
+    await chooseClass('Bodypump');
+    await chooseSlot('monday|09:00');
     await clickAdd();
 
-    // Nothing about the class is saved, and the picker is empty again for the
-    // next one — a prefilled class is a subscription nobody meant to create.
+    // Nothing about the class is saved, and both pickers are empty again for
+    // the next one — a prefilled class is a subscription nobody meant to
+    // create.
     expect(saved.every((entry) => !JSON.stringify(entry).includes('Bodypump'))).toBe(true);
     expect(select('s-class').value).toBe('');
+    expect(select('s-slot').value).toBe('');
   });
 
   it('opens on an empty form when the remembered centre has since closed', async () => {
