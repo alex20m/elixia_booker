@@ -48,11 +48,30 @@ function readInstallability(): string {
   return state.kind === 'manual' ? `manual:${state.platform}` : state.kind;
 }
 
+/**
+ * The live installability, shared by the card and the header button.
+ *
+ * The empty snapshot is what the server sees: none of this is knowable
+ * without a browser, and guessing would flash the wrong control at half of
+ * visitors.
+ */
+function useInstallability(): string {
+  return useSyncExternalStore(subscribeToInstallability, readInstallability, () => '');
+}
+
+/** Replay the parked Chromium prompt, then re-read: accepting it makes the
+ * app standalone, and dismissing it spends the event Chromium gave us. */
+async function replayInstallPrompt(): Promise<void> {
+  const event = parkedInstallPrompt();
+  if (event) {
+    await event.prompt();
+    await event.userChoice;
+  }
+  window.dispatchEvent(new Event(INSTALL_PROMPT_EVENT));
+}
+
 export function InstallCard() {
-  // The empty snapshot is what the server sees: none of this is knowable
-  // without a browser, and guessing would flash the wrong card at half of
-  // visitors.
-  const state = useSyncExternalStore(subscribeToInstallability, readInstallability, () => '');
+  const state = useInstallability();
 
   if (state === '' || state === 'installed') return null;
 
@@ -71,20 +90,7 @@ export function InstallCard() {
       </div>
 
       {ready ? (
-        <button
-          id="install-btn"
-          type="button"
-          onClick={async () => {
-            const event = parkedInstallPrompt();
-            if (event) {
-              await event.prompt();
-              await event.userChoice;
-            }
-            // Re-read: accepting the prompt makes the app standalone, and
-            // dismissing it spends the event Chromium gave us.
-            window.dispatchEvent(new Event(INSTALL_PROMPT_EVENT));
-          }}
-        >
+        <button id="install-btn" type="button" onClick={() => void replayInstallPrompt()}>
           <InstallIcon />
           Install app
         </button>
@@ -99,5 +105,33 @@ export function InstallCard() {
         </>
       )}
     </section>
+  );
+}
+
+/**
+ * The compact header version, next to Sign out — hidden once the app is
+ * already running installed, same as the card.
+ *
+ * There is no room in the bar to print the manual steps, so a browser with no
+ * install API just hands off to wherever `onManual` points — the Settings
+ * tab, where the full `InstallCard` prints them.
+ */
+export function InstallButton({ onManual }: { onManual: () => void }) {
+  const state = useInstallability();
+
+  if (state === '' || state === 'installed') return null;
+
+  const ready = state === 'ready';
+
+  return (
+    <button
+      id="install-header-btn"
+      type="button"
+      className="btn-icon"
+      aria-label={ready ? 'Install app' : 'How to install the app'}
+      onClick={() => (ready ? void replayInstallPrompt() : onManual())}
+    >
+      <InstallIcon />
+    </button>
   );
 }

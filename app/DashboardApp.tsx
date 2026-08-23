@@ -15,7 +15,7 @@ import type { DashboardView } from '@/lib/service';
 import AddClass from './AddClass';
 import Setup from './Setup';
 import { SettingsPanel } from './SettingsPanel';
-import { InstallCard } from './components/InstallCard';
+import { InstallButton, InstallCard } from './components/InstallCard';
 import { Shell } from './components/Shell';
 import { CalendarIcon, CheckIcon, PulseIcon, SlidersIcon } from './components/icons';
 import { ThemeChoiceControl } from './components/theme';
@@ -208,9 +208,16 @@ function Dashboard({
   return (
     <Shell
       actions={
-        <button className="btn-quiet btn-sm" id="signout-btn" onClick={() => void authClient.signOut()}>
-          Sign out
-        </button>
+        <>
+          <InstallButton onManual={() => setTab('settings')} />
+          <button
+            className="btn-quiet btn-sm"
+            id="signout-btn"
+            onClick={() => void authClient.signOut()}
+          >
+            Sign out
+          </button>
+        </>
       }
     >
       {/* One control in two places: a thumb-reachable bar at the bottom of a

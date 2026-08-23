@@ -1,12 +1,11 @@
 'use client';
 
 import { Brand } from './Brand';
-import { ThemeToggle } from './theme';
 
 /**
  * The frame every screen sits in: a sticky bar carrying the logo and whatever
- * the screen puts beside it, and the theme control — which is reachable from
- * everywhere, including the pages a signed-out visitor sees.
+ * the screen puts beside it. The theme control lives in Settings only, not
+ * here — this bar is for the actions a visitor reaches for on every screen.
  */
 export function Shell({
   actions,
@@ -20,10 +19,7 @@ export function Shell({
       <header className="appbar">
         <div className="appbar-inner">
           <Brand />
-          <div className="appbar-actions">
-            {actions}
-            <ThemeToggle />
-          </div>
+          <div className="appbar-actions">{actions}</div>
         </div>
       </header>
       {children}
