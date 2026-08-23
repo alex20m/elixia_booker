@@ -77,6 +77,17 @@ needs credentials the sandbox does not have.
 
 ### Framework traps for the throwaway route
 
+- **Forcing a theme from the URL has to happen in `<head>`, and has to write
+  wherever the theme provider reads.** Two separate things defeat the obvious
+  approach. A `<script>` rendered inside a client component does not run until
+  React hydrates, and on a cold dev build that can be slower than the shutter —
+  so the shot silently captures the default theme, and both "light" and "dark"
+  images come out identical. Then, once hydration *does* happen, a theme
+  provider (next-themes and friends) reads its own storage key on mount and
+  overwrites whatever class you set. So the override belongs in the document
+  head, and it must set the storage key as well as the class. Two byte-identical
+  screenshots from two different theme URLs is the tell for both.
+
 - **A route folder starting with `_` is private in Next's app router** and
   serves a 404. Naming the scratch page `app/__preview` looks like the
   convention for "obviously temporary" and is exactly the name that will not

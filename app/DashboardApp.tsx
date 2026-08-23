@@ -129,7 +129,7 @@ function LoadFailed({ message, retry }: { message: string; retry: () => Promise<
           <div className="banner banner-err" id="load-error">
             {message}
           </div>
-          <div className="cluster" style={{ marginTop: '0.875rem' }}>
+          <div className="cluster mt-m">
             <button
               id="retry-btn"
               disabled={busy}
@@ -321,7 +321,7 @@ function SettingsTab({
           <h2 className="card-title">Appearance</h2>
         </div>
         <ThemeChoiceControl />
-        <p className="hint" style={{ marginTop: '0.625rem' }}>
+        <p className="hint mt-s">
           Auto follows your phone or computer’s own light and dark setting.
         </p>
       </section>
@@ -398,14 +398,14 @@ function ElixiaLink({ view, refresh }: { view: DashboardView; refresh: () => Pro
       </div>
 
       {view.account.elixiaStatus === 'expired' && (
-        <div className="banner banner-warn" style={{ marginBottom: '0.875rem' }}>
+        <div className="banner banner-warn mt-m">
           <span>
             Elixia rejected the saved credentials, so booking is paused. Re-link to resume.
           </span>
         </div>
       )}
       {error && (
-        <div className="banner banner-err" style={{ marginBottom: '0.875rem' }}>
+        <div className="banner banner-err mt-m">
           <span>{error}</span>
         </div>
       )}
@@ -435,8 +435,7 @@ function ElixiaLink({ view, refresh }: { view: DashboardView; refresh: () => Pro
 
       <button
         id="link-btn"
-        className="btn-block"
-        style={{ marginTop: '0.875rem' }}
+        className="btn-block mt-m"
         disabled={busy}
         onClick={async () => {
           setError('');
@@ -458,7 +457,7 @@ function ElixiaLink({ view, refresh }: { view: DashboardView; refresh: () => Pro
         {busy ? 'Checking…' : 'Link account'}
       </button>
 
-      <p className="hint" style={{ marginTop: '0.75rem' }}>
+      <p className="hint mt-s">
         Your Elixia password is stored <strong>encrypted</strong>, because the bot has to
         re-authenticate on its own when a session expires — otherwise booking would stop silently
         until you noticed. Unlinking erases it.
@@ -492,7 +491,7 @@ function ClassList({ view, refresh }: { view: DashboardView; refresh: () => Prom
                   : 'Paused'}
               </div>
               {unlisted && (
-                <div className="banner banner-warn" style={{ marginTop: '0.5rem' }}>
+                <div className="banner banner-warn mt-xs">
                   <span>{unlisted}</span>
                 </div>
               )}

@@ -8,12 +8,12 @@ import type { MetadataRoute } from 'next';
  * drifted from the app's own is a white flash on every launch, and nothing in
  * the running app ever shows it.
  *
- * `theme_color` and `background_color` are the light palette's `--bg`
- * deliberately: a manifest carries one of each, browsers pick them before any
- * page has run, and a dark launch screen in front of a light app is the more
- * jarring of the two mistakes. The `<meta name="theme-color">` tags in the
- * layout do follow the palette, and those are what the installed app's own
- * chrome uses once it is open.
+ * `theme_color` is SATS navy — the app bar is navy in both themes, and it is
+ * the same value elixia.fi publishes as its own theme-color, so the installed
+ * app's chrome continues the bar rather than cutting a line across it.
+ * `background_color` paints the launch screen before any CSS has run, so it is
+ * the light page colour: a manifest carries one of each, and a dark launch
+ * screen in front of a light app is the more jarring of the two mistakes.
  */
 export default function manifest(): MetadataRoute.Manifest {
   return {
@@ -24,8 +24,8 @@ export default function manifest(): MetadataRoute.Manifest {
     scope: '/',
     display: 'standalone',
     orientation: 'portrait',
-    background_color: '#f5f5fa',
-    theme_color: '#f5f5fa',
+    background_color: '#f3f4f5',
+    theme_color: '#0d2134',
     categories: ['health', 'fitness', 'lifestyle'],
     icons: [
       { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },

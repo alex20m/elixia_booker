@@ -256,7 +256,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
                         Connect Telegram
                       </button>
                       {awaitingTap && (
-                        <p className="hint" style={{ marginTop: '0.5rem' }}>
+                        <p className="hint mt-xs">
                           Tap <strong>Start</strong> in Telegram, then{' '}
                           <button
                             id="tg-check"
@@ -301,12 +301,12 @@ export default function Setup({ onDone }: { onDone: () => void }) {
           )}
 
           {error && (
-            <div className="banner banner-err" id="setup-error" style={{ marginTop: '0.875rem' }}>
+            <div className="banner banner-err mt-m" id="setup-error">
               <span>{error}</span>
             </div>
           )}
 
-          <div className="cluster" style={{ marginTop: '1.125rem' }}>
+          <div className="cluster mt-m">
             {step > 0 && (
               <button className="btn-quiet" id="setup-back" onClick={() => setStep(step - 1)}>
                 Back

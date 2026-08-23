@@ -26,10 +26,9 @@ export const viewport: Viewport = {
   // stylesheet then pad back out where it matters.
   viewportFit: 'cover',
   colorScheme: 'light dark',
-  themeColor: [
-    { media: '(prefers-color-scheme: light)', color: '#ffffff' },
-    { media: '(prefers-color-scheme: dark)', color: '#0b0d0e' },
-  ],
+  // One value, not a pair: the app bar is SATS navy in both themes, and this is
+  // what sits directly against it in the browser's own chrome.
+  themeColor: '#0d2134',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -149,7 +149,7 @@ export function SettingsPanel({
             is a user who believes they are covered and hears nothing, including
             when booking stops. */}
         {channel === 'telegram' && !connected && (
-          <div className="banner banner-warn" id="notify-broken" style={{ marginTop: '0.75rem' }}>
+          <div className="banner banner-warn mt-s" id="notify-broken">
             <span>
               Telegram is selected but no chat is connected, so alerts are{' '}
               <strong>not being delivered</strong>. Connect one below, or choose another channel.
@@ -158,7 +158,7 @@ export function SettingsPanel({
         )}
 
         {channel === 'telegram' && canConnect && (
-          <div style={{ marginTop: '0.75rem' }}>
+          <div className="mt-s">
             {connected ? (
               <p className="hint">
                 Connected to Telegram chat {view.account.telegramChatId}.{' '}
@@ -172,7 +172,7 @@ export function SettingsPanel({
                   Connect Telegram
                 </button>
                 {awaitingTap && (
-                  <p className="hint" style={{ marginTop: '0.5rem' }}>
+                  <p className="hint mt-xs">
                     Tap <strong>Start</strong> in Telegram, then{' '}
                     <button id="tg-check" className="link" onClick={refresh}>
                       check again
@@ -186,7 +186,7 @@ export function SettingsPanel({
         )}
 
         {channel === 'telegram' && !canConnect && (
-          <div className="field" style={{ marginTop: '0.75rem' }}>
+          <div className="field mt-s">
             <label htmlFor="tg">Telegram chat ID</label>
             <input
               id="tg"
@@ -202,22 +202,21 @@ export function SettingsPanel({
         )}
 
         {channel === 'none' && (
-          <p className="hint" style={{ marginTop: '0.75rem' }}>
+          <p className="hint mt-s">
             Bookings still run — you just will not be told about them, including when your Elixia
             session expires and booking stops.
           </p>
         )}
 
         {error && (
-          <div className="banner banner-err" style={{ marginTop: '0.75rem' }}>
+          <div className="banner banner-err mt-s">
             <span>{error}</span>
           </div>
         )}
 
         <button
           id="save-btn"
-          className="btn-block"
-          style={{ marginTop: '0.875rem' }}
+          className="btn-block mt-m"
           onClick={async () => {
             setError('');
             setSaved(false);

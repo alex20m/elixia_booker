@@ -218,11 +218,27 @@ the header on a desktop. There is no separate account or security section:
 everything that would be in one already lives on Neon Auth's own page, and
 Settings links straight to it.
 
-`app/globals.css` is the whole visual system and it has two rules. Everything is
-a token — no component picks a colour, radius or shadow of its own, so light and
-dark are two lists of values rather than two sets of components. And class names
-describe the thing, not the look (`.btn-danger`, never `.btn-red`), so a palette
-change happens in one place.
+`app/globals.css` is the whole visual system. Its palette, type scale, spacing
+grid and radii are **SATS DNA** — the design system behind Elixia, SATS and Fresh
+Fitness — so the app looks like it belongs beside the gym's own. Everything is a
+token: no component picks a colour, radius or shadow of its own, which is what
+lets the two themes be two lists of values rather than two sets of components,
+and class names describe the thing rather than the look (`.btn-danger`, never
+`.btn-red`).
+
+Four of that system's rules are the ones habit breaks:
+
+- **Body text is 14px**, not 16. It is a dense, information-first system.
+- **No shadows.** Depth is layered surface colour — page `#F3F4F5`, surface
+  `#FFFFFF`, nested `#F7F7F7` — plus 1px `#DCDEE0` borders.
+- **Navy `#0D2134` is structure, coral `#FA5333` is state.** Coral means active,
+  selected, in progress or featured. It is never decoration and never a second
+  button colour.
+- **Filled coral uses `#C84229`**, or white text on it fails contrast.
+
+The name and the `EB` mark are this app's own. Matching a spacing and type system
+is fair; the ELIXIA wordmark and the proprietary SATS Headline face are not ours
+to ship, and neither is used.
 
 **Theme.** The visitor's choice — system, light or dark — is stored under the
 key next-themes uses and applied as the class next-themes writes, because

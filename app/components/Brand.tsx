@@ -23,14 +23,14 @@ export function LogoMark({ size = 32, className }: { size?: number; className?: 
       aria-hidden="true"
       focusable="false"
     >
-      <rect width="48" height="48" rx="12" fill="var(--brand-tile, #101418)" />
+      <rect width="48" height="48" rx="12" fill="var(--brand-tile, #0d2134)" />
       <g fill="var(--brand-ink, #ffffff)">
         <rect x="8.6" y="13" width="5.8" height="22" rx="2.6" />
         <rect x="8.6" y="13" width="16.6" height="5.8" rx="2.6" />
         <rect x="8.6" y="21.1" width="13.2" height="5.8" rx="2.6" />
         <rect x="8.6" y="29.2" width="16.6" height="5.8" rx="2.6" />
       </g>
-      <g fill="var(--brand-accent, #c8ff3d)">
+      <g fill="var(--brand-accent, #fa5333)">
         <rect x="28.4" y="13" width="5.8" height="22" rx="2.6" />
         <path
           fillRule="evenodd"

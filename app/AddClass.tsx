@@ -217,25 +217,24 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
       </div>
 
       {centers.status === 'error' && (
-        <div className="banner banner-err" style={{ marginTop: '0.75rem' }}>
+        <div className="banner banner-err mt-s">
           <span>{centers.message}</span>
         </div>
       )}
       {classes?.status === 'error' && (
-        <div className="banner banner-err" style={{ marginTop: '0.75rem' }}>
+        <div className="banner banner-err mt-s">
           <span>{classes.message}</span>
         </div>
       )}
       {error && (
-        <div className="banner banner-err" style={{ marginTop: '0.75rem' }}>
+        <div className="banner banner-err mt-s">
           <span>{error}</span>
         </div>
       )}
 
       <button
         id="add-btn"
-        className="btn-block"
-        style={{ marginTop: '0.875rem' }}
+        className="btn-block mt-m"
         disabled={busy || !chosen}
         onClick={async () => {
           if (!chosen) return;
@@ -264,7 +263,7 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
         {busy ? 'Adding…' : 'Add class'}
       </button>
 
-      <p className="hint" style={{ marginTop: '0.75rem' }}>
+      <p className="hint mt-s">
         Only classes Elixia currently publishes can be added — its schedule runs about two weeks
         ahead, and a weekly class appears in it every week.
       </p>
