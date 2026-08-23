@@ -59,6 +59,14 @@ export interface Repo {
   upsertProfile(profile: Profile): Promise<void>;
   /** Every profile with a usable Elixia link. Used by the nightly reindex. */
   listLinkedProfiles(): Promise<Profile[]>;
+  /**
+   * Wipe everything the app itself stored for this user: the profile row —
+   * including the sealed Elixia secret — and, through the same cascade that
+   * protects a removed class, its subscriptions, scheduled releases and
+   * history. Called once account deletion in Neon Auth has actually happened,
+   * not merely requested, so this never runs ahead of the identity it follows.
+   */
+  deleteProfile(userId: string): Promise<void>;
 
   listSubscriptions(userId: string): Promise<Subscription[]>;
   createSubscription(subscription: NewSubscription): Promise<Subscription>;

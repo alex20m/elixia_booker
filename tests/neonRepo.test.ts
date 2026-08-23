@@ -200,6 +200,54 @@ describe('profiles', () => {
 
     expect((await repo.listLinkedProfiles()).map((p) => p.id)).toEqual([ALICE]);
   });
+
+  it('deleting a profile removes its subscriptions, schedule and history, and nobody else\'s', async () => {
+    await repo.upsertProfile(profile(ALICE, { elixiaEmail: 'gym@example.com', elixiaSecret: 'sealed-blob' }));
+    const alices = await addClass(ALICE, 'Bodypump');
+    const bobs = await addClass(BOB, 'Bodypump');
+    await repo.replaceDueEntries(ALICE, [
+      {
+        userId: ALICE,
+        subscriptionId: alices.id,
+        releaseEpochMs: Date.UTC(2026, 3, 1, 5, 0),
+        classEpochMs: Date.UTC(2026, 3, 8, 6, 0),
+        classDate: '2026-04-08',
+      },
+    ]);
+    await repo.replaceDueEntries(BOB, [
+      {
+        userId: BOB,
+        subscriptionId: bobs.id,
+        releaseEpochMs: Date.UTC(2026, 3, 1, 5, 0),
+        classEpochMs: Date.UTC(2026, 3, 8, 6, 0),
+        classDate: '2026-04-08',
+      },
+    ]);
+    await repo.appendHistory(ALICE, {
+      atMs: Date.UTC(2026, 3, 1, 5, 0),
+      subscriptionId: alices.id,
+      className: 'Bodypump',
+      classDate: '2026-04-08',
+      startTime: '09:00',
+      outcome: 'booked',
+      attempts: 1,
+      firstAttemptOffsetMs: 0,
+      dryRun: false,
+    });
+
+    await repo.deleteProfile(ALICE);
+
+    expect(await repo.getProfile(ALICE)).toBeNull();
+    expect(await repo.listSubscriptions(ALICE)).toEqual([]);
+    expect(await repo.listHistory(ALICE)).toEqual([]);
+    expect(await repo.claimDue(0, Date.UTC(2026, 4, 1))).toEqual([
+      expect.objectContaining({ userId: BOB, subscriptionId: bobs.id }),
+    ]);
+
+    // Bob is untouched.
+    expect(await repo.getProfile(BOB)).not.toBeNull();
+    expect((await repo.listSubscriptions(BOB)).map((s) => s.id)).toEqual([bobs.id]);
+  });
 });
 
 describe('subscriptions', () => {

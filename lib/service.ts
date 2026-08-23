@@ -102,6 +102,21 @@ export async function getOrCreateProfile(config: AppConfig, userId: string): Pro
   return profile;
 }
 
+/**
+ * Wipe everything the app itself stored for this user — profile, sealed
+ * Elixia secret, subscriptions, scheduled releases, history.
+ *
+ * Called from the Neon Auth proxy once the identity itself has actually been
+ * deleted (see app/api/auth/[...path]/route.ts). Neon Auth is managed
+ * remotely and offers no hook of its own to run this from, and the schema
+ * has no foreign key back to it either — see db/migrations/0001_initial_schema.sql
+ * — so this is the one place that keeps a deleted account from leaving its
+ * gym credentials and subscriptions behind indefinitely.
+ */
+export async function deleteAccount(config: AppConfig, userId: string): Promise<void> {
+  await config.repo.deleteProfile(userId);
+}
+
 // --- setup -----------------------------------------------------------------
 
 /**

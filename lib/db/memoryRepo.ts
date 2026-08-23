@@ -51,6 +51,23 @@ export function createMemoryRepo(): MemoryRepo {
       return [...profiles.values()].filter((p) => p.elixiaStatus === 'ok');
     },
 
+    async deleteProfile(userId) {
+      profiles.delete(userId);
+      // Mirrors the schema's ON DELETE CASCADE, the same way deleteSubscription
+      // does above: subscriptions, their due entries, and history all key off
+      // the profile that no longer exists.
+      for (const [id, sub] of subscriptions) {
+        if (sub.userId === userId) subscriptions.delete(id);
+      }
+      for (let i = dueEntries.length - 1; i >= 0; i--) {
+        if (dueEntries[i]!.userId === userId) dueEntries.splice(i, 1);
+      }
+      history.delete(userId);
+      for (const [hash, link] of telegramLinks) {
+        if (link.userId === userId) telegramLinks.delete(hash);
+      }
+    },
+
     async createTelegramLink(userId, tokenHash, expiresAtMs, nowMs) {
       // One pending link per user, so an abandoned attempt cannot leave a
       // second working token behind it; expired rows go at the same time.

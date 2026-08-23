@@ -138,17 +138,24 @@ create index if not exists booking_history_user_time
 -- Housekeeping: deleted Neon Auth users
 -- ---------------------------------------------------------------------------
 --
--- Deleting an account in Neon Auth cannot cascade into these tables, because
--- point 1 above rules out the foreign key that would carry the cascade. Neon
--- Auth soft-deletes instead, setting `deleted_at` in its mirror, so the orphans
--- are findable. Run this occasionally, or never — it is a few rows either way:
+-- Deleting an account in Neon Auth cannot cascade into these tables on its
+-- own, because point 1 above rules out the foreign key that would carry the
+-- cascade. Neon Auth is managed remotely and has no hook of its own to run
+-- cleanup from either, so app/api/auth/[...path]/route.ts — the proxy every
+-- deletion request passes through — calls `deleteAccount` (lib/service.ts)
+-- itself the moment the identity is actually gone. That deletes the profile
+-- row, and the cascades above take subscriptions, schedule and history with
+-- it, including the sealed Elixia secret.
+--
+-- The query below is a backstop, not the mechanism: for any profile that
+-- predates this, or whose Neon Auth user was removed by some path other than
+-- the app's own delete-account flow (the provider's dashboard or API,
+-- directly). Check what it would remove before running it — a profile whose
+-- user has not yet appeared in Neon Auth's mirror looks identical to a
+-- deleted one:
 --
 --   delete from public.profiles p
 --   where not exists (
 --     select 1 from neon_auth.users_sync u
 --     where u.id = p.id and u.deleted_at is null
 --   );
---
--- The cascades above then clear that user's subscriptions, schedule and
--- history. Check what it would remove before running it: a profile whose user
--- has not yet appeared in the mirror looks identical to a deleted one.

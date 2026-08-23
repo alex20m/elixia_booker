@@ -187,6 +187,12 @@ export function createNeonRepo(sql: Sql): Repo {
       return rows.map(toProfile);
     },
 
+    async deleteProfile(userId) {
+      // The foreign keys carry the rest: subscriptions, due_entries and
+      // booking_history all reference profiles with `on delete cascade`.
+      await sql.query(`delete from public.profiles where id = $1`, [userId]);
+    },
+
     async listSubscriptions(userId) {
       const rows = await sql.query(
         `select ${SUBSCRIPTION_COLUMNS} from public.subscriptions
