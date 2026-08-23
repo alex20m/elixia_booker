@@ -144,8 +144,8 @@ export default function Setup({ onDone }: { onDone: () => void }) {
         <div className="hero">
           <h1>Set up your booker</h1>
           <p className="hero-sub">
-            Three questions, once. Nothing here has a default — each answer changes when your
-            classes get booked, or whether you hear about it.
+            Three quick questions. Your answers decide when your classes get booked, and whether
+            you hear about it.
           </p>
         </div>
 
