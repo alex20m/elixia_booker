@@ -4,6 +4,7 @@ import {
   addSubscription,
   buildDashboard,
   completeSetup,
+  deleteAccount,
   requireConfigured,
   listCenters,
   listClasses,
@@ -140,6 +141,22 @@ describe('profiles', () => {
     const second = await getOrCreateProfile(config, USER_ID);
     expect(second.bookingWindowDays).toBe(14);
     expect(second.timeZone).toBe('Europe/Stockholm');
+  });
+
+  it('deleting an account wipes its profile, sealed Elixia secret and subscriptions, leaving other accounts alone', async () => {
+    const alice = await linkedProfile(USER_ID);
+    await addSubscription(config, alice, BODYPUMP, nowMs);
+    const bob = await linkedProfile(OTHER_ID, 'other@example.com');
+    await addSubscription(config, bob, BODYPUMP, nowMs);
+
+    await deleteAccount(config, USER_ID);
+
+    expect(await repo.getProfile(USER_ID)).toBeNull();
+    expect(await repo.listSubscriptions(USER_ID)).toEqual([]);
+
+    // Bob's account, elsewhere in the same table, is untouched.
+    expect(await repo.getProfile(OTHER_ID)).not.toBeNull();
+    expect((await repo.listSubscriptions(OTHER_ID)).length).toBe(1);
   });
 });
 
