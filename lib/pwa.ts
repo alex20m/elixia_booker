@@ -50,7 +50,7 @@ export function manualInstall(platform: Platform): ManualInstall {
       return {
         title: 'Add to your Home Screen',
         steps: [
-          'Tap the Share button at the bottom of Safari.',
+          'Tap the Share button in your browser.',
           'Scroll down and choose “Add to Home Screen”.',
           'Tap Add. Elixia Booker opens like any other app.',
         ],
