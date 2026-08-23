@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { apiRequest as api, titleCase } from '@/lib/dashboardState';
 import type { CenterDefaults } from '@/lib/service';
 import type { CenterOption, ClassOption } from '@/lib/types';
+import { PlusIcon } from './components/icons';
 
 /**
  * Picking a class, from the classes that exist.
@@ -166,10 +167,16 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
   };
 
   return (
-    <div className="card">
-      <h2>Add a class</h2>
-      <div className="row row-2">
+    <section className="card">
+      <div className="card-head">
         <div>
+          <h2 className="card-title">Add a class</h2>
+          <p className="card-sub">Pick your gym, then the weekly slot you want held.</p>
+        </div>
+      </div>
+
+      <div className="grid-2">
+        <div className="field">
           <label htmlFor="s-center">Centre</label>
           <select
             id="s-center"
@@ -185,7 +192,7 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
             ))}
           </select>
         </div>
-        <div>
+        <div className="field">
           <label htmlFor="s-class">Class</label>
           <select
             id="s-class"
@@ -198,7 +205,10 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
           >
             <option value="">{classPlaceholder(center, classes)}</option>
             {options.map((option, index) => (
-              <option key={`${option.className}|${option.weekday}|${option.startTime}`} value={index}>
+              <option
+                key={`${option.className}|${option.weekday}|${option.startTime}`}
+                value={index}
+              >
                 {option.className} · {titleCase(option.weekday)} {option.startTime}
               </option>
             ))}
@@ -206,12 +216,25 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
         </div>
       </div>
 
-      {centers.status === 'error' && <div className="banner banner-err">{centers.message}</div>}
-      {classes?.status === 'error' && <div className="banner banner-err">{classes.message}</div>}
-      {error && <div className="banner banner-err">{error}</div>}
+      {centers.status === 'error' && (
+        <div className="banner banner-err mt-s">
+          <span>{centers.message}</span>
+        </div>
+      )}
+      {classes?.status === 'error' && (
+        <div className="banner banner-err mt-s">
+          <span>{classes.message}</span>
+        </div>
+      )}
+      {error && (
+        <div className="banner banner-err mt-s">
+          <span>{error}</span>
+        </div>
+      )}
 
       <button
         id="add-btn"
+        className="btn-block mt-m"
         disabled={busy || !chosen}
         onClick={async () => {
           if (!chosen) return;
@@ -236,13 +259,15 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
           }
         }}
       >
+        <PlusIcon />
         {busy ? 'Adding…' : 'Add class'}
       </button>
-      <p className="sub" style={{ margin: '14px 0 0', fontSize: 13 }}>
-        Only classes Elixia currently publishes can be added — its schedule runs about two
-        weeks ahead, and a weekly class appears in it every week.
+
+      <p className="hint mt-s">
+        Only classes Elixia currently publishes can be added — its schedule runs about two weeks
+        ahead, and a weekly class appears in it every week.
       </p>
-    </div>
+    </section>
   );
 }
 

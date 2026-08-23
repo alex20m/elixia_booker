@@ -1,8 +1,8 @@
-"use client";
+'use client';
 
-import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
-import { authClient } from "@/lib/auth/client";
+import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
+import { authClient } from '@/lib/auth/client';
 import {
   apiRequest as api,
   dashboardScreen,
@@ -10,21 +10,24 @@ import {
   loadDashboard,
   titleCase,
   type DashboardLoad,
-} from "@/lib/dashboardState";
-import AddClass from "./AddClass";
-import Setup from "./Setup";
-import { MEMBERSHIP_OPTIONS } from "@/lib/membership";
-import { TIME_ZONE_GROUPS } from "@/lib/timezones";
-import type { DashboardView } from "@/lib/service";
+} from '@/lib/dashboardState';
+import type { DashboardView } from '@/lib/service';
+import AddClass from './AddClass';
+import Setup from './Setup';
+import { SettingsPanel } from './SettingsPanel';
+import { InstallCard } from './components/InstallCard';
+import { Shell } from './components/Shell';
+import { CalendarIcon, CheckIcon, PulseIcon, SlidersIcon } from './components/icons';
+import { ThemeChoiceControl } from './components/theme';
 
 const OUTCOME_LABELS: Record<string, [string, string]> = {
-  booked: ["pill-ok", "Booked"],
-  waitlisted: ["pill-ok", "Waitlisted"],
-  "already-booked": ["pill-warn", "Overlapping"],
-  "too-early": ["pill-err", "Missed"],
-  "rate-limited": ["pill-err", "Rate limited"],
-  unauthorized: ["pill-err", "Session rejected"],
-  error: ["pill-err", "Error"],
+  booked: ['pill-ok', 'Booked'],
+  waitlisted: ['pill-ok', 'Waitlisted'],
+  'already-booked': ['pill-warn', 'Overlapping'],
+  'too-early': ['pill-err', 'Missed'],
+  'rate-limited': ['pill-err', 'Rate limited'],
+  unauthorized: ['pill-err', 'Session rejected'],
+  error: ['pill-err', 'Error'],
 };
 
 export default function DashboardApp() {
@@ -39,10 +42,7 @@ function Authenticated() {
   // Tagged with the account it belongs to, and null until the first request
   // settles. Every other outcome — including failure — is a value, so nothing
   // can silently look like "still loading".
-  const [load, setLoad] = useState<{
-    userId: string;
-    result: DashboardLoad;
-  } | null>(null);
+  const [load, setLoad] = useState<{ userId: string; result: DashboardLoad } | null>(null);
 
   // Keyed on the id, not the user object: the hook is free to hand back a new
   // object on every render, and depending on that identity would re-create
@@ -85,18 +85,24 @@ function Authenticated() {
   });
 
   switch (screen.kind) {
-    case "loading":
-      return <p className="sub">Loading your account…</p>;
-    case "signed-out":
-      return <AuthPanel />;
-    case "setup":
+    case 'loading':
+      return (
+        <Shell>
+          <main className="main main-narrow">
+            <p className="empty">Loading your account…</p>
+          </main>
+        </Shell>
+      );
+    case 'signed-out':
+      return <SignedOut />;
+    case 'setup':
       // The whole app, replaced by the configuration pages: there is nothing
       // behind them worth showing, and every endpoint the dashboard would call
       // answers 428 until they are finished.
       return <Setup onDone={() => void refresh()} />;
-    case "error":
+    case 'error':
       return <LoadFailed message={screen.message} retry={refresh} />;
-    case "dashboard":
+    case 'dashboard':
       return <Dashboard view={screen.view} refresh={refresh} />;
   }
 }
@@ -110,68 +116,84 @@ function Authenticated() {
  * offered alongside retry because a session the server keeps refusing is the
  * one failure the visitor can clear themselves.
  */
-function LoadFailed({
-  message,
-  retry,
-}: {
-  message: string;
-  retry: () => Promise<void>;
-}) {
+function LoadFailed({ message, retry }: { message: string; retry: () => Promise<void> }) {
   const [busy, setBusy] = useState(false);
 
   return (
-    <>
-      <h1>Elixia Booker</h1>
-      <div className="card">
-        <h2>Could not load your account</h2>
-        <div className="banner banner-err" id="load-error">
-          {message}
-        </div>
-        <button
-          id="retry-btn"
-          disabled={busy}
-          onClick={async () => {
-            setBusy(true);
-            try {
-              await retry();
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          {busy ? "Retrying…" : "Try again"}
-        </button>{" "}
-        <button className="ghost" onClick={() => void authClient.signOut()}>
-          Sign out
-        </button>
-      </div>
-    </>
+    <Shell>
+      <main className="main main-narrow">
+        <section className="card">
+          <div className="card-head">
+            <h2 className="card-title">Could not load your account</h2>
+          </div>
+          <div className="banner banner-err" id="load-error">
+            {message}
+          </div>
+          <div className="cluster mt-m">
+            <button
+              id="retry-btn"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  await retry();
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              {busy ? 'Retrying…' : 'Try again'}
+            </button>
+            <button className="btn-quiet" onClick={() => void authClient.signOut()}>
+              Sign out
+            </button>
+          </div>
+        </section>
+      </main>
+    </Shell>
   );
 }
 
-function AuthPanel() {
+function SignedOut() {
   return (
-    <>
-      <h1>Elixia Booker</h1>
-      <p className="sub">
-        Books your group fitness classes the moment booking opens.
-      </p>
-      <div className="card">
-        <h2>Sign in</h2>
-        <p className="sub" style={{ marginTop: 0 }}>
-          Your Booker account is separate from your Elixia login. You link the
-          gym account after signing in.
-        </p>
-        <Link className="btn" id="auth-btn" href="/auth/sign-in">
-          Sign in
-        </Link>{" "}
-        <Link className="btn ghost" id="auth-toggle" href="/auth/sign-up">
-          Create an account
-        </Link>
-      </div>
-    </>
+    <Shell>
+      <main className="main main-narrow">
+        <div className="hero">
+          <h1>Never miss a class again.</h1>
+          <p className="hero-sub">
+            Pick the classes you want. Booker signs in and books them the second Elixia opens
+            the window — while you are asleep.
+          </p>
+        </div>
+
+        <section className="card">
+          <div className="stack">
+            <Link className="btn btn-block" id="auth-btn" href="/auth/sign-in">
+              Sign in
+            </Link>
+            <Link className="btn btn-secondary btn-block" id="auth-toggle" href="/auth/sign-up">
+              Create an account
+            </Link>
+            <p className="hint">
+              Your Booker account is separate from your Elixia login. You link the gym account
+              after signing in.
+            </p>
+          </div>
+        </section>
+
+        <InstallCard />
+      </main>
+    </Shell>
   );
 }
+
+type TabId = 'classes' | 'activity' | 'settings';
+
+const TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
+  { id: 'classes', label: 'Classes', icon: <CalendarIcon /> },
+  { id: 'activity', label: 'Activity', icon: <PulseIcon /> },
+  { id: 'settings', label: 'Settings', icon: <SlidersIcon /> },
+];
 
 function Dashboard({
   view,
@@ -180,158 +202,250 @@ function Dashboard({
   view: DashboardView;
   refresh: () => Promise<void>;
 }) {
-  const linked = view.account.elixiaStatus === "ok";
+  const [tab, setTab] = useState<TabId>('classes');
+  const linked = view.account.elixiaStatus === 'ok';
 
   return (
-    <>
-      <div className="topbar">
-        <div>
-          <h1>Elixia Booker</h1>
-          <p className="sub" id="account-line">
-            {view.account.elixiaEmail || "No gym account linked"}
-          </p>
-        </div>
-        <div>
-          {/* Password changes, email addresses and account deletion all live in
-              Neon Auth's own settings page rather than being reimplemented. */}
-          <Link className="btn ghost" id="account-btn" href="/account/settings">
-            Account
-          </Link>{" "}
+    <Shell
+      actions={
+        <button className="btn-quiet btn-sm" id="signout-btn" onClick={() => void authClient.signOut()}>
+          Sign out
+        </button>
+      }
+    >
+      {/* One control in two places: a thumb-reachable bar at the bottom of a
+          phone, a row of pills under the header on a desktop. */}
+      <nav className="tabs" aria-label="Sections">
+        {TABS.map((entry) => (
           <button
-            className="ghost"
-            id="signout-btn"
-            onClick={() => void authClient.signOut()}
+            key={entry.id}
+            type="button"
+            className="tab"
+            aria-current={tab === entry.id ? 'page' : undefined}
+            onClick={() => setTab(entry.id)}
           >
-            Sign out
+            {entry.icon}
+            <span>{entry.label}</span>
           </button>
-        </div>
-      </div>
+        ))}
+      </nav>
 
+      <main className="main">
+        <DeploymentAlerts view={view} />
+
+        {tab === 'classes' && <ClassesTab view={view} refresh={refresh} linked={linked} />}
+        {tab === 'activity' && <ActivityTab view={view} />}
+        {tab === 'settings' && <SettingsTab view={view} refresh={refresh} linked={linked} />}
+      </main>
+    </Shell>
+  );
+}
+
+/**
+ * Warnings about the deployment rather than the account — shown on every tab
+ * because each one means bookings are not happening the way the rest of the
+ * screen implies, and none of them is the visitor's fault.
+ */
+function DeploymentAlerts({ view }: { view: DashboardView }) {
+  return (
+    <>
       {view.ephemeralStore && (
         <div className="banner banner-err">
-          No database configured — data is in memory and will not survive. Set{" "}
-          <code>DATABASE_URL</code>.
+          <span>
+            No database configured — data is in memory and will not survive. Set{' '}
+            <code>DATABASE_URL</code>.
+          </span>
         </div>
       )}
       {view.dryRun && (
         <div className="banner banner-warn">
-          Dry-run mode: everything runs except the final booking request.
+          <span>Dry-run mode: everything runs except the final booking request.</span>
         </div>
       )}
       {!view.apiDiscovered && (
         <div className="banner banner-err">
-          The Elixia API adapter has not been configured yet, so no real booking
-          can be made. See <code>docs/api.md</code>.
+          <span>
+            The Elixia API adapter has not been configured yet, so no real booking can be made.
+            See <code>docs/api.md</code>.
+          </span>
         </div>
       )}
-
-      <ElixiaLink view={view} refresh={refresh} />
-
-      {linked && (
-        <>
-          <div className="card">
-            <h2>Your classes</h2>
-            <ClassList view={view} refresh={refresh} />
-          </div>
-          <AddClass refresh={refresh} />
-        </>
-      )}
-
-      <Settings view={view} refresh={refresh} />
-
-      <div className="card">
-        <h2>Recent attempts</h2>
-        <History view={view} />
-      </div>
-
-      <p className="foot">
-        Books only your own account. Retries are bounded and rate-limit aware.
-      </p>
     </>
   );
 }
 
-function ElixiaLink({
+function ClassesTab({
   view,
   refresh,
+  linked,
 }: {
   view: DashboardView;
   refresh: () => Promise<void>;
+  linked: boolean;
 }) {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
+  if (!linked) {
+    return <ElixiaLink view={view} refresh={refresh} />;
+  }
 
-  if (view.account.elixiaStatus === "ok") {
-    return (
-      <div className="card">
-        <h2>Gym account</h2>
-        <div className="item">
-          <div className="item-main">
-            <div className="item-title">{view.account.elixiaEmail}</div>
-            <div className="item-meta">
-              Linked · credentials stored encrypted
-            </div>
-          </div>
-          <span className="pill pill-ok">Connected</span>
-          <button
-            className="ghost"
-            id="unlink-btn"
-            onClick={async () => {
-              await api("/api/elixia", { method: "DELETE" });
-              await refresh();
-            }}
-          >
-            Unlink
+  return (
+    <>
+      <section className="card">
+        <div className="card-head">
+          <h2 className="card-title">Your classes</h2>
+          <span className="pill pill-neutral">{view.subscriptions.length}</span>
+        </div>
+        <ClassList view={view} refresh={refresh} />
+      </section>
+      <AddClass refresh={refresh} />
+    </>
+  );
+}
+
+function SettingsTab({
+  view,
+  refresh,
+  linked,
+}: {
+  view: DashboardView;
+  refresh: () => Promise<void>;
+  linked: boolean;
+}) {
+  return (
+    <>
+      {linked && <ElixiaLink view={view} refresh={refresh} />}
+
+      <SettingsPanel view={view} refresh={refresh} />
+
+      <section className="card">
+        <div className="card-head">
+          <h2 className="card-title">Appearance</h2>
+        </div>
+        <ThemeChoiceControl />
+        <p className="hint mt-s">
+          Auto follows your phone or computer’s own light and dark setting.
+        </p>
+      </section>
+
+      <InstallCard />
+
+      <section className="card">
+        <div className="card-head">
+          <h2 className="card-title">Account</h2>
+        </div>
+        <div className="stack">
+          {/* Password changes, email addresses and account deletion all live in
+              Neon Auth's own settings page rather than being reimplemented. */}
+          <Link className="btn btn-secondary btn-block" id="account-btn" href="/account/settings">
+            Email, password and sign-in
+          </Link>
+          <button className="btn-quiet btn-block" onClick={() => void authClient.signOut()}>
+            Sign out
           </button>
         </div>
-      </div>
+      </section>
+
+      <p className="foot">Books only your own account. Retries are bounded and rate-limit aware.</p>
+    </>
+  );
+}
+
+function ElixiaLink({ view, refresh }: { view: DashboardView; refresh: () => Promise<void> }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  if (view.account.elixiaStatus === 'ok') {
+    return (
+      <section className="card">
+        <div className="card-head">
+          <h2 className="card-title">Gym account</h2>
+          <span className="pill pill-ok">
+            <CheckIcon size={13} /> Connected
+          </span>
+        </div>
+        <div className="row">
+          <div className="row-main">
+            <div className="row-title" id="account-line">
+              {view.account.elixiaEmail}
+            </div>
+            <div className="row-meta">Credentials stored encrypted</div>
+          </div>
+          <div className="row-actions">
+            <button
+              className="btn-danger btn-sm"
+              id="unlink-btn"
+              onClick={async () => {
+                await api('/api/elixia', { method: 'DELETE' });
+                await refresh();
+              }}
+            >
+              Unlink
+            </button>
+          </div>
+        </div>
+      </section>
     );
   }
 
   return (
-    <div className="card">
-      <h2>Link your Elixia account</h2>
-      {view.account.elixiaStatus === "expired" && (
-        <div className="banner banner-warn">
-          Elixia rejected the saved credentials, so booking is paused. Re-link
-          to resume.
+    <section className="card">
+      <div className="card-head">
+        <div>
+          <h2 className="card-title">Link your Elixia account</h2>
+          <p className="card-sub">Booker needs it to reserve classes on your behalf.</p>
+        </div>
+      </div>
+
+      {view.account.elixiaStatus === 'expired' && (
+        <div className="banner banner-warn mt-m">
+          <span>
+            Elixia rejected the saved credentials, so booking is paused. Re-link to resume.
+          </span>
         </div>
       )}
-      {error && <div className="banner banner-err">{error}</div>}
-      <div className="row row-2">
-        <div>
+      {error && (
+        <div className="banner banner-err mt-m">
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="grid-2">
+        <div className="field">
           <label htmlFor="ex-email">Elixia email</label>
           <input
             id="ex-email"
             type="email"
+            autoComplete="username"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
           />
         </div>
-        <div>
+        <div className="field">
           <label htmlFor="ex-password">Elixia password</label>
           <input
             id="ex-password"
             type="password"
+            autoComplete="current-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
         </div>
       </div>
+
       <button
         id="link-btn"
+        className="btn-block mt-m"
         disabled={busy}
         onClick={async () => {
-          setError("");
+          setError('');
           setBusy(true);
           try {
-            await api("/api/elixia", {
-              method: "POST",
+            await api('/api/elixia', {
+              method: 'POST',
               body: JSON.stringify({ email, password }),
             });
-            setPassword("");
+            setPassword('');
             await refresh();
           } catch (err) {
             setError((err as Error).message);
@@ -340,354 +454,110 @@ function ElixiaLink({
           }
         }}
       >
-        {busy ? "Checking…" : "Link account"}
+        {busy ? 'Checking…' : 'Link account'}
       </button>
-      <p className="sub" style={{ margin: "14px 0 0", fontSize: 13 }}>
-        Your Elixia password is stored <strong>encrypted</strong>, because the
-        bot has to re-authenticate on its own when a session expires — otherwise
-        booking would stop silently until you noticed. Unlinking erases it.
+
+      <p className="hint mt-s">
+        Your Elixia password is stored <strong>encrypted</strong>, because the bot has to
+        re-authenticate on its own when a session expires — otherwise booking would stop silently
+        until you noticed. Unlinking erases it.
       </p>
-    </div>
+    </section>
   );
 }
 
-function ClassList({
-  view,
-  refresh,
-}: {
-  view: DashboardView;
-  refresh: () => Promise<void>;
-}) {
+function ClassList({ view, refresh }: { view: DashboardView; refresh: () => Promise<void> }) {
   if (view.subscriptions.length === 0) {
-    return <p className="empty">No classes yet. Add one below.</p>;
+    return <p className="empty">No classes yet. Add your first one below.</p>;
   }
 
   return (
-    <div id="subs-list">
+    <div className="list" id="subs-list">
       {view.subscriptions.map((s) => {
         const unlisted = describeUnlisted(s.unlistedSinceMs);
 
         return (
-          <div className={`item${s.enabled ? "" : " paused"}`} key={s.id}>
-            <div className="item-main">
-              <div className="item-title">{s.className}</div>
-              <div className="item-meta">
+          <div className={`row${s.enabled ? '' : ' is-paused'}`} key={s.id}>
+            <div className="row-main">
+              <div className="row-title">{s.className}</div>
+              <div className="row-meta">
                 {s.center} · {titleCase(s.weekday)} {s.startTime}
               </div>
-              <div className="item-meta">
+              <div className="row-meta">
                 {s.enabled
                   ? s.nextReleaseAt
                     ? `Opens ${new Date(s.nextReleaseAt).toLocaleString()}`
-                    : "No upcoming release"
-                  : "Paused"}
+                    : 'No upcoming release'
+                  : 'Paused'}
               </div>
               {unlisted && (
-                <div className="banner banner-warn" style={{ marginBottom: 0 }}>
-                  {unlisted}
+                <div className="banner banner-warn mt-xs">
+                  <span>{unlisted}</span>
                 </div>
               )}
             </div>
-            <button
-              className="ghost"
-              onClick={async () => {
-                await api(`/api/subscriptions/${encodeURIComponent(s.id)}`, {
-                  method: "PATCH",
-                });
-                await refresh();
-              }}
-            >
-              {s.enabled ? "Pause" : "Resume"}
-            </button>
-            <button
-              className="ghost"
-              onClick={async () => {
-                await api(`/api/subscriptions/${encodeURIComponent(s.id)}`, {
-                  method: "DELETE",
-                });
-                await refresh();
-              }}
-            >
-              Remove
-            </button>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-/**
- * Where a user says how they want to be told about their bookings.
- *
- * Email is the default and needs nothing: the address arrives with the
- * account. Telegram is one tap — the Connect button asks the server for a deep
- * link and opens it, and the chat id comes back through the webhook, so nobody
- * has to read one out of a JSON document.
- *
- * The manual chat-id field survives for deployments with no webhook
- * configured, which is the only state in which this form still writes a chat
- * id itself. Everywhere else it deliberately omits the field, because posting
- * a blank one would disconnect the chat on every save.
- */
-export function Settings({
-  view,
-  refresh,
-}: {
-  view: DashboardView;
-  refresh: () => Promise<void>;
-}) {
-  const [windowDays, setWindowDays] = useState(
-    String(view.account.bookingWindowDays),
-  );
-  const [timeZone, setTimeZone] = useState(view.account.timeZone);
-  const [channel, setChannel] = useState(view.account.notifyChannel);
-  const [email, setEmail] = useState(view.account.notifyEmail);
-  const [chatId, setChatId] = useState(view.account.telegramChatId);
-  const [error, setError] = useState("");
-  const [saved, setSaved] = useState(false);
-  const [awaitingTap, setAwaitingTap] = useState(false);
-
-  const connected = Boolean(view.account.telegramChatId);
-  // The one-tap flow needs a bot, a webhook and a secret. Without them the old
-  // manual field is the only way Telegram can work at all.
-  const canConnect = view.telegramConnect;
-
-  const connect = async () => {
-    setError("");
-    try {
-      const { url } = await api<{ url: string }>("/api/telegram/link", {
-        method: "POST",
-      });
-      // A new tab, not a redirect: losing the dashboard on the way to Telegram
-      // would mean coming back to a page that has to be found again.
-      window.open(url, "_blank", "noopener,noreferrer");
-      setAwaitingTap(true);
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  };
-
-  const disconnect = async () => {
-    setError("");
-    try {
-      await api("/api/telegram/link", { method: "DELETE" });
-      setAwaitingTap(false);
-      await refresh();
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  };
-
-  return (
-    <div className="card">
-      <h2>Settings</h2>
-      <div className="row row-2">
-        <div>
-          <label htmlFor="tier">Membership</label>
-          <select
-            id="tier"
-            value={windowDays}
-            onChange={(e) => setWindowDays(e.target.value)}
-          >
-            {MEMBERSHIP_OPTIONS.map((option) => (
-              <option key={option.days} value={String(option.days)}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label htmlFor="tz">Timezone</label>
-          {/* A picker here too, and for the same reason it is one during setup:
-              this field used to be a text box, and "Europe/Helsinky" saved from
-              it is a booking window that never opens. The server accepts only
-              these ids. */}
-          <select
-            id="tz"
-            value={timeZone}
-            onChange={(e) => setTimeZone(e.target.value)}
-          >
-            {TIME_ZONE_GROUPS.map((group) => (
-              <optgroup key={group.region} label={group.region}>
-                {group.zones.map((zone) => (
-                  <option key={zone.id} value={zone.id}>
-                    {zone.label}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
-        </div>
-      </div>
-      <div className="row row-2">
-        <div>
-          <label htmlFor="notify-channel">Notifications</label>
-          <select
-            id="notify-channel"
-            value={channel}
-            onChange={(e) =>
-              setChannel(e.target.value as DashboardView["account"]["notifyChannel"])
-            }
-          >
-            <option value="email">Email</option>
-            <option value="telegram">Telegram</option>
-            <option value="none">Off</option>
-          </select>
-        </div>
-        {channel === "email" && (
-          <div>
-            <label htmlFor="notify-email">Email address</label>
-            <input
-              id="notify-email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-          </div>
-        )}
-      </div>
-
-      {/* Disconnecting leaves the channel where the user put it rather than
-          moving them to email on their behalf — so this is a state they can
-          genuinely be sitting in, and it has to be said out loud. Silence here
-          is a user who believes they are covered and hears nothing, including
-          when booking stops. */}
-      {channel === "telegram" && !connected && (
-        <div className="banner banner-warn" id="notify-broken">
-          Telegram is selected but no chat is connected, so alerts are{" "}
-          <strong>not being delivered</strong>. Connect one below, or choose
-          another channel.
-        </div>
-      )}
-
-      {channel === "telegram" && canConnect && (
-        <div className="row">
-          <div>
-            {connected ? (
-              <p className="hint">
-                Connected to Telegram chat {view.account.telegramChatId}.{" "}
-                <button id="tg-disconnect" className="link" onClick={disconnect}>
-                  Disconnect
-                </button>
-              </p>
-            ) : (
-              <>
-                <button id="tg-connect" onClick={connect}>
-                  Connect Telegram
-                </button>
-                {awaitingTap && (
-                  <p className="hint">
-                    Tap <strong>Start</strong> in Telegram, then{" "}
-                    <button id="tg-check" className="link" onClick={refresh}>
-                      check again
-                    </button>
-                    . The link is good for ten minutes.
-                  </p>
-                )}
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
-      {channel === "telegram" && !canConnect && (
-        <div className="row">
-          <div>
-            <label htmlFor="tg">Telegram chat ID</label>
-            <input
-              id="tg"
-              placeholder="e.g. 123456789"
-              value={chatId}
-              onChange={(e) => setChatId(e.target.value)}
-            />
-            <p className="hint">
-              This deployment has no Telegram webhook configured, so the chat ID
-              has to be entered by hand.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {channel === "none" && (
-        <p className="hint">
-          Bookings still run — you just will not be told about them, including
-          when your Elixia session expires and booking stops.
-        </p>
-      )}
-
-      {error && <div className="banner banner-err">{error}</div>}
-      <button
-        id="save-btn"
-        onClick={async () => {
-          setError("");
-          setSaved(false);
-          try {
-            await api("/api/settings", {
-              method: "PUT",
-              body: JSON.stringify({
-                bookingWindowDays: Number(windowDays),
-                timeZone,
-                notifyChannel: channel,
-                notifyEmail: email,
-                // Only where this form owns the value. Sending it when the
-                // connect flow does would post a blank on every save and
-                // disconnect the chat the user just linked.
-                ...(canConnect ? {} : { telegramChatId: chatId }),
-              }),
-            });
-            setSaved(true);
-            await refresh();
-          } catch (err) {
-            setError((err as Error).message);
-          }
-        }}
-      >
-        {saved ? "Saved" : "Save settings"}
-      </button>
-    </div>
-  );
-}
-
-function History({ view }: { view: DashboardView }) {
-  if (view.history.length === 0) {
-    return (
-      <p className="empty">
-        Nothing yet. Attempts appear here after a booking window opens.
-      </p>
-    );
-  }
-
-  return (
-    <div id="history-list">
-      {view.history.map((h, i) => {
-        const [cls, label] = OUTCOME_LABELS[h.outcome] ?? [
-          "pill-err",
-          h.outcome,
-        ];
-        const timing =
-          h.firstAttemptOffsetMs === null
-            ? ""
-            : ` · fired ${h.firstAttemptOffsetMs >= 0 ? "+" : ""}${h.firstAttemptOffsetMs}ms from T-0`;
-        return (
-          <div
-            className="item"
-            key={`${h.subscriptionId ?? "gone"}-${h.atMs}-${i}`}
-          >
-            <div className="item-main">
-              <div className="item-title">
-                {h.className} · {h.classDate} {h.startTime}
-              </div>
-              <div className="item-meta">
-                {new Date(h.atMs).toLocaleString()}
-                {h.dryRun ? " · dry run" : ""}
-                {timing}
-                {h.detail ? ` · ${h.detail}` : ""}
-              </div>
+            <div className="row-actions">
+              <button
+                className="btn-quiet btn-sm"
+                onClick={async () => {
+                  await api(`/api/subscriptions/${encodeURIComponent(s.id)}`, { method: 'PATCH' });
+                  await refresh();
+                }}
+              >
+                {s.enabled ? 'Pause' : 'Resume'}
+              </button>
+              <button
+                className="btn-danger btn-sm"
+                onClick={async () => {
+                  await api(`/api/subscriptions/${encodeURIComponent(s.id)}`, { method: 'DELETE' });
+                  await refresh();
+                }}
+              >
+                Remove
+              </button>
             </div>
-            <span className={`pill ${cls}`}>{label}</span>
           </div>
         );
       })}
     </div>
+  );
+}
+
+function ActivityTab({ view }: { view: DashboardView }) {
+  return (
+    <section className="card">
+      <div className="card-head">
+        <h2 className="card-title">Recent attempts</h2>
+      </div>
+      {view.history.length === 0 ? (
+        <p className="empty">Nothing yet. Attempts appear here after a booking window opens.</p>
+      ) : (
+        <div className="list" id="history-list">
+          {view.history.map((h, i) => {
+            const [cls, label] = OUTCOME_LABELS[h.outcome] ?? ['pill-err', h.outcome];
+            const timing =
+              h.firstAttemptOffsetMs === null
+                ? ''
+                : ` · fired ${h.firstAttemptOffsetMs >= 0 ? '+' : ''}${h.firstAttemptOffsetMs}ms from T-0`;
+            return (
+              <div className="row" key={`${h.subscriptionId ?? 'gone'}-${h.atMs}-${i}`}>
+                <div className="row-main">
+                  <div className="row-title">
+                    {h.className} · {h.classDate} {h.startTime}
+                  </div>
+                  <div className="row-meta">
+                    {new Date(h.atMs).toLocaleString()}
+                    {h.dryRun ? ' · dry run' : ''}
+                    {timing}
+                    {h.detail ? ` · ${h.detail}` : ''}
+                  </div>
+                </div>
+                <span className={`pill ${cls}`}>{label}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }

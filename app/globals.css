@@ -1,297 +1,1076 @@
-:root {
-  --bg: #f6f7f9;
-  --panel: #ffffff;
-  --text: #16181d;
-  --muted: #6b7280;
-  --border: #e3e6ea;
-  --accent: #1f6feb;
-  --accent-text: #ffffff;
-  --ok: #10794a;
-  --ok-bg: #e6f5ee;
-  --warn: #9a3412;
-  --warn-bg: #fdf0e7;
-  --err: #b42318;
-  --err-bg: #fdeceb;
-  --radius: 10px;
+/*
+ * The whole visual system, in one file.
+ *
+ * The palette, type scale, spacing grid and radii are SATS DNA — the design
+ * system behind Elixia, SATS and Fresh Fitness — so this app looks like it
+ * belongs beside the gym's own. The tokens in the first block are transcribed
+ * from it; everything below consumes them and nothing picks a colour of its
+ * own, which is what lets the two themes be two lists of values rather than
+ * two sets of components.
+ *
+ * Four of its rules are easy to break by habit and are called out where they
+ * apply:
+ *
+ *   1. **Body text is 14px**, not 16. The system is dense and information-first.
+ *   2. **No shadows.** Depth is layered surface colour — page, surface, nested
+ *      surface — and 1px borders. A shadow here reads as a different product.
+ *   3. **Navy is structure, coral is state.** Coral means active, selected, in
+ *      progress or featured. It is never decoration, and never a second button
+ *      colour.
+ *   4. **Filled coral uses #C84229, not #FA5333**, or white text on it fails
+ *      contrast.
+ *
+ * The mark and the name are this app's own. Matching a spacing and type system
+ * is fair; the ELIXIA wordmark and SATS Headline are not ours to ship.
+ *
+ * The dark palette is selected by a `dark` class on <html>, which is what
+ * next-themes writes (see lib/theme.ts) and what the blocking script in the
+ * layout writes before the first paint. The media query underneath it is the
+ * fallback for the one page that renders with no theme script at all — the
+ * "auth is not configured" error page — and is scoped so an explicit light
+ * choice still wins on a dark OS.
+ */
 
-  /* @neondatabase/auth-ui reads these names on :root and falls back to its own
-     defaults when absent (see its "theme-safe" fallback pattern), so only the
-     ones that map cleanly onto an existing token are set here. --border and
-     --radius already match by name and are picked up without repeating them. */
-  --background: var(--bg);
-  --foreground: var(--text);
-  --primary: var(--accent);
-  --primary-foreground: var(--accent-text);
-  --destructive: var(--err);
-  --ring: var(--accent);
+/* ------------------------------------------------------------------ font -- */
+
+/*
+ * Inter, served from this app rather than from Google.
+ *
+ * Self-hosted for three reasons, in order: it is one fewer third party seeing
+ * every visitor's IP address; the file is on the same connection as the rest of
+ * the page, so it arrives with it; and the build does not need the network to
+ * succeed, which a build-time font loader would make it need.
+ *
+ * One variable file per subset covers 400-700, so weight is free. Inter is the
+ * UI face of SATS DNA. Its display face is proprietary and is not used here —
+ * headings are Inter with tight tracking instead.
+ *
+ * Licensed under the SIL Open Font License; see public/fonts/OFL.txt.
+ */
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('/fonts/inter-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('/fonts/inter-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* -------------------------------------------------------------- palette --- */
+
+/* SATS DNA primitives. Components never reference these directly. */
+:root {
+  --navy-110: #06101a;
+  --navy-105: #0a1826;
+  --navy-100: #0d2134;
+  --navy-90: #253748;
+  --navy-70: #566471;
+  --navy-40: #9ea6ae;
+  --navy-10: #e7e9eb;
+  --navy-5: #f3f4f5;
+  --line-grey: #dcdee0;
+
+  --coral-170: #4b190f;
+  --coral-120: #c84229;
+  --coral-100: #fa5333;
+  --coral-10: #ffeeeb;
+  --coral-5: #fff6f5;
+
+  --green-120: #076646;
+  --green-100: #097f58;
+  --green-10: #e6f2ee;
+  --gold-140: #866c2a;
+  --gold-10: #f8f3e8;
+  --cardinal-120: #942e39;
+  --cardinal-100: #b93947;
+  --cardinal-10: #f8ebed;
+  --chili-100: #d93226;
+  --chili-80: #e15b51;
+  --info-110: #226a9e;
+  --info-10: #e9f1f7;
+  --info-20: #d4e4ef;
+
+  --black-3: #f7f7f7;
+  --black-5: #f2f2f2;
+  --black-10: #e5e5e5;
+  --black-55: #808080;
+  --black-60: #666666;
+  --black-80: #333333;
+  --black-85: #262626;
+  --black-90: #1a1a1a;
+}
+
+/* ------------------------------------------------------------- semantic --- */
+
+:root {
+  color-scheme: light;
+
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+
+  --bg: var(--navy-5);
+  --surface: #ffffff;
+  --surface-nested: var(--black-3);
+  --surface-selected: var(--info-20);
+
+  --text: var(--navy-100);
+  --text-alt: var(--navy-70);
+  --text-disabled: var(--black-55);
+
+  --border: var(--line-grey);
+  --border-strong: var(--navy-40);
+
+  /* Primary is navy in light, and inverts in dark. */
+  --primary-bg: var(--navy-100);
+  --primary-fg: #ffffff;
+  --primary-bg-hover: var(--navy-90);
+
+  --disabled-bg: var(--black-10);
+  --disabled-fg: var(--black-60);
+
+  /* State, not decoration: active tabs, selected chips, featured panels. */
+  --accent: var(--coral-120);
+  --accent-strong: var(--coral-100);
+  --accent-soft: var(--coral-10);
+  --accent-line: #fdbaad;
+
+  --ok: var(--green-120);
+  --ok-soft: var(--green-10);
+  --warn: var(--gold-140);
+  --warn-soft: var(--gold-10);
+  --err: var(--cardinal-120);
+  --err-soft: var(--cardinal-10);
+  --info: var(--info-110);
+  --info-soft: var(--info-10);
+  --danger: var(--chili-100);
+
+  /* The bar is navy in both themes — it is the brand anchor, and the same
+     colour elixia.fi publishes as its theme-color. */
+  --bar-bg: var(--navy-100);
+  --bar-fg: #ffffff;
+  --bar-fg-alt: rgb(255 255 255 / 70%);
+  --bar-border: var(--navy-90);
+
+  /* The mark's own colours. Fixed rather than themed: an app icon is a
+     constant, and a logo that changes with the palette stops being one. */
+  --brand-tile: var(--navy-100);
+  --brand-ink: #ffffff;
+  --brand-accent: var(--coral-100);
+
+  /* The featured panel's ground. Coral-tinted on light; on dark a coral wash
+     over near-black turns muddy, so it keeps the plain surface and is marked
+     out by its border alone. */
+  --featured-bg: var(--coral-5);
+
+  --radius-xs: 4px;
+  --radius: 8px;
+  --radius-md: 12px;
+  --radius-lg: 24px;
+  --pill: 999px;
+
+  /* 4px grid. There is deliberately no 48px step. */
+  --space-xxs: 4px;
+  --space-xs: 8px;
+  --space-s: 12px;
+  --space-m: 16px;
+  --space-l: 24px;
+  --space-xl: 32px;
+  --space-xxl: 64px;
+
+  --measure: 44rem;
+  --bar-h: 56px;
+  /* The smallest a control may be. Bigger than DNA's basic button, because
+     this app is used one-handed on a phone and the control beside Pause is
+     Remove. */
+  --tap: 44px;
+
+  /* Bridged onto @neondatabase/auth-ui, which reads these names off :root and
+     falls back to its own defaults when they are absent. Only the ones with a
+     clean counterpart here are set — the rest of its surface stays its own. */
+  --background: var(--bg);
+  --foreground: var(--text);
+  --primary: var(--primary-bg);
+  --primary-foreground: var(--primary-fg);
+  --destructive: var(--danger);
+}
+
+/* The dark values, written once and applied from two selectors: the class the
+   theme script sets, and the OS preference for the one page that has no script. */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1115;
-    --panel: #171a21;
-    --text: #e8eaed;
-    --muted: #9aa3af;
-    --border: #262b34;
-    --accent: #4d8ef7;
-    --accent-text: #0b0d10;
-    --ok: #4ade80;
-    --ok-bg: #10291d;
-    --warn: #fbbf24;
-    --warn-bg: #2a2010;
-    --err: #f87171;
-    --err-bg: #2b1416;
+  :root:not(.light) {
+    color-scheme: dark;
+
+    --bg: #000000;
+    --surface: var(--black-85);
+    --surface-nested: var(--black-90);
+    --surface-selected: #0f2f46;
+
+    --text: #ffffff;
+    --text-alt: #cccccc;
+    --text-disabled: var(--black-55);
+
+    --border: rgb(255 255 255 / 9%);
+    --border-strong: var(--black-80);
+
+    --primary-bg: #ffffff;
+    --primary-fg: var(--navy-100);
+    --primary-bg-hover: #e7e9eb;
+
+    --disabled-bg: var(--black-80);
+    --disabled-fg: var(--black-55);
+
+    --accent: var(--coral-100);
+    --accent-strong: var(--coral-100);
+    --accent-soft: var(--coral-170);
+    --accent-line: #7a3020;
+
+    --ok: #3a9979;
+    --ok-soft: #03261a;
+    --warn: #e2b74a;
+    --warn-soft: #443716;
+    --err: #d58891;
+    --err-soft: #381115;
+    --info: #5191c0;
+    --info-soft: #0b2335;
+    --danger: var(--chili-80);
+    --featured-bg: var(--surface);
   }
 }
 
-* {
+:root.dark {
+  color-scheme: dark;
+
+  --bg: #000000;
+  --surface: var(--black-85);
+  --surface-nested: var(--black-90);
+  --surface-selected: #0f2f46;
+
+  --text: #ffffff;
+  --text-alt: #cccccc;
+  --text-disabled: var(--black-55);
+
+  --border: rgb(255 255 255 / 9%);
+  --border-strong: var(--black-80);
+
+  --primary-bg: #ffffff;
+  --primary-fg: var(--navy-100);
+  --primary-bg-hover: #e7e9eb;
+
+  --disabled-bg: var(--black-80);
+  --disabled-fg: var(--black-55);
+
+  --accent: var(--coral-100);
+  --accent-strong: var(--coral-100);
+  --accent-soft: var(--coral-170);
+  --accent-line: #7a3020;
+
+  --ok: #3a9979;
+  --ok-soft: #03261a;
+  --warn: #e2b74a;
+  --warn-soft: #443716;
+  --err: #d58891;
+  --err-soft: #381115;
+  --info: #5191c0;
+  --info-soft: #0b2335;
+  --danger: var(--chili-80);
+  --featured-bg: var(--surface);
+}
+
+/* ------------------------------------------------------------------ base -- */
+
+*,
+*::before,
+*::after {
   box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
   margin: 0;
-  padding: 24px 16px 64px;
+  min-height: 100dvh;
   background: var(--bg);
   color: var(--text);
-  font: 15px/1.55 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-sans);
+  /* 14px. DNA's base size, and the one thing here most often "corrected" by
+     habit into 16. */
+  font-size: 14px;
+  line-height: 1.3;
+  -webkit-font-smoothing: antialiased;
 }
 
-.wrap {
-  max-width: 720px;
-  margin: 0 auto;
-}
-
-h1 {
-  font-size: 22px;
-  margin: 0 0 4px;
-  letter-spacing: -0.01em;
-}
-
-h2 {
-  font-size: 15px;
-  margin: 0 0 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--muted);
+h1,
+h2,
+h3 {
+  margin: 0;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
   font-weight: 600;
 }
 
-.sub {
-  color: var(--muted);
-  margin: 0 0 24px;
-  font-size: 14px;
+h1 {
+  font-size: 28px;
 }
 
+h2 {
+  font-size: 20px;
+}
+
+h3 {
+  font-size: 16px;
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: var(--accent);
+  text-underline-offset: 2px;
+}
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--surface-nested);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  padding: 1px 4px;
+}
+
+strong {
+  font-weight: 600;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+/* --------------------------------------------------------------- layout --- */
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+/* Navy, in both themes: DNA puts nav bars on the brand anchor, and it is the
+   colour elixia.fi ships as its own theme-color. */
+.appbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--bar-bg);
+  color: var(--bar-fg);
+  border-bottom: 1px solid var(--bar-border);
+  /* The mark's tile would vanish into a navy bar, so it lifts one step. */
+  --brand-tile: var(--navy-90);
+}
+
+.appbar-inner {
+  max-width: var(--measure);
+  margin: 0 auto;
+  min-height: var(--bar-h);
+  padding: 0 var(--space-m);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-s);
+}
+
+.appbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xxs);
+}
+
+.main {
+  flex: 1;
+  width: 100%;
+  max-width: var(--measure);
+  margin: 0 auto;
+  padding: var(--space-m) var(--space-m)
+    calc(var(--space-xxl) + var(--space-l) + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-m);
+}
+
+/* The centred, narrow column the setup pages and the sign-in panel live in.
+   They are one decision at a time, so they get less width, not more. */
+.main-narrow {
+  max-width: 30rem;
+  padding-bottom: var(--space-xl);
+  justify-content: center;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-s);
+}
+
+.cluster {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.grid-2 {
+  display: grid;
+  gap: var(--space-s);
+}
+
+@media (min-width: 34rem) {
+  .grid-2 {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.mt-xs {
+  margin-top: var(--space-xs);
+}
+
+.mt-s {
+  margin-top: var(--space-s);
+}
+
+.mt-m {
+  margin-top: var(--space-m);
+}
+
+/* ------------------------------------------------------------- brand ------ */
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: inherit;
+  text-decoration: none;
+}
+
+.brand-mark {
+  display: block;
+  flex: none;
+}
+
+.brand-name {
+  font-size: 16px;
+}
+
+.brand-name-accent {
+  color: var(--coral-100);
+}
+
+.brand-lg .brand-name {
+  font-size: 20px;
+}
+
+/* --------------------------------------------------------------- tabs ----- */
+
+/*
+ * One control in two places: a thumb-reachable bar across the bottom of a
+ * phone, and a quiet row of pills under the header on a desktop. Same markup —
+ * a second copy would be a second thing to keep in step, and the one that is
+ * not on screen is the one that rots.
+ *
+ * Selected is coral on a coral tint, which is what coral is for in this system:
+ * active and selected, never decoration.
+ */
+.tabs {
+  position: fixed;
+  inset: auto 0 0;
+  z-index: 20;
+  display: flex;
+  gap: var(--space-xxs);
+  padding: var(--space-xs) var(--space-xs)
+    calc(var(--space-xs) + env(safe-area-inset-bottom));
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: var(--tap);
+  padding: var(--space-xs) var(--space-xxs);
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-alt);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tab[aria-current='page'] {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+@media (min-width: 46rem) {
+  .tabs {
+    position: sticky;
+    top: var(--bar-h);
+    inset-inline: auto;
+    /* `width` is not redundant beside `max-width`: an auto cross-axis margin
+       inside the column flex container switches the bar from stretching to
+       shrink-to-fit, which would centre three pills under a left-aligned logo
+       instead of lining them up with the content below. */
+    width: 100%;
+    max-width: var(--measure);
+    margin: 0 auto;
+    padding: var(--space-s) var(--space-m);
+    background: var(--bg);
+    border-top: 0;
+    border-bottom: 1px solid var(--border);
+    gap: var(--space-xs);
+  }
+
+  .tab {
+    flex: 0 0 auto;
+    flex-direction: row;
+    gap: var(--space-xs);
+    min-height: 36px;
+    padding: var(--space-xs) var(--space-s);
+    font-size: 14px;
+  }
+
+  .main {
+    padding-bottom: var(--space-xl);
+  }
+}
+
+/* --------------------------------------------------------------- cards ---- */
+
+/* No shadow anywhere. Depth is page → surface → nested surface, plus a 1px
+   line. A shadow here would read as a different product. */
 .card {
-  background: var(--panel);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 20px;
-  margin-bottom: 16px;
+  padding: var(--space-m);
+}
+
+.card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-s);
+  margin-bottom: var(--space-s);
+}
+
+.card-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.card-sub,
+.hint {
+  color: var(--text-alt);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* -------------------------------------------------------------- controls -- */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xxs);
+  min-width: 0;
 }
 
 label {
-  display: block;
-  font-size: 13px;
-  color: var(--muted);
-  margin-bottom: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-alt);
 }
 
 input,
 select {
   width: 100%;
-  padding: 9px 11px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--bg);
+  min-height: var(--tap);
+  padding: var(--space-s);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
   color: var(--text);
   font: inherit;
   font-size: 14px;
 }
 
-input:focus,
-select:focus {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+select {
+  /* The native picker is kept on purpose: on a phone it is a full-height wheel
+     the OS already knows how to drive, and no scripted listbox comes close. */
+  appearance: none;
+  padding-right: var(--space-xl);
+  background-image: linear-gradient(45deg, transparent 50%, currentcolor 50%),
+    linear-gradient(135deg, currentcolor 50%, transparent 50%);
+  background-position: right 17px center, right 13px center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
 }
 
-.row {
-  display: grid;
-  gap: 12px;
-  margin-bottom: 12px;
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 0;
+  border-color: var(--accent-strong);
 }
 
-.row-2 {
-  grid-template-columns: 1fr 1fr;
+input::placeholder {
+  color: var(--text-disabled);
 }
 
-.row-3 {
-  grid-template-columns: 1fr 1fr 1fr;
-}
-
-@media (max-width: 560px) {
-  .row-2,
-  .row-3 {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* `a.btn` exists because the sign-in and account links navigate to Neon Auth's
-   own pages. Those are navigations, not actions, so they must be anchors —
-   openable in a new tab, and reachable the way every other link is — while
-   still looking like the buttons beside them. */
+/* `a.btn` exists because signing in and reaching the account pages are
+   navigations to Neon Auth's own routes, not actions. They stay anchors —
+   openable in a new tab, reachable like every other link — and only borrow the
+   look of the buttons beside them. */
 button,
 a.btn {
-  padding: 9px 16px;
-  border: 0;
-  border-radius: 7px;
-  background: var(--accent);
-  color: var(--accent-text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs);
+  min-height: var(--tap);
+  padding: var(--space-s) var(--space-m);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: var(--primary-bg);
+  color: var(--primary-fg);
   font: inherit;
+  font-size: 14px;
   font-weight: 600;
-  cursor: pointer;
-}
-
-a.btn {
-  display: inline-block;
   text-decoration: none;
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease,
+    color 0.12s ease;
 }
 
 button:hover:not(:disabled),
 a.btn:hover {
-  filter: brightness(1.08);
+  background: var(--primary-bg-hover);
 }
 
 button:disabled {
-  opacity: 0.6;
-  cursor: default;
+  background: var(--disabled-bg);
+  color: var(--disabled-fg);
+  cursor: not-allowed;
 }
 
-button.ghost,
-a.btn.ghost {
+.btn-block {
+  width: 100%;
+}
+
+/* Fills the row beside a Back button, and is the whole row without one. */
+.btn-grow {
+  flex: 1;
+}
+
+/* DNA's secondary: outlined, in the foreground colour. */
+button.btn-secondary,
+a.btn.btn-secondary {
   background: transparent;
-  color: var(--muted);
-  border: 1px solid var(--border);
+  color: var(--text);
+  border-color: var(--text);
+}
+
+button.btn-secondary:hover:not(:disabled),
+a.btn.btn-secondary:hover {
+  background: var(--surface-nested);
+}
+
+button.btn-secondary:disabled {
+  background: transparent;
+  color: var(--disabled-fg);
+  border-color: var(--disabled-bg);
+}
+
+/* A quieter outline, for the actions sitting beside a row of content. */
+button.btn-quiet,
+a.btn.btn-quiet {
+  background: transparent;
+  color: var(--text-alt);
+  border-color: var(--border-strong);
   font-weight: 500;
-  padding: 6px 12px;
-  font-size: 13px;
+}
+
+button.btn-quiet:hover:not(:disabled),
+a.btn.btn-quiet:hover {
+  background: var(--surface-nested);
+  color: var(--text);
+}
+
+button.btn-quiet:disabled {
+  background: transparent;
+}
+
+/* DNA's destructive-outlined. */
+button.btn-danger {
+  background: transparent;
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+button.btn-danger:hover:not(:disabled) {
+  background: var(--err-soft);
+  color: var(--danger);
+}
+
+button.btn-sm,
+a.btn.btn-sm {
+  min-height: 36px;
+  padding: var(--space-xs) var(--space-s);
+  font-size: 12px;
+}
+
+/* A square control carrying only an icon — the theme switch. Labelled with
+   aria-label, never with a title alone. */
+button.btn-icon {
+  width: var(--tap);
+  min-height: var(--tap);
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  border-radius: var(--radius);
+}
+
+button.btn-icon:hover:not(:disabled) {
+  background: rgb(255 255 255 / 12%);
+}
+
+/* Controls sitting on the navy bar borrow its foreground rather than the
+   page's, which would be navy-on-navy. */
+.appbar button.btn-quiet,
+.appbar a.btn.btn-quiet {
+  color: var(--bar-fg);
+  border-color: rgb(255 255 255 / 35%);
+}
+
+.appbar button.btn-quiet:hover:not(:disabled),
+.appbar a.btn.btn-quiet:hover {
+  background: rgb(255 255 255 / 12%);
+  color: var(--bar-fg);
 }
 
 /* An action that reads as part of a sentence — "then check again" — rather than
    as a control beside it. Still a real button, because it does something rather
-   than going somewhere; only its appearance is borrowed from a link. */
+   than going somewhere; only its appearance is borrowed from a link. This is
+   DNA's `action` variant, which is the one place text takes the coral. */
 button.link {
   display: inline;
+  min-height: 0;
   padding: 0;
+  border: 0;
   background: none;
   color: var(--accent);
-  font-weight: 500;
+  font-weight: 600;
   text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
-/* The line under a field saying what the choice costs. The setup pages lean on
-   these: the three questions they ask are exactly the ones people answer wrongly
-   when nothing explains them. */
-.hint {
-  color: var(--muted);
-  font-size: 13px;
-  margin: 6px 0 0;
+button.link:hover:not(:disabled) {
+  background: none;
+  color: var(--accent-strong);
 }
 
-.item {
+/* ---------------------------------------------------------------- lists --- */
+
+.list {
   display: flex;
+  flex-direction: column;
+}
+
+/*
+ * Wraps rather than squeezes. On a phone a class name, its centre and two
+ * actions do not fit on one line, and the flex default is to crush the text
+ * into a four-line column beside the buttons. Letting the actions drop to
+ * their own line keeps both readable — and keeps the tap targets full size,
+ * which is the half that matters when the button beside Pause is Remove.
+ */
+.row {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--border);
+  gap: var(--space-s);
+  padding: var(--space-s) 0;
+  border-top: 1px solid var(--border);
 }
 
-.item:last-child {
-  border-bottom: 0;
+.row:first-child {
+  border-top: 0;
+  padding-top: 0;
 }
 
-.item-main {
-  flex: 1;
+.row:last-child {
+  padding-bottom: 0;
+}
+
+.row-main {
+  flex: 1 1 60%;
   min-width: 0;
 }
 
-.item-title {
+.row-title {
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
-.item-meta {
-  font-size: 13px;
-  color: var(--muted);
+.row-meta {
+  color: var(--text-alt);
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
-.paused {
+.row-actions {
+  display: flex;
+  gap: var(--space-xs);
+  flex: none;
+  margin-left: auto;
+}
+
+.is-paused {
   opacity: 0.55;
 }
 
+.empty {
+  color: var(--text-alt);
+  font-size: 14px;
+  text-align: center;
+  padding: var(--space-l) var(--space-xs);
+}
+
+/* --------------------------------------------------------------- status --- */
+
+/* DNA tags: 12px, uppercase, 4px radius, 4px/12px padding. */
 .pill {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 99px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xxs);
+  flex: none;
+  padding: var(--space-xxs) var(--space-s);
+  border-radius: var(--radius-xs);
   font-size: 12px;
   font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
   white-space: nowrap;
 }
 
 .pill-ok {
-  background: var(--ok-bg);
+  background: var(--ok-soft);
   color: var(--ok);
 }
 
 .pill-warn {
-  background: var(--warn-bg);
+  background: var(--warn-soft);
   color: var(--warn);
 }
 
 .pill-err {
-  background: var(--err-bg);
+  background: var(--err-soft);
   color: var(--err);
 }
 
+.pill-neutral {
+  background: var(--surface-nested);
+  color: var(--text-alt);
+  border: 1px solid var(--border);
+}
+
+/* DNA signal surfaces: the tinted background carries the normal foreground,
+   and only the emphasis word takes the signal colour. */
 .banner {
-  padding: 12px 14px;
-  border-radius: 8px;
-  margin-bottom: 16px;
+  display: flex;
+  gap: var(--space-xs);
+  padding: var(--space-s);
+  border-radius: var(--radius);
   font-size: 14px;
+  line-height: 1.35;
+  color: var(--text);
 }
 
 .banner-err {
-  background: var(--err-bg);
+  background: var(--err-soft);
+}
+
+.banner-err strong {
   color: var(--err);
 }
 
 .banner-warn {
-  background: var(--warn-bg);
+  background: var(--warn-soft);
+}
+
+.banner-warn strong {
   color: var(--warn);
 }
 
-.empty {
-  color: var(--muted);
-  font-size: 14px;
-  padding: 8px 0;
+.banner-info {
+  background: var(--info-soft);
 }
 
-.topbar {
+/* ---------------------------------------------------------------- steps --- */
+
+.steps {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 16px;
+  gap: var(--space-xxs);
+  margin-bottom: var(--space-m);
 }
 
-code {
-  font-size: 12px;
-  background: var(--bg);
-  padding: 1px 5px;
-  border-radius: 4px;
+.step-dot {
+  flex: 1;
+  height: 4px;
+  border-radius: var(--pill);
+  background: var(--border);
 }
+
+.step-dot.is-done {
+  background: var(--accent-strong);
+}
+
+/* ----------------------------------------------------------------- hero --- */
+
+/* The one place type is allowed to be large: the first screen a signed-out
+   visitor sees, and the top of setup. Everywhere else the content is a list. */
+.hero {
+  padding: var(--space-xs) 0 0;
+}
+
+.hero h1 {
+  font-size: clamp(28px, 7vw, 32px);
+  letter-spacing: -0.025em;
+}
+
+.hero-sub {
+  margin-top: var(--space-xs);
+  color: var(--text-alt);
+  font-size: 16px;
+  line-height: 1.4;
+  max-width: 36ch;
+}
+
+/* ------------------------------------------------------------ segmented --- */
+
+/*
+ * Three states of one setting, shown at once. A radiogroup rather than a
+ * dropdown because there are exactly three and they are worth seeing: the
+ * point of an appearance control is that the choice is visible.
+ */
+.segmented {
+  display: flex;
+  gap: var(--space-xxs);
+  padding: var(--space-xxs);
+  background: var(--surface-nested);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.segment {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs);
+  min-height: 36px;
+  padding: var(--space-xs);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-alt);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.segment:hover:not([aria-checked='true']) {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.segment[aria-checked='true'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* ----------------------------------------------------------- install ------ */
+
+/*
+ * The install offer, on DNA's "featured" surface — the one place a whole panel
+ * is allowed to take the coral, because featured is exactly what coral means.
+ * Loud once, because a PWA nobody notices they can install is a PWA nobody
+ * installs. It disappears for good once the app is running installed.
+ */
+.install {
+  background: var(--featured-bg);
+  border-color: var(--accent-line);
+}
+
+.install-steps {
+  margin: var(--space-s) 0 0;
+  padding-left: var(--space-m);
+  color: var(--text-alt);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.install-steps li::marker {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* --------------------------------------------------------------- footer --- */
 
 .foot {
-  color: var(--muted);
-  font-size: 13px;
+  color: var(--text-alt);
+  font-size: 12px;
   text-align: center;
-  margin-top: 28px;
+  padding: var(--space-xs) 0 0;
+}
+
+/* Screen-reader-only, for the labels an icon-only control still owes. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

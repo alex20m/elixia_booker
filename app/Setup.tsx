@@ -6,6 +6,7 @@ import { MEMBERSHIP_OPTIONS } from '@/lib/membership';
 import { TIME_ZONE_GROUPS } from '@/lib/timezones';
 import type { SetupState } from '@/lib/service';
 import type { NotifyChannel } from '@/lib/types';
+import { Shell } from './components/Shell';
 
 /**
  * The configuration pages a new account goes through before it can use the app.
@@ -138,21 +139,37 @@ export default function Setup({ onDone }: { onDone: () => void }) {
   };
 
   return (
-    <>
-      <h1>Set up your booker</h1>
-      <p className="sub">
-        Three questions, once. Nothing here has a default — each answer changes
-        when your classes get booked, or whether you hear about it.
-      </p>
+    <Shell>
+      <main className="main main-narrow">
+        <div className="hero">
+          <h1>Set up your booker</h1>
+          <p className="hero-sub">
+            Three questions, once. Nothing here has a default — each answer changes when your
+            classes get booked, or whether you hear about it.
+          </p>
+        </div>
 
-      <div className="card">
-        <p className="sub" id="setup-progress" style={{ marginTop: 0 }}>
-          Step {step + 1} of {STEPS.length} · {STEPS[step]}
-        </p>
+        <section className="card">
+          {/* A bar per page rather than "Step 2 of 3" alone: the count is still
+              there for anyone who wants it, and the bars say how much is left
+              without being read. */}
+          <div className="steps" aria-hidden="true">
+            {STEPS.map((name, index) => (
+              <span key={name} className={index <= step ? 'step-dot is-done' : 'step-dot'} />
+            ))}
+          </div>
 
-        {step === 0 && (
-          <div className="row">
+          <div className="card-head">
             <div>
+              <h2 className="card-title">{STEPS[step]}</h2>
+              <p className="card-sub" id="setup-progress">
+                Step {step + 1} of {STEPS.length}
+              </p>
+            </div>
+          </div>
+
+          {step === 0 && (
+            <div className="field">
               <label htmlFor="setup-window">Your Elixia membership</label>
               <select
                 id="setup-window"
@@ -167,17 +184,14 @@ export default function Setup({ onDone }: { onDone: () => void }) {
                 ))}
               </select>
               <p className="hint">
-                This is how far ahead Elixia lets you book. It is on your
-                membership — pick the wrong one and every booking fires on the
-                wrong day.
+                This is how far ahead Elixia lets you book. It is on your membership — pick the
+                wrong one and every booking fires on the wrong day.
               </p>
             </div>
-          </div>
-        )}
+          )}
 
-        {step === 1 && (
-          <div className="row">
-            <div>
+          {step === 1 && (
+            <div className="field">
               <label htmlFor="setup-tz">The timezone your gym is in</label>
               <select id="setup-tz" value={timeZone} onChange={(e) => setTimeZone(e.target.value)}>
                 <option value="">Choose your timezone</option>
@@ -192,17 +206,15 @@ export default function Setup({ onDone }: { onDone: () => void }) {
                 ))}
               </select>
               <p className="hint">
-                Class times are read in this zone. Pick the city your classes
-                are held in, not the one you happen to be in today.
+                Class times are read in this zone. Pick the city your classes are held in, not the
+                one you happen to be in today.
               </p>
             </div>
-          </div>
-        )}
+          )}
 
-        {step === 2 && (
-          <>
-            <div className="row">
-              <div>
+          {step === 2 && (
+            <div className="stack">
+              <div className="field">
                 <label htmlFor="setup-channel">Where should booking alerts go?</label>
                 <select
                   id="setup-channel"
@@ -215,11 +227,9 @@ export default function Setup({ onDone }: { onDone: () => void }) {
                   <option value="none">Nothing — do not tell me</option>
                 </select>
               </div>
-            </div>
 
-            {channel === 'email' && (
-              <div className="row">
-                <div>
+              {channel === 'email' && (
+                <div className="field">
                   <label htmlFor="setup-email">Email address</label>
                   <input
                     id="setup-email"
@@ -228,15 +238,13 @@ export default function Setup({ onDone }: { onDone: () => void }) {
                     onChange={(e) => setEmail(e.target.value)}
                   />
                   <p className="hint">
-                    Filled in from the address you signed in with. Change it if
-                    alerts should go somewhere else.
+                    Filled in from the address you signed in with. Change it if alerts should go
+                    somewhere else.
                   </p>
                 </div>
-              </div>
-            )}
+              )}
 
-            {channel === 'telegram' && state?.telegramConnect && (
-              <div className="row">
+              {channel === 'telegram' && state?.telegramConnect && (
                 <div>
                   {connected ? (
                     <p className="hint">
@@ -244,11 +252,11 @@ export default function Setup({ onDone }: { onDone: () => void }) {
                     </p>
                   ) : (
                     <>
-                      <button id="tg-connect" onClick={connect}>
+                      <button id="tg-connect" className="btn-secondary" onClick={connect}>
                         Connect Telegram
                       </button>
                       {awaitingTap && (
-                        <p className="hint">
+                        <p className="hint mt-xs">
                           Tap <strong>Start</strong> in Telegram, then{' '}
                           <button
                             id="tg-check"
@@ -265,12 +273,10 @@ export default function Setup({ onDone }: { onDone: () => void }) {
                     </>
                   )}
                 </div>
-              </div>
-            )}
+              )}
 
-            {channel === 'telegram' && state && !state.telegramConnect && (
-              <div className="row">
-                <div>
+              {channel === 'telegram' && state && !state.telegramConnect && (
+                <div className="field">
                   <label htmlFor="setup-chat">Telegram chat ID</label>
                   <input
                     id="setup-chat"
@@ -279,45 +285,55 @@ export default function Setup({ onDone }: { onDone: () => void }) {
                     placeholder="e.g. 123456789"
                   />
                   <p className="hint">
-                    This deployment has no Telegram webhook configured, so the
-                    chat ID has to be entered by hand.
+                    This deployment has no Telegram webhook configured, so the chat ID has to be
+                    entered by hand.
                   </p>
                 </div>
-              </div>
-            )}
+              )}
 
-            {channel === 'none' && (
-              <p className="hint">
-                Bookings still run — you just will not be told about them,
-                including when your Elixia session expires and booking stops.
-              </p>
-            )}
-          </>
-        )}
+              {channel === 'none' && (
+                <p className="hint">
+                  Bookings still run — you just will not be told about them, including when your
+                  Elixia session expires and booking stops.
+                </p>
+              )}
+            </div>
+          )}
 
-        {error && (
-          <div className="banner banner-err" id="setup-error">
-            {error}
+          {error && (
+            <div className="banner banner-err mt-m" id="setup-error">
+              <span>{error}</span>
+            </div>
+          )}
+
+          <div className="cluster mt-m">
+            {step > 0 && (
+              <button className="btn-quiet" id="setup-back" onClick={() => setStep(step - 1)}>
+                Back
+              </button>
+            )}
+            {step < STEPS.length - 1 ? (
+              <button
+                id="setup-next"
+                className="btn-grow"
+                disabled={!answered}
+                onClick={() => setStep(step + 1)}
+              >
+                Next
+              </button>
+            ) : (
+              <button
+                id="setup-finish"
+                className="btn-grow"
+                disabled={!answered || busy}
+                onClick={finish}
+              >
+                {busy ? 'Saving…' : 'Finish setup'}
+              </button>
+            )}
           </div>
-        )}
-
-        {step > 0 && (
-          <>
-            <button className="ghost" id="setup-back" onClick={() => setStep(step - 1)}>
-              Back
-            </button>{' '}
-          </>
-        )}
-        {step < STEPS.length - 1 ? (
-          <button id="setup-next" disabled={!answered} onClick={() => setStep(step + 1)}>
-            Next
-          </button>
-        ) : (
-          <button id="setup-finish" disabled={!answered || busy} onClick={finish}>
-            {busy ? 'Saving…' : 'Finish setup'}
-          </button>
-        )}
-      </div>
-    </>
+        </section>
+      </main>
+    </Shell>
   );
 }

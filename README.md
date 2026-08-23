@@ -168,13 +168,23 @@ earlier instant, because being early is recoverable and being late is not).
 
 ```
 app/                    Next.js App Router
-  page.tsx              the dashboard (client component)
+  layout.tsx            the shell, and the two scripts that must run before React
+  globals.css           the whole visual system: tokens, then components
+  DashboardApp.tsx      the dashboard's three tabs (client component)
+  SettingsPanel.tsx     booking and notification settings
+  AddClass.tsx          the class chooser, built from the live schedule
   Setup.tsx             the configuration pages a new account cannot skip
-  handler/[...stack]    Neon Auth's own pages: sign in, reset, account settings
+  components/           the mark, the icons, the theme and install controls
+  manifest.ts           the web app manifest, so the app can be installed
+  offline/              what the service worker shows with no network
+  auth/[path]           Neon Auth's own pages: sign in, reset
+  account/[path]        Neon Auth's own pages: email, password, deletion
   api/…/route.ts        JSON API — thin: authenticate, call a service, serialise
   api/cron/tick         the booking tick, secret-guarded
   api/cron/next         peeks the next unclaimed release, for the watcher to sleep to
 lib/
+  theme.ts              light/dark/system, and the script that paints before React
+  pwa.ts                whether to offer an install, and how, per platform
   schedule.ts           DST-correct release-instant maths
   timezones.ts          the zones on offer, and the guard that accepts only them
   membership.ts         the two booking windows Elixia sells
@@ -188,11 +198,65 @@ lib/
   mock.ts               stand-in backend for local work and tests
 db/migrations/          numbered schema migrations, applied once each
 db/migrate.ts           `npm run migrate` — node-pg-migrate, configured
+public/sw.js            the service worker — three caching rules, hand-written
+public/icons/           the app icons a manifest is required to name
+public/fonts/           Plus Jakarta Sans, self-hosted (OFL)
 .github/workflows/      the checks, the booking watcher, the nightly reindex
 ```
 
 The `Repo` interface is why moving storage — Workers KV, then Redis, now
 Postgres — has never required touching the booking logic.
+
+---
+
+## The interface
+
+Mobile first, because that is where a class gets added — usually while standing
+in one. Three tabs (Classes, Activity, Settings) render from one piece of markup
+as a thumb-reachable bar across the bottom of a phone and a row of pills under
+the header on a desktop. There is no separate account or security section:
+everything that would be in one already lives on Neon Auth's own page, and
+Settings links straight to it.
+
+`app/globals.css` is the whole visual system. Its palette, type scale, spacing
+grid and radii are **SATS DNA** — the design system behind Elixia, SATS and Fresh
+Fitness — so the app looks like it belongs beside the gym's own. Everything is a
+token: no component picks a colour, radius or shadow of its own, which is what
+lets the two themes be two lists of values rather than two sets of components,
+and class names describe the thing rather than the look (`.btn-danger`, never
+`.btn-red`).
+
+Four of that system's rules are the ones habit breaks:
+
+- **Body text is 14px**, not 16. It is a dense, information-first system.
+- **No shadows.** Depth is layered surface colour — page `#F3F4F5`, surface
+  `#FFFFFF`, nested `#F7F7F7` — plus 1px `#DCDEE0` borders.
+- **Navy `#0D2134` is structure, coral `#FA5333` is state.** Coral means active,
+  selected, in progress or featured. It is never decoration and never a second
+  button colour.
+- **Filled coral uses `#C84229`**, or white text on it fails contrast.
+
+The name and the `EB` mark are this app's own. Matching a spacing and type system
+is fair; the ELIXIA wordmark and the proprietary SATS Headline face are not ours
+to ship, and neither is used.
+
+**Theme.** The visitor's choice — system, light or dark — is stored under the
+key next-themes uses and applied as the class next-themes writes, because
+`@neondatabase/auth-ui` mounts next-themes underneath the whole app. Agreeing
+with it rather than running a second system in parallel is what keeps Neon's own
+sign-in pages in the same palette as the dashboard. A blocking script in `<head>`
+paints before the first frame, so the page never appears in the wrong theme and
+then corrects itself. `storeThemeChoice` also dispatches a synthetic `storage`
+event: next-themes only re-reads storage when one fires, and without it an
+OS-level palette change would overwrite a choice the visitor made by hand.
+
+**Installable.** A manifest, a hand-written service worker and an install card
+that is always offered — as a one-tap button where Chromium gave us a prompt,
+and as the Share ▸ Add to Home Screen steps on iOS, which has no prompt API at
+all. The worker never intercepts `/api/*` and never stores HTML; only
+fingerprinted assets are cached, because their URL changes when their content
+does. It is executed against a fake global scope in `tests/serviceWorker.test.ts`
+and asserted on by outcome.
 
 ---
 

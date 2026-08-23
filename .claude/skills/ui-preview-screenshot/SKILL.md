@@ -58,6 +58,46 @@ needs credentials the sandbox does not have.
 - **A sandbox usually pre-installs the browser** at a fixed path with downloads
   disabled. Point the launcher at that binary rather than triggering an install
   that will fail or silently take forever.
+- **`--window-size` is the window, not the viewport.** Driving the full browser
+  binary headlessly (`chrome --headless --screenshot --window-size=W,H`) writes
+  a W×H image whose page viewport is *shorter* — the space a window's chrome
+  would occupy is subtracted. Content is silently clipped at the bottom, and
+  `100vh` is smaller than the image you are looking at. The symptom points at
+  your CSS, which is why it costs an hour. Use the dedicated headless binary
+  (`headless_shell`) where one is installed: its viewport matches the requested
+  size exactly. A body background hides this, because the body's background
+  propagates to the canvas and paints the whole window — so a solid-colour probe
+  will *not* reveal it. Probe with an element that has its own background and
+  check where it ends.
+- **Screenshots are opaque unless you ask.** Pass
+  `--default-background-color=00000000` for transparency, or rounded corners and
+  masked shapes come out on white. Check the result really is RGBA.
+- **An `<img src="…svg">` sized by CSS can render clipped** rather than scaled.
+  When rasterising a vector, inline the SVG into the page instead of linking it.
+
+### Framework traps for the throwaway route
+
+- **Forcing a theme from the URL has to happen in `<head>`, and has to write
+  wherever the theme provider reads.** Two separate things defeat the obvious
+  approach. A `<script>` rendered inside a client component does not run until
+  React hydrates, and on a cold dev build that can be slower than the shutter —
+  so the shot silently captures the default theme, and both "light" and "dark"
+  images come out identical. Then, once hydration *does* happen, a theme
+  provider (next-themes and friends) reads its own storage key on mount and
+  overwrites whatever class you set. So the override belongs in the document
+  head, and it must set the storage key as well as the class. Two byte-identical
+  screenshots from two different theme URLs is the tell for both.
+
+- **A route folder starting with `_` is private in Next's app router** and
+  serves a 404. Naming the scratch page `app/__preview` looks like the
+  convention for "obviously temporary" and is exactly the name that will not
+  route. Use an ordinary segment, e.g. `app/preview-scratch`.
+- **`next dev` edits the repo's agent instructions file.** It appends a
+  `<!-- BEGIN:nextjs-agent-rules -->` block to `CLAUDE.md` (see
+  `node_modules/next/dist/server/lib/generate-agent-files.js`), so starting a
+  preview server leaves an unrelated modification in the working tree. Notice it
+  before staging, and decide deliberately whether that block belongs in your
+  diff — do not let it ride along in an unrelated PR.
 - **Wait for the state, not for a duration.** Wait on the element that proves
   you arrived; use a short fixed pause only to let a transition settle before
   the shutter.

@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { Settings } from '@/app/DashboardApp';
+import { SettingsPanel } from '@/app/SettingsPanel';
 import type { DashboardView } from '@/lib/service';
 
 /**
@@ -42,7 +42,7 @@ const view = (overrides: Partial<DashboardView['account']> = {}, telegramConnect
 
 const render = (dashboard: DashboardView): void => {
   act(() => {
-    root.render(<Settings view={dashboard} refresh={async () => {}} />);
+    root.render(<SettingsPanel view={dashboard} refresh={async () => {}} />);
   });
 };
 

@@ -1,4 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="7" fill="#1f6feb"/>
-  <path d="M9 10.5h14M9 16h10M9 21.5h14" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <rect width="48" height="48" rx="8" fill="#0d2134"/>
+  <g fill="#ffffff">
+    <rect x="8.6" y="13" width="5.8" height="22" rx="2.6"/>
+    <rect x="8.6" y="13" width="16.6" height="5.8" rx="2.6"/>
+    <rect x="8.6" y="21.1" width="13.2" height="5.8" rx="2.6"/>
+    <rect x="8.6" y="29.2" width="16.6" height="5.8" rx="2.6"/>
+  </g>
+  <g fill="#fa5333">
+    <rect x="28.4" y="13" width="5.8" height="22" rx="2.6"/>
+    <path fill-rule="evenodd" d="M31.3 13h3.6a5.35 5.35 0 0 1 0 10.7h-3.6Zm2.9 2.9v4.9h.7a2.45 2.45 0 0 0 0-4.9Z"/>
+    <path fill-rule="evenodd" d="M31.3 24.3h4.6a5.35 5.35 0 0 1 0 10.7h-4.6Zm2.9 2.9v4.9h1.7a2.45 2.45 0 0 0 0-4.9Z"/>
+  </g>
 </svg>
