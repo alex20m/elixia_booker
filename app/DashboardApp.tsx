@@ -8,8 +8,10 @@ import {
   dashboardScreen,
   describeUnlisted,
   loadDashboard,
+  tabFromSearch,
   titleCase,
   type DashboardLoad,
+  type TabId,
 } from '@/lib/dashboardState';
 import type { DashboardView } from '@/lib/service';
 import { AccountCard } from './AccountCard';
@@ -188,8 +190,6 @@ function SignedOut() {
   );
 }
 
-type TabId = 'classes' | 'activity' | 'settings';
-
 const TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
   { id: 'classes', label: 'Classes', icon: <CalendarIcon /> },
   { id: 'activity', label: 'Activity', icon: <PulseIcon /> },
@@ -203,14 +203,30 @@ function Dashboard({
   view: DashboardView;
   refresh: () => Promise<void>;
 }) {
-  const [tab, setTab] = useState<TabId>('classes');
+  // Seeded from the URL's own `?tab=` rather than always 'classes', so a
+  // visitor who left Settings for /account/* and comes back lands on
+  // Settings again instead of being bounced to the first tab. `selectTab`
+  // keeps that query string in sync as the visitor switches tabs.
+  const [tab, setTabState] = useState<TabId>(() =>
+    typeof window === 'undefined' ? 'classes' : tabFromSearch(window.location.search),
+  );
+  const selectTab = useCallback((id: TabId) => {
+    setTabState(id);
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      url.searchParams.set('tab', id);
+      // replaceState, not a router push: switching tabs is not a page the
+      // back button should ever need to step back through on its own.
+      window.history.replaceState(null, '', url);
+    }
+  }, []);
   const linked = view.account.elixiaStatus === 'ok';
 
   return (
     <Shell
       actions={
         <>
-          <InstallButton onManual={() => setTab('settings')} />
+          <InstallButton onManual={() => selectTab('settings')} />
           <button
             className="btn-quiet btn-sm"
             id="signout-btn"
@@ -230,7 +246,7 @@ function Dashboard({
             type="button"
             className="tab"
             aria-current={tab === entry.id ? 'page' : undefined}
-            onClick={() => setTab(entry.id)}
+            onClick={() => selectTab(entry.id)}
           >
             {entry.icon}
             <span>{entry.label}</span>

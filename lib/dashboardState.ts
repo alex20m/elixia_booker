@@ -119,6 +119,25 @@ export async function loadDashboard(): Promise<DashboardLoad> {
   }
 }
 
+/** The dashboard's three sections. */
+export type TabId = 'classes' | 'activity' | 'settings';
+
+const TAB_IDS: readonly TabId[] = ['classes', 'activity', 'settings'];
+
+/**
+ * Which tab to land on, read from the page's own `?tab=` query string.
+ *
+ * The dashboard writes this on every tab switch (see `Dashboard` in
+ * app/DashboardApp.tsx) so that navigating away — to change a password, say —
+ * and back returns to the tab the visitor was on, rather than always the
+ * first one. Anything else, including no query string at all, falls back to
+ * `classes`: that is the tab a fresh visit should open on.
+ */
+export function tabFromSearch(search: string): TabId {
+  const value = new URLSearchParams(search).get('tab');
+  return TAB_IDS.includes(value as TabId) ? (value as TabId) : 'classes';
+}
+
 export interface ScreenInput {
   /** The auth client has not yet resolved whether anyone is signed in. */
   sessionPending: boolean;
