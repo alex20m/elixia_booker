@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { apiRequest as api, titleCase } from '@/lib/dashboardState';
 import type { CenterDefaults } from '@/lib/service';
 import type { CenterOption, ClassOption } from '@/lib/types';
+import { ActionButton } from './components/ActionButton';
+import { Spinner } from './components/Loading';
 import { PlusIcon } from './components/icons';
 
 /**
@@ -95,7 +97,6 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
   /** Which of that class's weekly slots, as `weekday|HH:MM`. */
   const [slot, setSlot] = useState('');
   const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -229,7 +230,9 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
 
       <div className="grid-2">
         <div className="field">
-          <label htmlFor="s-center">Centre</label>
+          <label htmlFor="s-center">
+            Centre {centers.status === 'loading' && <Spinner label="Loading centres" />}
+          </label>
           <select
             id="s-center"
             value={center}
@@ -245,7 +248,9 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
           </select>
         </div>
         <div className="field">
-          <label htmlFor="s-class">Class</label>
+          <label htmlFor="s-class">
+            Class {classes?.status === 'loading' && <Spinner label="Loading classes" />}
+          </label>
           <select
             id="s-class"
             value={className}
@@ -298,36 +303,31 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
         </div>
       )}
 
-      <button
+      <ActionButton
         id="add-btn"
         className="btn-block mt-m"
-        disabled={busy || !chosen}
+        disabled={!chosen}
+        pendingLabel="Adding…"
+        onError={(err) => setError(err.message)}
         onClick={async () => {
           if (!chosen) return;
           setError('');
-          setBusy(true);
-          try {
-            await api('/api/subscriptions', {
-              method: 'POST',
-              body: JSON.stringify({
-                className: chosen.className,
-                center: centerName,
-                weekday: chosen.weekday,
-                startTime: chosen.startTime,
-              }),
-            });
-            chooseClass('');
-            await refresh();
-          } catch (err) {
-            setError((err as Error).message);
-          } finally {
-            setBusy(false);
-          }
+          await api('/api/subscriptions', {
+            method: 'POST',
+            body: JSON.stringify({
+              className: chosen.className,
+              center: centerName,
+              weekday: chosen.weekday,
+              startTime: chosen.startTime,
+            }),
+          });
+          chooseClass('');
+          await refresh();
         }}
       >
         <PlusIcon />
-        {busy ? 'Adding…' : 'Add class'}
-      </button>
+        Add class
+      </ActionButton>
 
       <p className="hint mt-s">
         Only classes Elixia currently publishes can be added — its schedule runs about two weeks

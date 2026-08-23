@@ -5,6 +5,7 @@ import { apiRequest as api } from '@/lib/dashboardState';
 import { MEMBERSHIP_OPTIONS } from '@/lib/membership';
 import { TIME_ZONE_GROUPS } from '@/lib/timezones';
 import type { DashboardView } from '@/lib/service';
+import { ActionButton } from './components/ActionButton';
 import { TelegramConnect } from './components/TelegramConnect';
 
 /**
@@ -36,7 +37,6 @@ export function SettingsPanel({
   const [chatId, setChatId] = useState(view.account.telegramChatId);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
-  const [saving, setSaving] = useState(false);
 
   /**
    * Change a field, and withdraw the "Saved" acknowledgement while doing it.
@@ -198,43 +198,37 @@ export function SettingsPanel({
           </div>
         )}
 
-        {/* Disabled while the request is out, because a second press sends a
-            second PUT that races the refresh the first one triggered — and an
-            impatient second press on a slow connection is the ordinary way to
-            get there, not an edge case. */}
-        <button
+        {/* The wait, the refusal of a second press, and the withdrawal of
+            "Saved" the moment a field is edited: a second PUT races the refresh
+            the first one triggered, and an impatient press on a slow connection
+            is the ordinary way to get there rather than an edge case. */}
+        <ActionButton
           id="save-btn"
           className="btn-block mt-m"
-          disabled={saving}
+          pendingLabel="Saving…"
+          onError={(err) => setError(err.message)}
           onClick={async () => {
             setError('');
             setSaved(false);
-            setSaving(true);
-            try {
-              await api('/api/settings', {
-                method: 'PUT',
-                body: JSON.stringify({
-                  bookingWindowDays: Number(windowDays),
-                  timeZone,
-                  notifyChannel: channel,
-                  // Only where this form owns the value. Sending it when the
-                  // connect flow does would post a blank on every save and
-                  // disconnect the chat the user just linked.
-                  ...(canConnect ? {} : { telegramChatId: chatId }),
-                  notifyEmail: email,
-                }),
-              });
-              setSaved(true);
-              await refresh();
-            } catch (err) {
-              setError((err as Error).message);
-            } finally {
-              setSaving(false);
-            }
+            await api('/api/settings', {
+              method: 'PUT',
+              body: JSON.stringify({
+                bookingWindowDays: Number(windowDays),
+                timeZone,
+                notifyChannel: channel,
+                // Only where this form owns the value. Sending it when the
+                // connect flow does would post a blank on every save and
+                // disconnect the chat the user just linked.
+                ...(canConnect ? {} : { telegramChatId: chatId }),
+                notifyEmail: email,
+              }),
+            });
+            setSaved(true);
+            await refresh();
           }}
         >
-          {saving ? 'Saving…' : saved ? 'Saved' : 'Save settings'}
-        </button>
+          {saved ? 'Saved' : 'Save settings'}
+        </ActionButton>
       </section>
     </>
   );

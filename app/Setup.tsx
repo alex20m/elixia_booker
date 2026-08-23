@@ -6,6 +6,8 @@ import { MEMBERSHIP_OPTIONS } from '@/lib/membership';
 import { TIME_ZONE_GROUPS } from '@/lib/timezones';
 import type { SetupState } from '@/lib/service';
 import type { NotifyChannel } from '@/lib/types';
+import { ActionButton } from './components/ActionButton';
+import { LoadingScreen, SkeletonCard } from './components/Loading';
 import { Shell } from './components/Shell';
 import { TelegramConnect } from './components/TelegramConnect';
 
@@ -63,7 +65,6 @@ export default function Setup({ onDone }: { onDone: () => void }) {
   const [elixiaEmail, setElixiaEmail] = useState('');
   const [elixiaPassword, setElixiaPassword] = useState('');
   const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
 
   const apply = (loaded: SetupState): void => {
     setState(loaded);
@@ -120,33 +121,40 @@ export default function Setup({ onDone }: { onDone: () => void }) {
 
   const finish = async (): Promise<void> => {
     setError('');
-    setBusy(true);
-    try {
-      await api('/api/setup', {
+    await api('/api/setup', {
         method: 'POST',
-        body: JSON.stringify({
-          bookingWindowDays: Number(windowDays),
-          timeZone,
-          notifyChannel: channel,
-          ...(channel === 'email' ? { notifyEmail: email.trim() } : {}),
-          // Only where this deployment has no webhook and the field is real.
-          ...(channel === 'telegram' && !state?.telegramConnect ? { telegramChatId: chatId } : {}),
-        }),
-      });
-      // Separate from the call above: `/api/elixia` only accepts a request
-      // once the account is configured, and a rejected login here must not
-      // undo the setup answers that were just saved.
-      await api('/api/elixia', {
-        method: 'POST',
-        body: JSON.stringify({ email: elixiaEmail.trim(), password: elixiaPassword }),
-      });
-      onDone();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
+      body: JSON.stringify({
+        bookingWindowDays: Number(windowDays),
+        timeZone,
+        notifyChannel: channel,
+        ...(channel === 'email' ? { notifyEmail: email.trim() } : {}),
+        // Only where this deployment has no webhook and the field is real.
+        ...(channel === 'telegram' && !state?.telegramConnect ? { telegramChatId: chatId } : {}),
+      }),
+    });
+    // Separate from the call above: `/api/elixia` only accepts a request once
+    // the account is configured, and a rejected login here must not undo the
+    // setup answers that were just saved.
+    await api('/api/elixia', {
+      method: 'POST',
+      body: JSON.stringify({ email: elixiaEmail.trim(), password: elixiaPassword }),
+    });
+    onDone();
   };
+
+  // Drawn only once the server has answered. Two of these pages depend on what
+  // it says — the email field is filled in from the account, and the Telegram
+  // page differs depending on whether this deployment has a webhook — so
+  // rendering first means rendering a form that visibly rewrites itself, and
+  // briefly offering a Telegram page with nothing on it. An error is a decided
+  // outcome rather than a wait, so it falls through and the banner explains it.
+  if (!state && !error) {
+    return (
+      <LoadingScreen label="Loading your setup…" narrow>
+        <SkeletonCard lines={3} />
+      </LoadingScreen>
+    );
+  }
 
   return (
     <Shell>
@@ -343,14 +351,16 @@ export default function Setup({ onDone }: { onDone: () => void }) {
                 Next
               </button>
             ) : (
-              <button
+              <ActionButton
                 id="setup-finish"
                 className="btn-grow"
-                disabled={!answered || busy}
+                disabled={!answered}
+                pendingLabel="Saving…"
+                onError={(err) => setError(err.message)}
                 onClick={finish}
               >
-                {busy ? 'Saving…' : 'Finish setup'}
-              </button>
+                Finish setup
+              </ActionButton>
             )}
           </div>
         </section>
