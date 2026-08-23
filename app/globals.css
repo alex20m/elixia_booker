@@ -209,7 +209,7 @@
 }
 
 /* The rest of @neondatabase/auth-ui's surface, scoped to .account-shell
-   (app/account/[path]/page.tsx) rather than :root: it reads --accent for
+   (app/account/page.tsx) rather than :root: it reads --accent for
    every hover, focus and loading-skeleton state it paints, and this app's
    own --accent is the coral call-to-action colour. Left unscoped, that turns
    sidebar hovers and skeleton placeholders solid coral instead of a neutral

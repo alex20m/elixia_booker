@@ -4,15 +4,13 @@ import Link from 'next/link';
 import { authClient } from '@/lib/auth/client';
 
 /**
- * Identity — password, email, sign-in — all owned by Neon Auth's own account
- * pages rather than reimplemented here (see app/account/[path]/page.tsx).
+ * Identity — name, email, password — owned by Neon Auth's own account page
+ * rather than reimplemented here (see app/account/page.tsx).
  *
- * Two links, not one: Neon Auth splits its account pages into an "Account"
- * tab (display name, connected sign-in methods) and a "Security" tab, and
- * password change lives on Security. A single link into the Account tab left
- * the password field reachable only via a sidebar nav item — a hamburger
- * drawer on phones — that nothing here pointed at, which is exactly why it
- * went unfound. Naming the destination is what fixes that.
+ * One link, not two: Neon Auth's account pages used to split this across an
+ * "Account" tab and a "Security" tab, switched between by a sidebar nav item
+ * that collapsed into a hamburger drawer on phones — a drawer that never
+ * opened. The single combined page removes the need for that nav entirely.
  */
 export function AccountCard() {
   return (
@@ -21,15 +19,8 @@ export function AccountCard() {
         <h2 className="card-title">Account</h2>
       </div>
       <div className="stack">
-        <Link
-          className="btn btn-secondary btn-block"
-          id="account-password-btn"
-          href="/account/security"
-        >
-          Change password
-        </Link>
-        <Link className="btn btn-quiet btn-block" id="account-settings-btn" href="/account/settings">
-          Email &amp; sign-in details
+        <Link className="btn btn-secondary btn-block" id="account-settings-btn" href="/account">
+          Name, email &amp; password
         </Link>
         <button className="btn-quiet btn-block" onClick={() => void authClient.signOut()}>
           Sign out

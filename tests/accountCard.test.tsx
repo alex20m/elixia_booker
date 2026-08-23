@@ -12,16 +12,14 @@ vi.mock('@/lib/auth/client', () => ({
 const { AccountCard } = await import('@/app/AccountCard');
 
 /**
- * The Account card, linking out to Neon Auth's own pages for password, email
- * and sign-in.
+ * The Account card, linking out to Neon Auth's own account page for name,
+ * email and password.
  *
- * Regression coverage for a real bug: this card used to offer a single link
- * into Neon Auth's "Account" tab, which holds display name and connected
- * sign-in methods but not the password field — that lives on a separate
- * "Security" tab, reachable only via a sidebar nav item (a hamburger drawer
- * on phones) nothing here pointed at. A visitor looking for "change
- * password" had no way to know it existed. Pinning the two links by href is
- * what keeps that fixed.
+ * This used to offer two separate links — one into a "Security" tab for the
+ * password field, one into an "Account" tab for email — because those lived
+ * on separate pages switched between by a sidebar nav that collapsed into a
+ * hamburger drawer on phones and never opened. The two pages were combined
+ * into one (see app/account/page.tsx), so a single link now covers both.
  */
 
 let container: HTMLDivElement;
@@ -49,21 +47,19 @@ afterEach(() => {
 });
 
 describe('AccountCard', () => {
-  it('sends "change password" straight to the security tab, not the profile one', () => {
-    render();
-
-    const link = byId<HTMLAnchorElement>('account-password-btn');
-    expect(link).not.toBeNull();
-    expect(link!.getAttribute('href')).toBe('/account/security');
-    expect(link!.textContent).toMatch(/change password/i);
-  });
-
-  it('keeps a separate link for email and sign-in details', () => {
+  it('sends the account link to the combined name/email/password page', () => {
     render();
 
     const link = byId<HTMLAnchorElement>('account-settings-btn');
     expect(link).not.toBeNull();
-    expect(link!.getAttribute('href')).toBe('/account/settings');
+    expect(link!.getAttribute('href')).toBe('/account');
+    expect(link!.textContent).toMatch(/password/i);
+  });
+
+  it('offers only one account link, not a separate one per section', () => {
+    render();
+
+    expect(container.querySelectorAll('a').length).toBe(1);
   });
 
   it('signs out through the auth client', async () => {

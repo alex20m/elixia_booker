@@ -178,7 +178,7 @@ app/                    Next.js App Router
   manifest.ts           the web app manifest, so the app can be installed
   offline/              what the service worker shows with no network
   auth/[path]           Neon Auth's own pages: sign in, reset
-  account/[path]        Neon Auth's own pages: email, password, deletion
+  account/               Neon Auth's own cards, combined onto one page: name, email, password
   api/…/route.ts        JSON API — thin: authenticate, call a service, serialise
   api/cron/tick         the booking tick, secret-guarded
   api/cron/next         peeks the next unclaimed release, for the watcher to sleep to
