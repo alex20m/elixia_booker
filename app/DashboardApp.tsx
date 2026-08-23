@@ -18,8 +18,11 @@ import { AccountCard } from './AccountCard';
 import AddClass from './AddClass';
 import Setup from './Setup';
 import { SettingsPanel } from './SettingsPanel';
+import { ActionButton } from './components/ActionButton';
 import { InstallButton, InstallCard } from './components/InstallCard';
+import { BusyBar, LoadingScreen, SkeletonCard, SkeletonList } from './components/Loading';
 import { Shell } from './components/Shell';
+import { SignOutButton } from './components/SignOutButton';
 import { CalendarIcon, CheckIcon, PulseIcon, SlidersIcon } from './components/icons';
 import { ThemeChoiceControl } from './components/theme';
 
@@ -52,10 +55,22 @@ function Authenticated() {
   // `refresh`, re-fire the effect, and fetch the dashboard in a loop.
   const userId = user?.id ?? null;
 
+  // A refresh is a wait the visitor is already looking at the result of, so it
+  // is tracked separately from the first load: the dashboard stays on screen
+  // and a bar under the header says newer data is on its way. Blanking a filled
+  // page back to skeletons after every pause or remove reads as the app having
+  // lost what it just showed.
+  const [refreshing, setRefreshing] = useState(false);
+
   // Handed to the children, which call it after every mutation.
   const refresh = useCallback(async () => {
     if (!userId) return;
-    setLoad({ userId, result: await loadDashboard() });
+    setRefreshing(true);
+    try {
+      setLoad({ userId, result: await loadDashboard() });
+    } finally {
+      setRefreshing(false);
+    }
   }, [userId]);
 
   useEffect(() => {
@@ -89,12 +104,14 @@ function Authenticated() {
 
   switch (screen.kind) {
     case 'loading':
+      // Shaped like the dashboard it is about to become — a list of classes and
+      // a card under it — so the page does not rearrange itself the moment the
+      // data lands.
       return (
-        <Shell>
-          <main className="main main-narrow">
-            <p className="empty">Loading your account…</p>
-          </main>
-        </Shell>
+        <LoadingScreen label="Loading your account…">
+          <SkeletonList rows={3} />
+          <SkeletonCard lines={2} />
+        </LoadingScreen>
       );
     case 'signed-out':
       return <SignedOut />;
@@ -106,7 +123,7 @@ function Authenticated() {
     case 'error':
       return <LoadFailed message={screen.message} retry={refresh} />;
     case 'dashboard':
-      return <Dashboard view={screen.view} refresh={refresh} />;
+      return <Dashboard view={screen.view} refresh={refresh} refreshing={refreshing} />;
   }
 }
 
@@ -120,8 +137,6 @@ function Authenticated() {
  * one failure the visitor can clear themselves.
  */
 function LoadFailed({ message, retry }: { message: string; retry: () => Promise<void> }) {
-  const [busy, setBusy] = useState(false);
-
   return (
     <Shell>
       <main className="main main-narrow">
@@ -133,23 +148,10 @@ function LoadFailed({ message, retry }: { message: string; retry: () => Promise<
             {message}
           </div>
           <div className="cluster mt-m">
-            <button
-              id="retry-btn"
-              disabled={busy}
-              onClick={async () => {
-                setBusy(true);
-                try {
-                  await retry();
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            >
-              {busy ? 'Retrying…' : 'Try again'}
-            </button>
-            <button className="btn-quiet" onClick={() => void authClient.signOut()}>
-              Sign out
-            </button>
+            <ActionButton id="retry-btn" pendingLabel="Retrying…" onClick={retry}>
+              Try again
+            </ActionButton>
+            <SignOutButton className="btn-quiet" />
           </div>
         </section>
       </main>
@@ -199,9 +201,12 @@ const TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
 function Dashboard({
   view,
   refresh,
+  refreshing,
 }: {
   view: DashboardView;
   refresh: () => Promise<void>;
+  /** A reload of what is already on screen is in flight. */
+  refreshing: boolean;
 }) {
   // Seeded from the URL's own `?tab=` rather than always 'classes', so a
   // visitor who left Settings for /account/* and comes back lands on
@@ -227,16 +232,12 @@ function Dashboard({
       actions={
         <>
           <InstallButton onManual={() => selectTab('settings')} />
-          <button
-            className="btn-quiet btn-sm"
-            id="signout-btn"
-            onClick={() => void authClient.signOut()}
-          >
-            Sign out
-          </button>
+          <SignOutButton id="signout-btn" className="btn-quiet btn-sm" />
         </>
       }
     >
+      <BusyBar busy={refreshing} label="Refreshing your classes…" />
+
       {/* One control in two places: a thumb-reachable bar at the bottom of a
           phone, a row of pills under the header on a desktop. */}
       <nav className="tabs" aria-label="Sections">
@@ -363,7 +364,6 @@ function ElixiaLink({ view, refresh }: { view: DashboardView; refresh: () => Pro
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
 
   if (view.account.elixiaStatus === 'ok') {
     return (
@@ -382,16 +382,17 @@ function ElixiaLink({ view, refresh }: { view: DashboardView; refresh: () => Pro
             <div className="row-meta">Credentials stored encrypted</div>
           </div>
           <div className="row-actions">
-            <button
+            <ActionButton
               className="btn-danger btn-sm"
               id="unlink-btn"
+              pendingLabel="Unlinking…"
               onClick={async () => {
                 await api('/api/elixia', { method: 'DELETE' });
                 await refresh();
               }}
             >
               Unlink
-            </button>
+            </ActionButton>
           </div>
         </div>
       </section>
@@ -443,29 +444,23 @@ function ElixiaLink({ view, refresh }: { view: DashboardView; refresh: () => Pro
         </div>
       </div>
 
-      <button
+      <ActionButton
         id="link-btn"
         className="btn-block mt-m"
-        disabled={busy}
+        pendingLabel="Checking…"
+        onError={(err) => setError(err.message)}
         onClick={async () => {
           setError('');
-          setBusy(true);
-          try {
-            await api('/api/elixia', {
-              method: 'POST',
-              body: JSON.stringify({ email, password }),
-            });
-            setPassword('');
-            await refresh();
-          } catch (err) {
-            setError((err as Error).message);
-          } finally {
-            setBusy(false);
-          }
+          await api('/api/elixia', {
+            method: 'POST',
+            body: JSON.stringify({ email, password }),
+          });
+          setPassword('');
+          await refresh();
         }}
       >
-        {busy ? 'Checking…' : 'Link account'}
-      </button>
+        Link account
+      </ActionButton>
 
       <p className="hint mt-s">
         Your Elixia password is stored <strong>encrypted</strong>, because the bot has to
@@ -507,24 +502,28 @@ function ClassList({ view, refresh }: { view: DashboardView; refresh: () => Prom
               )}
             </div>
             <div className="row-actions">
-              <button
+              <ActionButton
+                id={`pause-${s.id}`}
                 className="btn-quiet btn-sm"
+                pendingLabel="…"
                 onClick={async () => {
                   await api(`/api/subscriptions/${encodeURIComponent(s.id)}`, { method: 'PATCH' });
                   await refresh();
                 }}
               >
                 {s.enabled ? 'Pause' : 'Resume'}
-              </button>
-              <button
+              </ActionButton>
+              <ActionButton
+                id={`remove-${s.id}`}
                 className="btn-danger btn-sm"
+                pendingLabel="…"
                 onClick={async () => {
                   await api(`/api/subscriptions/${encodeURIComponent(s.id)}`, { method: 'DELETE' });
                   await refresh();
                 }}
               >
                 Remove
-              </button>
+              </ActionButton>
             </div>
           </div>
         );

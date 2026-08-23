@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { authClient } from '@/lib/auth/client';
+import { SignOutButton } from './components/SignOutButton';
 
 /**
  * Identity — password, email, sign-in — all owned by Neon Auth's own account
@@ -31,9 +31,7 @@ export function AccountCard() {
         <Link className="btn btn-quiet btn-block" id="account-settings-btn" href="/account/settings">
           Email &amp; sign-in details
         </Link>
-        <button className="btn-quiet btn-block" onClick={() => void authClient.signOut()}>
-          Sign out
-        </button>
+        <SignOutButton className="btn-quiet btn-block" />
       </div>
     </section>
   );

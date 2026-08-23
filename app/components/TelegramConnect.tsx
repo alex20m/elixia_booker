@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiRequest as api } from '@/lib/dashboardState';
+import { ActionButton } from './ActionButton';
 
 /**
  * The Connect-Telegram control, shared by the setup wizard and the settings
@@ -162,16 +163,18 @@ export function TelegramConnect({
         {onDisconnect && (
           <>
             {' '}
-            <button
+            <ActionButton
               id="tg-disconnect"
               className="link"
+              pendingLabel="Disconnecting…"
+              onError={(err) => onError(err.message)}
               onClick={() => {
                 setStatus('idle');
-                void onDisconnect().catch((err: Error) => onError(err.message));
+                return onDisconnect();
               }}
             >
               Disconnect
-            </button>
+            </ActionButton>
           </>
         )}
       </p>
@@ -180,15 +183,14 @@ export function TelegramConnect({
 
   return (
     <>
-      <button
+      <ActionButton
         id="tg-connect"
         className="btn-secondary"
-        onClick={() => {
-          void connect();
-        }}
+        pendingLabel="Opening Telegram…"
+        onClick={connect}
       >
         {status === 'expired' ? 'Get a new Telegram link' : 'Connect Telegram'}
-      </button>
+      </ActionButton>
       {/* Mounted whether or not it has anything to say, so that a screen reader
           announces the change rather than the arrival of a new element. */}
       <p
@@ -202,17 +204,17 @@ export function TelegramConnect({
             <span className="spinner" aria-hidden="true" /> Waiting for you to tap{' '}
             <strong>Start</strong> in Telegram. This page picks it up on its own — no need to
             refresh.{' '}
-            <button
+            <ActionButton
               id="tg-check"
               className="link"
-              onClick={() => {
-                // Pressed rather than polled, so a failure here is an answer
-                // the user is owed.
-                void checkRef.current().catch((err: Error) => onError(err.message));
-              }}
+              pendingLabel="Checking…"
+              // Pressed rather than polled, so a failure here is an answer the
+              // user is owed — unlike the silent poll running beside it.
+              onError={(err) => onError(err.message)}
+              onClick={() => checkRef.current()}
             >
               Check now
-            </button>
+            </ActionButton>
           </>
         )}
         {status === 'expired' && (
