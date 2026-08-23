@@ -36,6 +36,21 @@ export function SettingsPanel({
   const [chatId, setChatId] = useState(view.account.telegramChatId);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  /**
+   * Change a field, and withdraw the "Saved" acknowledgement while doing it.
+   *
+   * The acknowledgement used to survive every later edit, so a user who saved
+   * once and then picked a different channel was looking at a button that
+   * claimed their unsaved choice was already stored. Nothing on the page said
+   * otherwise, so the ordinary outcome was leaving the tab believing alerts had
+   * moved when they had not.
+   */
+  const edit = <T,>(set: (value: T) => void, value: T): void => {
+    setSaved(false);
+    set(value);
+  };
 
   const connected = Boolean(view.account.telegramChatId);
   // The one-tap flow needs a bot, a webhook and a secret. Without them the old
@@ -60,7 +75,11 @@ export function SettingsPanel({
         <div className="grid-2">
           <div className="field">
             <label htmlFor="tier">Membership</label>
-            <select id="tier" value={windowDays} onChange={(e) => setWindowDays(e.target.value)}>
+            <select
+              id="tier"
+              value={windowDays}
+              onChange={(e) => edit(setWindowDays, e.target.value)}
+            >
               {MEMBERSHIP_OPTIONS.map((option) => (
                 <option key={option.days} value={String(option.days)}>
                   {option.label}
@@ -74,7 +93,7 @@ export function SettingsPanel({
                 this field used to be a text box, and "Europe/Helsinky" saved from
                 it is a booking window that never opens. The server accepts only
                 these ids. */}
-            <select id="tz" value={timeZone} onChange={(e) => setTimeZone(e.target.value)}>
+            <select id="tz" value={timeZone} onChange={(e) => edit(setTimeZone, e.target.value)}>
               {TIME_ZONE_GROUPS.map((group) => (
                 <optgroup key={group.region} label={group.region}>
                   {group.zones.map((zone) => (
@@ -104,7 +123,7 @@ export function SettingsPanel({
               id="notify-channel"
               value={channel}
               onChange={(e) =>
-                setChannel(e.target.value as DashboardView['account']['notifyChannel'])
+                edit(setChannel, e.target.value as DashboardView['account']['notifyChannel'])
               }
             >
               <option value="email">Email</option>
@@ -119,7 +138,7 @@ export function SettingsPanel({
                 id="notify-email"
                 type="email"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={(e) => edit(setEmail, e.target.value)}
               />
             </div>
           )}
@@ -157,7 +176,7 @@ export function SettingsPanel({
               id="tg"
               placeholder="e.g. 123456789"
               value={chatId}
-              onChange={(e) => setChatId(e.target.value)}
+              onChange={(e) => edit(setChatId, e.target.value)}
             />
             <p className="hint">
               This deployment has no Telegram webhook configured, so the chat ID has to be entered
@@ -179,12 +198,18 @@ export function SettingsPanel({
           </div>
         )}
 
+        {/* Disabled while the request is out, because a second press sends a
+            second PUT that races the refresh the first one triggered — and an
+            impatient second press on a slow connection is the ordinary way to
+            get there, not an edge case. */}
         <button
           id="save-btn"
           className="btn-block mt-m"
+          disabled={saving}
           onClick={async () => {
             setError('');
             setSaved(false);
+            setSaving(true);
             try {
               await api('/api/settings', {
                 method: 'PUT',
@@ -203,10 +228,12 @@ export function SettingsPanel({
               await refresh();
             } catch (err) {
               setError((err as Error).message);
+            } finally {
+              setSaving(false);
             }
           }}
         >
-          {saved ? 'Saved' : 'Save settings'}
+          {saving ? 'Saving…' : saved ? 'Saved' : 'Save settings'}
         </button>
       </section>
     </>
