@@ -21,6 +21,9 @@ import { Shell } from './components/Shell';
  *     epoch millisecond. An hour out is a booking that fires an hour out.
  *   * **Notifications.** With no channel there is nowhere to send the one
  *     message that matters most — that booking has stopped.
+ *   * **Gym account.** Without Elixia credentials there is nothing to book
+ *     with — the rest of the wizard would finish an account that can only
+ *     ever show a dashboard, never book a class.
  *
  * Every failure there is silent. The app keeps running, the dashboard looks
  * healthy, and the classes quietly do not get booked. So the answers are asked
@@ -30,12 +33,20 @@ import { Shell } from './components/Shell';
  * in is a default in a form's clothing — most people would click past it and
  * never know they had been asked.
  *
- * Three pages rather than one long form, so each decision is read rather than
+ * Four pages rather than one long form, so each decision is read rather than
  * skimmed, and each page's Next is the thing that will not move until it has an
  * answer.
+ *
+ * The gym account page is last and submits separately from the other three:
+ * `/api/elixia` only accepts a request once the account is already configured
+ * (see lib/service.ts's note on why linking stays its own operation), so
+ * finishing this wizard calls `/api/setup` first and `/api/elixia` second. If
+ * Elixia rejects the credentials, the first call has already gone through —
+ * which is fine, because an account that is configured but not yet linked is
+ * exactly what the dashboard's own "Link your Elixia account" card is for.
  */
 
-const STEPS = ['Membership', 'Timezone', 'Notifications'] as const;
+const STEPS = ['Membership', 'Timezone', 'Notifications', 'Gym account'] as const;
 
 export default function Setup({ onDone }: { onDone: () => void }) {
   const [step, setStep] = useState(0);
@@ -48,6 +59,8 @@ export default function Setup({ onDone }: { onDone: () => void }) {
   const [channel, setChannel] = useState<NotifyChannel | ''>('');
   const [email, setEmail] = useState('');
   const [chatId, setChatId] = useState('');
+  const [elixiaEmail, setElixiaEmail] = useState('');
+  const [elixiaPassword, setElixiaPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [awaitingTap, setAwaitingTap] = useState(false);
@@ -99,9 +112,11 @@ export default function Setup({ onDone }: { onDone: () => void }) {
       ? windowDays !== ''
       : step === 1
         ? timeZone !== ''
-        : channel === 'none' ||
-          (channel === 'email' && email.trim() !== '') ||
-          (channel === 'telegram' && connected);
+        : step === 2
+          ? channel === 'none' ||
+            (channel === 'email' && email.trim() !== '') ||
+            (channel === 'telegram' && connected)
+          : elixiaEmail.trim() !== '' && elixiaPassword !== '';
 
   const finish = async (): Promise<void> => {
     setError('');
@@ -117,6 +132,13 @@ export default function Setup({ onDone }: { onDone: () => void }) {
           // Only where this deployment has no webhook and the field is real.
           ...(channel === 'telegram' && !state?.telegramConnect ? { telegramChatId: chatId } : {}),
         }),
+      });
+      // Separate from the call above: `/api/elixia` only accepts a request
+      // once the account is configured, and a rejected login here must not
+      // undo the setup answers that were just saved.
+      await api('/api/elixia', {
+        method: 'POST',
+        body: JSON.stringify({ email: elixiaEmail.trim(), password: elixiaPassword }),
       });
       onDone();
     } catch (err) {
@@ -297,6 +319,38 @@ export default function Setup({ onDone }: { onDone: () => void }) {
                   Elixia session expires and booking stops.
                 </p>
               )}
+            </div>
+          )}
+
+          {step === 3 && (
+            <div className="stack">
+              <div className="grid-2">
+                <div className="field">
+                  <label htmlFor="setup-elixia-email">Elixia email</label>
+                  <input
+                    id="setup-elixia-email"
+                    type="email"
+                    autoComplete="username"
+                    value={elixiaEmail}
+                    onChange={(e) => setElixiaEmail(e.target.value)}
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="setup-elixia-password">Elixia password</label>
+                  <input
+                    id="setup-elixia-password"
+                    type="password"
+                    autoComplete="current-password"
+                    value={elixiaPassword}
+                    onChange={(e) => setElixiaPassword(e.target.value)}
+                  />
+                </div>
+              </div>
+              <p className="hint">
+                Booker needs these to reserve classes on your behalf. Your password is stored{' '}
+                <strong>encrypted</strong>, because the bot has to re-authenticate on its own when a
+                session expires — otherwise booking would stop silently until you noticed.
+              </p>
             </div>
           )}
 
