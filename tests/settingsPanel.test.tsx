@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { SettingsPanel } from '@/app/SettingsPanel';
+import { TELEGRAM_POLL_MS } from '@/app/components/TelegramConnect';
 import type { DashboardView } from '@/lib/service';
 
 /**
@@ -40,9 +41,9 @@ const view = (overrides: Partial<DashboardView['account']> = {}, telegramConnect
     ephemeralStore: false,
   }) as DashboardView;
 
-const render = (dashboard: DashboardView): void => {
+const render = (dashboard: DashboardView, refresh: () => Promise<void> = async () => {}): void => {
   act(() => {
-    root.render(<SettingsPanel view={dashboard} refresh={async () => {}} />);
+    root.render(<SettingsPanel view={dashboard} refresh={refresh} />);
   });
 };
 
@@ -81,7 +82,10 @@ beforeEach(() => {
     });
     const payload =
       url === '/api/telegram/link'
-        ? { url: 'https://t.me/elixia_booker_bot?start=abc', expiresAt: '2026-06-01T12:10:00Z' }
+        ? {
+            url: 'https://t.me/elixia_booker_bot?start=abc',
+            expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+          }
         : { ok: true };
     return new Response(JSON.stringify(payload), { status: 200 });
   }) as unknown as typeof fetch);
@@ -127,6 +131,30 @@ describe('Settings notifications', () => {
       body: undefined,
     });
     expect(opened).toEqual(['https://t.me/elixia_booker_bot?start=abc']);
+  });
+
+  it('re-checks on its own after the link is opened, so nobody has to reload', async () => {
+    // The tap lands on the webhook, not in this tab. Before this, the panel
+    // only found out when the user pressed "check again" — so the ordinary
+    // outcome of a successful connect was a page still asking for it.
+    vi.useFakeTimers();
+    try {
+      let refreshes = 0;
+      render(view({ notifyChannel: 'telegram' }), async () => {
+        refreshes += 1;
+      });
+
+      await click('tg-connect');
+      expect(refreshes).toBe(0);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(TELEGRAM_POLL_MS * 2);
+      });
+
+      expect(refreshes).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('shows a connected chat, and offers to give it up', async () => {

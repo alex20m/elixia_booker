@@ -1098,3 +1098,23 @@ button.link:hover:not(:disabled) {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* The wait for a tap that is happening in another app. Small, quiet, and beside
+   the sentence explaining it: it says "still going" for a wait whose end this
+   page cannot predict. The reduced-motion rule above stops it spinning. */
+.spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  vertical-align: baseline;
+  border: 2px solid var(--text-alt);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
