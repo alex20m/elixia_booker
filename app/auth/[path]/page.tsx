@@ -1,5 +1,6 @@
 import { AuthView } from '@neondatabase/auth-ui';
 import { authViewPaths } from '@neondatabase/auth-ui/server';
+import { Brand } from '../../components/Brand';
 
 /**
  * Every Neon Auth page — sign in, sign up, email verification, forgotten
@@ -8,6 +9,11 @@ import { authViewPaths } from '@neondatabase/auth-ui/server';
  * These flows are the reason identity is not hand-rolled here. A password
  * reset that works needs an email sender, single-use tokens and rate
  * limiting; this file is what buying them costs.
+ *
+ * The frame around it is ours, so arriving at sign-in does not feel like being
+ * handed off to a different product: the same bar, the same column width, and
+ * the same palette — Neon's components read their colours from the tokens in
+ * globals.css.
  */
 export const dynamicParams = false;
 
@@ -19,8 +25,15 @@ export default async function AuthPage({ params }: { params: Promise<{ path: str
   const { path } = await params;
 
   return (
-    <main style={{ maxWidth: 420, margin: '48px auto' }}>
-      <AuthView path={path} redirectTo="/" />
-    </main>
+    <div className="shell">
+      <header className="appbar">
+        <div className="appbar-inner">
+          <Brand />
+        </div>
+      </header>
+      <main className="main main-narrow">
+        <AuthView path={path} redirectTo="/" />
+      </main>
+    </div>
   );
 }

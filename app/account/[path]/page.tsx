@@ -1,9 +1,15 @@
 import { AccountView } from '@neondatabase/auth-ui';
 import { accountViewPaths } from '@neondatabase/auth-ui/server';
+import Link from 'next/link';
+import { Brand } from '../../components/Brand';
 
 /**
  * Account settings — password changes, email addresses, account deletion —
  * served under /account/*, for the same buy-not-build reason as /auth/*.
+ *
+ * There is no separate "security" section in this app: everything that would
+ * be in one is here, on Neon's own page, and the app's settings tab links
+ * straight to it. Two places to change a password is one place too many.
  */
 export const dynamicParams = false;
 
@@ -15,8 +21,18 @@ export default async function AccountPage({ params }: { params: Promise<{ path: 
   const { path } = await params;
 
   return (
-    <main style={{ maxWidth: 640, margin: '48px auto' }}>
-      <AccountView path={path} />
-    </main>
+    <div className="shell">
+      <header className="appbar">
+        <div className="appbar-inner">
+          <Brand />
+          <Link className="btn btn-quiet btn-sm" href="/">
+            Back
+          </Link>
+        </div>
+      </header>
+      <main className="main main-narrow">
+        <AccountView path={path} />
+      </main>
+    </div>
   );
 }

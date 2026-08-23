@@ -1,0 +1,250 @@
+'use client';
+
+import { useState } from 'react';
+import { apiRequest as api } from '@/lib/dashboardState';
+import { MEMBERSHIP_OPTIONS } from '@/lib/membership';
+import { TIME_ZONE_GROUPS } from '@/lib/timezones';
+import type { DashboardView } from '@/lib/service';
+
+/**
+ * Booking settings and where alerts go — the two groups of answers the setup
+ * pages collected, in one place so they can be changed later.
+ *
+ * Email is the default and needs nothing: the address arrives with the
+ * account. Telegram is one tap — the Connect button asks the server for a deep
+ * link and opens it, and the chat id comes back through the webhook, so nobody
+ * has to read one out of a JSON document.
+ *
+ * The manual chat-id field survives for deployments with no webhook
+ * configured, which is the only state in which this form still writes a chat
+ * id itself. Everywhere else it deliberately omits the field, because posting
+ * a blank one would disconnect the chat on every save.
+ */
+export function SettingsPanel({
+  view,
+  refresh,
+}: {
+  view: DashboardView;
+  refresh: () => Promise<void>;
+}) {
+  const [windowDays, setWindowDays] = useState(String(view.account.bookingWindowDays));
+  const [timeZone, setTimeZone] = useState(view.account.timeZone);
+  const [channel, setChannel] = useState(view.account.notifyChannel);
+  const [email, setEmail] = useState(view.account.notifyEmail);
+  const [chatId, setChatId] = useState(view.account.telegramChatId);
+  const [error, setError] = useState('');
+  const [saved, setSaved] = useState(false);
+  const [awaitingTap, setAwaitingTap] = useState(false);
+
+  const connected = Boolean(view.account.telegramChatId);
+  // The one-tap flow needs a bot, a webhook and a secret. Without them the old
+  // manual field is the only way Telegram can work at all.
+  const canConnect = view.telegramConnect;
+
+  const connect = async () => {
+    setError('');
+    try {
+      const { url } = await api<{ url: string }>('/api/telegram/link', { method: 'POST' });
+      // A new tab, not a redirect: losing the dashboard on the way to Telegram
+      // would mean coming back to a page that has to be found again.
+      window.open(url, '_blank', 'noopener,noreferrer');
+      setAwaitingTap(true);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const disconnect = async () => {
+    setError('');
+    try {
+      await api('/api/telegram/link', { method: 'DELETE' });
+      setAwaitingTap(false);
+      await refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  return (
+    <>
+      <section className="card">
+        <div className="card-head">
+          <div>
+            <h2 className="card-title">Booking</h2>
+            <p className="card-sub">Both of these decide when a booking fires.</p>
+          </div>
+        </div>
+
+        <div className="grid-2">
+          <div className="field">
+            <label htmlFor="tier">Membership</label>
+            <select id="tier" value={windowDays} onChange={(e) => setWindowDays(e.target.value)}>
+              {MEMBERSHIP_OPTIONS.map((option) => (
+                <option key={option.days} value={String(option.days)}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor="tz">Timezone</label>
+            {/* A picker here too, and for the same reason it is one during setup:
+                this field used to be a text box, and "Europe/Helsinky" saved from
+                it is a booking window that never opens. The server accepts only
+                these ids. */}
+            <select id="tz" value={timeZone} onChange={(e) => setTimeZone(e.target.value)}>
+              {TIME_ZONE_GROUPS.map((group) => (
+                <optgroup key={group.region} label={group.region}>
+                  {group.zones.map((zone) => (
+                    <option key={zone.id} value={zone.id}>
+                      {zone.label}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <section className="card">
+        <div className="card-head">
+          <div>
+            <h2 className="card-title">Notifications</h2>
+            <p className="card-sub">Where Booker tells you what it did.</p>
+          </div>
+        </div>
+
+        <div className="grid-2">
+          <div className="field">
+            <label htmlFor="notify-channel">Send alerts by</label>
+            <select
+              id="notify-channel"
+              value={channel}
+              onChange={(e) =>
+                setChannel(e.target.value as DashboardView['account']['notifyChannel'])
+              }
+            >
+              <option value="email">Email</option>
+              <option value="telegram">Telegram</option>
+              <option value="none">Off</option>
+            </select>
+          </div>
+          {channel === 'email' && (
+            <div className="field">
+              <label htmlFor="notify-email">Email address</label>
+              <input
+                id="notify-email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* Disconnecting leaves the channel where the user put it rather than
+            moving them to email on their behalf — so this is a state they can
+            genuinely be sitting in, and it has to be said out loud. Silence here
+            is a user who believes they are covered and hears nothing, including
+            when booking stops. */}
+        {channel === 'telegram' && !connected && (
+          <div className="banner banner-warn" id="notify-broken" style={{ marginTop: '0.75rem' }}>
+            <span>
+              Telegram is selected but no chat is connected, so alerts are{' '}
+              <strong>not being delivered</strong>. Connect one below, or choose another channel.
+            </span>
+          </div>
+        )}
+
+        {channel === 'telegram' && canConnect && (
+          <div style={{ marginTop: '0.75rem' }}>
+            {connected ? (
+              <p className="hint">
+                Connected to Telegram chat {view.account.telegramChatId}.{' '}
+                <button id="tg-disconnect" className="link" onClick={disconnect}>
+                  Disconnect
+                </button>
+              </p>
+            ) : (
+              <>
+                <button id="tg-connect" className="btn-secondary" onClick={connect}>
+                  Connect Telegram
+                </button>
+                {awaitingTap && (
+                  <p className="hint" style={{ marginTop: '0.5rem' }}>
+                    Tap <strong>Start</strong> in Telegram, then{' '}
+                    <button id="tg-check" className="link" onClick={refresh}>
+                      check again
+                    </button>
+                    . The link is good for ten minutes.
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {channel === 'telegram' && !canConnect && (
+          <div className="field" style={{ marginTop: '0.75rem' }}>
+            <label htmlFor="tg">Telegram chat ID</label>
+            <input
+              id="tg"
+              placeholder="e.g. 123456789"
+              value={chatId}
+              onChange={(e) => setChatId(e.target.value)}
+            />
+            <p className="hint">
+              This deployment has no Telegram webhook configured, so the chat ID has to be entered
+              by hand.
+            </p>
+          </div>
+        )}
+
+        {channel === 'none' && (
+          <p className="hint" style={{ marginTop: '0.75rem' }}>
+            Bookings still run — you just will not be told about them, including when your Elixia
+            session expires and booking stops.
+          </p>
+        )}
+
+        {error && (
+          <div className="banner banner-err" style={{ marginTop: '0.75rem' }}>
+            <span>{error}</span>
+          </div>
+        )}
+
+        <button
+          id="save-btn"
+          className="btn-block"
+          style={{ marginTop: '0.875rem' }}
+          onClick={async () => {
+            setError('');
+            setSaved(false);
+            try {
+              await api('/api/settings', {
+                method: 'PUT',
+                body: JSON.stringify({
+                  bookingWindowDays: Number(windowDays),
+                  timeZone,
+                  notifyChannel: channel,
+                  // Only where this form owns the value. Sending it when the
+                  // connect flow does would post a blank on every save and
+                  // disconnect the chat the user just linked.
+                  ...(canConnect ? {} : { telegramChatId: chatId }),
+                  notifyEmail: email,
+                }),
+              });
+              setSaved(true);
+              await refresh();
+            } catch (err) {
+              setError((err as Error).message);
+            }
+          }}
+        >
+          {saved ? 'Saved' : 'Save settings'}
+        </button>
+      </section>
+    </>
+  );
+}
