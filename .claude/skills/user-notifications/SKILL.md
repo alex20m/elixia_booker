@@ -76,7 +76,9 @@ Replace it with a deep link carrying a one-use token:
    webhook.
 4. **Bind on the token, never on the sender.** Look up the hash, and if a live
    row exists, attach the chat id from that update to the user it names.
-5. **Reply in the chat** so the user sees it worked, and refresh the page.
+5. **Reply in the chat** so the user sees it worked.
+6. **The page notices by itself.** See below — this is the step that gets left
+   as the user's problem.
 
 Deleting the row *is* what makes the token single-use, so do the read and the
 delete in one statement (`DELETE ... RETURNING`), not a check followed by a
@@ -86,6 +88,44 @@ endpoint a duplicate is one network hiccup away.
 Connecting should also *select* the channel. Tapping Connect is the choice;
 making the user return to a settings page and pick it again leaves the common
 case one silent step short of working.
+
+### The page has to find out on its own
+
+The tap lands on your webhook, not in the tab the user came from, and there is
+no channel back to that tab. So the page only learns the connection worked by
+asking the server again — and the tempting shortcut, a "check again" link and a
+line telling the user to press it, hands them the one job they are least placed
+to do. They have just switched apps, tapped a button that told them it worked,
+and come back to a screen still asking for the tap. A connection that succeeded
+and one that never arrived look identical, and the control that would tell them
+apart looks like an error recovery.
+
+Poll instead, from the moment the link is opened, and say that is what is
+happening ("waiting for you to tap Start — this page picks it up on its own").
+Keep the manual check as a button for the impatient, not as the mechanism.
+
+A poll needs an end, or it is its own bug. Three bounds, and each is load-
+bearing:
+
+- **Connected.** The check that saw the id is the last one needed.
+- **Expired.** After the token's TTL the answer cannot change, so stop, say the
+  link expired, and offer a fresh one. Take the deadline from the expiry the
+  mint response already carries — but treat one that has *already* passed as
+  unusable and fall back to the advertised TTL, because that timestamp is
+  measured on the server's clock and read on the browser's, and a skewed
+  browser would otherwise end the wait before it began.
+- **Hidden tab.** This is where the page sits for most of the wait, and
+  browsers throttle background timers anyway. Skip the poll while
+  `document.hidden`, and fire one immediately on `visibilitychange` and
+  `focus`: returning to the tab is the strongest evidence there is that the tap
+  just happened, and that check is what makes the connection look instant on a
+  phone, where switching back *is* the interaction.
+
+Two details that bite: a poll that throws must not surface an error — the wait
+is not a request the user made, and the next attempt usually succeeds — and the
+polling callback belongs in a ref, because a callback rebuilt on every render
+restarts the interval each time and, on a page that renders faster than the
+interval, it never fires at all.
 
 ## The webhook is the most exposed thing you have
 

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import Setup from '@/app/Setup';
+import { TELEGRAM_POLL_MS } from '@/app/components/TelegramConnect';
 
 /**
  * The configuration pages a new account has to go through before the app will
@@ -43,9 +44,13 @@ function stubFetch(): void {
       }
       if (init?.method === 'POST' && target === '/api/telegram/link') {
         posts.push({ url: target, body: null });
-        // What tapping Start in Telegram eventually does, from this side.
-        state = { ...state, telegramChatId: '4242' };
-        return new Response(JSON.stringify({ url: 'https://t.me/bot?start=tok' }), { status: 200 });
+        return new Response(
+          JSON.stringify({
+            url: 'https://t.me/bot?start=tok',
+            expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+          }),
+          { status: 200 },
+        );
       }
       if (init?.method === 'POST' && target === '/api/elixia') {
         const parsed = JSON.parse(String(init.body)) as { email: string; password: string };
@@ -225,9 +230,37 @@ describe('the notifications page', () => {
     // Still not connected: the deep link has opened, nobody has tapped Start.
     expect(disabled('setup-next')).toBe(true);
 
+    // What tapping Start in Telegram does, from this side of the webhook.
+    state = { ...state, telegramChatId: '4242' };
     await click('tg-check');
+
     expect(container.textContent).toMatch(/4242/);
     expect(disabled('setup-next')).toBe(false);
+  });
+
+  it('notices the tap on its own, without the visitor pressing anything', async () => {
+    // Coming back from Telegram to a wizard still saying "tap Start" is
+    // indistinguishable from a connect that failed, and the page is the only
+    // thing that can tell the difference — the tap arrives at the webhook.
+    vi.useFakeTimers();
+    try {
+      await throughToNotifications();
+      await choose('setup-channel', 'telegram');
+      await click('tg-connect');
+
+      expect(container.textContent).toMatch(/waiting for you to tap/i);
+
+      state = { ...state, telegramChatId: '4242' };
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(TELEGRAM_POLL_MS);
+      });
+
+      expect(container.textContent).toMatch(/4242/);
+      expect(container.textContent).not.toMatch(/waiting for you to tap/i);
+      expect(disabled('setup-next')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('lets someone switch notifications off, and says what that costs', async () => {

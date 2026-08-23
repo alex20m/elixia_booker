@@ -7,6 +7,7 @@ import { TIME_ZONE_GROUPS } from '@/lib/timezones';
 import type { SetupState } from '@/lib/service';
 import type { NotifyChannel } from '@/lib/types';
 import { Shell } from './components/Shell';
+import { TelegramConnect } from './components/TelegramConnect';
 
 /**
  * The configuration pages a new account goes through before it can use the app.
@@ -63,7 +64,6 @@ export default function Setup({ onDone }: { onDone: () => void }) {
   const [elixiaPassword, setElixiaPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [awaitingTap, setAwaitingTap] = useState(false);
 
   const apply = (loaded: SetupState): void => {
     setState(loaded);
@@ -145,18 +145,6 @@ export default function Setup({ onDone }: { onDone: () => void }) {
       setError((err as Error).message);
     } finally {
       setBusy(false);
-    }
-  };
-
-  const connect = async (): Promise<void> => {
-    setError('');
-    try {
-      const { url } = await api<{ url: string }>('/api/telegram/link', { method: 'POST' });
-      // A new tab, so the half-finished setup is still here to come back to.
-      window.open(url, '_blank', 'noopener,noreferrer');
-      setAwaitingTap(true);
-    } catch (err) {
-      setError((err as Error).message);
     }
   };
 
@@ -268,32 +256,11 @@ export default function Setup({ onDone }: { onDone: () => void }) {
 
               {channel === 'telegram' && state?.telegramConnect && (
                 <div>
-                  {connected ? (
-                    <p className="hint">
-                      Connected to Telegram chat {state.telegramChatId || chatId}.
-                    </p>
-                  ) : (
-                    <>
-                      <button id="tg-connect" className="btn-secondary" onClick={connect}>
-                        Connect Telegram
-                      </button>
-                      {awaitingTap && (
-                        <p className="hint mt-xs">
-                          Tap <strong>Start</strong> in Telegram, then{' '}
-                          <button
-                            id="tg-check"
-                            className="link"
-                            onClick={() => {
-                              void load();
-                            }}
-                          >
-                            check again
-                          </button>
-                          . The link is good for ten minutes.
-                        </p>
-                      )}
-                    </>
-                  )}
+                  <TelegramConnect
+                    chatId={state.telegramChatId || chatId}
+                    check={load}
+                    onError={setError}
+                  />
                 </div>
               )}
 
