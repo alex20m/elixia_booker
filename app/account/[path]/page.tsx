@@ -30,7 +30,7 @@ export default async function AccountPage({ params }: { params: Promise<{ path: 
           </Link>
         </div>
       </header>
-      <main className="main main-narrow">
+      <main className="main main-narrow account-shell">
         <AccountView path={path} />
       </main>
     </div>
