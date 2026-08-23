@@ -47,6 +47,16 @@ function stubFetch(): void {
         state = { ...state, telegramChatId: '4242' };
         return new Response(JSON.stringify({ url: 'https://t.me/bot?start=tok' }), { status: 200 });
       }
+      if (init?.method === 'POST' && target === '/api/elixia') {
+        const parsed = JSON.parse(String(init.body)) as { email: string; password: string };
+        posts.push({ url: target, body: parsed });
+        if (parsed.password === 'wrong') {
+          return new Response(JSON.stringify({ error: 'Elixia rejected those credentials' }), {
+            status: 401,
+          });
+        }
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
       return new Response(JSON.stringify(state), { status: 200 });
     }),
   );
@@ -125,6 +135,14 @@ async function throughToNotifications(): Promise<void> {
   await click('setup-next');
 }
 
+/** Answer the first three pages, leaving the wizard on the gym account page. */
+async function throughToGymAccount(): Promise<void> {
+  await throughToNotifications();
+  await choose('setup-channel', 'email');
+  await type('setup-email', 'alerts@example.com');
+  await click('setup-next');
+}
+
 describe('the membership page', () => {
   it('opens with nothing chosen and refuses to move on', async () => {
     await render();
@@ -178,11 +196,11 @@ describe('the timezone page', () => {
 });
 
 describe('the notifications page', () => {
-  it('opens with no channel chosen, and cannot be finished that way', async () => {
+  it('opens with no channel chosen, and cannot move on that way', async () => {
     await throughToNotifications();
 
     expect(el<HTMLSelectElement>('setup-channel').value).toBe('');
-    expect(disabled('setup-finish')).toBe(true);
+    expect(disabled('setup-next')).toBe(true);
     expect(maybe('setup-email')).toBeNull();
   });
 
@@ -191,41 +209,70 @@ describe('the notifications page', () => {
     await choose('setup-channel', 'email');
 
     expect(el<HTMLInputElement>('setup-email').value).toBe('me@example.com');
-    expect(disabled('setup-finish')).toBe(false);
+    expect(disabled('setup-next')).toBe(false);
 
     await type('setup-email', '');
-    expect(disabled('setup-finish')).toBe(true);
+    expect(disabled('setup-next')).toBe(true);
   });
 
-  it('will not finish on Telegram until a chat is actually connected', async () => {
+  it('will not move on with Telegram until a chat is actually connected', async () => {
     await throughToNotifications();
     await choose('setup-channel', 'telegram');
 
-    expect(disabled('setup-finish')).toBe(true);
+    expect(disabled('setup-next')).toBe(true);
 
     await click('tg-connect');
     // Still not connected: the deep link has opened, nobody has tapped Start.
-    expect(disabled('setup-finish')).toBe(true);
+    expect(disabled('setup-next')).toBe(true);
 
     await click('tg-check');
     expect(container.textContent).toMatch(/4242/);
-    expect(disabled('setup-finish')).toBe(false);
+    expect(disabled('setup-next')).toBe(false);
   });
 
   it('lets someone switch notifications off, and says what that costs', async () => {
     await throughToNotifications();
     await choose('setup-channel', 'none');
 
-    expect(disabled('setup-finish')).toBe(false);
+    expect(disabled('setup-next')).toBe(false);
     expect(container.textContent).toMatch(/will not be told/i);
   });
 });
 
+describe('the gym account page', () => {
+  it('opens with nothing entered and refuses to finish that way', async () => {
+    await throughToGymAccount();
+
+    expect(el<HTMLInputElement>('setup-elixia-email').value).toBe('');
+    expect(el<HTMLInputElement>('setup-elixia-password').value).toBe('');
+    expect(disabled('setup-finish')).toBe(true);
+  });
+
+  it('stays disabled until both the email and the password are filled in', async () => {
+    await throughToGymAccount();
+
+    await type('setup-elixia-email', 'me@elixia.example');
+    expect(disabled('setup-finish')).toBe(true);
+
+    await type('setup-elixia-password', 'hunter2');
+    expect(disabled('setup-finish')).toBe(false);
+
+    await type('setup-elixia-email', '');
+    expect(disabled('setup-finish')).toBe(true);
+  });
+
+  it('is a real password field, not plain text', async () => {
+    await throughToGymAccount();
+
+    expect(el<HTMLInputElement>('setup-elixia-password').type).toBe('password');
+  });
+});
+
 describe('finishing', () => {
-  it('submits exactly the answers that were given', async () => {
-    await throughToNotifications();
-    await choose('setup-channel', 'email');
-    await type('setup-email', 'alerts@example.com');
+  it('submits exactly the answers that were given, including the gym account', async () => {
+    await throughToGymAccount();
+    await type('setup-elixia-email', 'me@elixia.example');
+    await type('setup-elixia-password', 'hunter2');
     await click('setup-finish');
 
     expect(posts).toEqual([
@@ -238,15 +285,19 @@ describe('finishing', () => {
           notifyEmail: 'alerts@example.com',
         },
       },
+      {
+        url: '/api/elixia',
+        body: { email: 'me@elixia.example', password: 'hunter2' },
+      },
     ]);
     expect(done).toBe(1);
   });
 
-  it('shows the server\'s reason and stays put when the submission is refused', async () => {
+  it('shows the server\'s reason and stays put when the setup submission is refused', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string, init?: RequestInit) =>
-        init?.method === 'POST'
+        init?.method === 'POST' && String(url) === '/api/setup'
           ? new Response(JSON.stringify({ error: 'Pick a timezone from the list' }), {
               status: 400,
             })
@@ -256,11 +307,27 @@ describe('finishing', () => {
 
     await throughToNotifications();
     await choose('setup-channel', 'email');
+    await click('setup-next');
+    await type('setup-elixia-email', 'me@elixia.example');
+    await type('setup-elixia-password', 'hunter2');
     await click('setup-finish');
 
     expect(container.textContent).toMatch(/Pick a timezone from the list/);
     expect(done).toBe(0);
     // Still on the page it failed from, with the answers intact.
-    expect(el<HTMLSelectElement>('setup-channel').value).toBe('email');
+    expect(el<HTMLInputElement>('setup-elixia-email').value).toBe('me@elixia.example');
+  });
+
+  it('shows Elixia\'s rejection and stays put without finishing, even though setup was saved', async () => {
+    await throughToGymAccount();
+    await type('setup-elixia-email', 'me@elixia.example');
+    await type('setup-elixia-password', 'wrong');
+    await click('setup-finish');
+
+    expect(container.textContent).toMatch(/Elixia rejected those credentials/);
+    expect(done).toBe(0);
+    expect(posts.map((p) => p.url)).toEqual(['/api/setup', '/api/elixia']);
+    // The answers are kept, so correcting the password does not mean redoing the wizard.
+    expect(el<HTMLInputElement>('setup-elixia-email').value).toBe('me@elixia.example');
   });
 });
