@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -114,5 +116,27 @@ describe('InstallCard', () => {
     });
 
     expect(container.querySelector('#install-btn')).not.toBeNull();
+  });
+});
+
+/**
+ * "Tap the Share button, scroll down, tap Add" is a sequence, and a sequence
+ * printed without its numbers reads as three unrelated suggestions. The
+ * stylesheet has always coloured the markers, but the auth UI's stylesheet
+ * carries a reset that clears `list-style` on every `ol` — so the numbers were
+ * not being drawn at all, and no rendering test can see it because jsdom
+ * applies no CSS. Asserted here because it is the one property this list
+ * cannot do its job without.
+ */
+describe('the manual install steps', () => {
+  it('are numbered, in spite of the reset that clears list markers', () => {
+    // Not `import.meta.url`: this file runs through Vite's jsdom environment,
+    // where that is an http URL rather than a path on disk.
+    const css = readFileSync(resolve(process.cwd(), 'app/globals.css'), 'utf8');
+    const start = css.indexOf('.install-steps {');
+    const block = css.slice(start, css.indexOf('}', start));
+
+    expect(start).toBeGreaterThan(-1);
+    expect(block).toMatch(/list-style:\s*decimal/);
   });
 });
