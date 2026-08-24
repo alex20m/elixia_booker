@@ -421,6 +421,7 @@ strong {
 }
 
 .appbar-actions {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-xxs);
@@ -432,7 +433,7 @@ strong {
   max-width: var(--measure);
   margin: 0 auto;
   padding: var(--space-m) var(--space-m)
-    calc(var(--space-xxl) + var(--space-l) + env(safe-area-inset-bottom));
+    calc(var(--space-xl) + env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
   gap: var(--space-m);
@@ -518,83 +519,186 @@ strong {
   font-size: 15px;
 }
 
-/* --------------------------------------------------------------- tabs ----- */
+/* --------------------------------------------------- navigation ----------- */
 
 /*
- * One control in two places: a thumb-reachable bar across the bottom of a
- * phone, and a quiet row of pills under the header on a desktop. Same markup —
- * a second copy would be a second thing to keep in step, and the one that is
- * not on screen is the one that rots.
- *
- * Selected is coral on a coral tint, which is what coral is for in this system:
- * active and selected, never decoration.
+ * One list of sections, two presentations, one source (app/components/NavMenu).
+ * Wide enough for them and they sit in the bar itself; narrower and the same
+ * list moves into the menu behind the button, which is also where signing out
+ * lives. Exactly one of the two is ever rendered — the other is `display:
+ * none`, so it is out of the accessibility tree as well as off the screen.
  */
-.tabs {
-  position: fixed;
-  inset: auto 0 0;
-  z-index: 20;
-  display: flex;
-  gap: var(--space-xxs);
-  padding: var(--space-xs) var(--space-xs)
-    calc(var(--space-xs) + env(safe-area-inset-bottom));
-  background: var(--surface);
-  border-top: 1px solid var(--border);
+
+/* The bar copy. Off by default: the phone layout is the one that has to be
+   right without a media query having fired. */
+.nav-inline {
+  display: none;
 }
 
-.tab {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
+.nav-link {
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 2px;
-  min-height: var(--tap);
-  padding: var(--space-xs) var(--space-xxs);
+  gap: var(--space-xs);
+  min-height: 38px;
+  padding: var(--space-xs) var(--space-s);
   border: 0;
-  border-radius: var(--radius);
+  border-radius: var(--pill);
   background: transparent;
-  color: var(--text-alt);
+  color: var(--bar-fg-alt);
   font: inherit;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
 }
 
-.tab[aria-current='page'] {
-  color: var(--accent);
-  background: var(--accent-soft);
+.nav-link:hover:not(:disabled) {
+  background: rgb(255 255 255 / 12%);
+  color: var(--bar-fg);
+}
+
+/* Selected is white on a lifted navy rather than the coral this system uses
+   for "active" everywhere else: coral text on the navy bar sits at about 3:1,
+   under the 4.5:1 small text needs. The menu copy below is on the page's own
+   surface, where coral clears it comfortably — so that one keeps it. */
+.nav-link[aria-current='page'] {
+  background: rgb(255 255 255 / 16%);
+  color: var(--bar-fg);
 }
 
 @media (min-width: 46rem) {
-  .tabs {
-    position: sticky;
-    top: var(--bar-h);
-    inset-inline: auto;
-    /* `width` is not redundant beside `max-width`: an auto cross-axis margin
-       inside the column flex container switches the bar from stretching to
-       shrink-to-fit, which would centre three pills under a left-aligned logo
-       instead of lining them up with the content below. */
-    width: 100%;
-    max-width: var(--measure);
-    margin: 0 auto;
-    padding: var(--space-s) var(--space-m);
-    background: var(--bg);
-    border-top: 0;
-    border-bottom: 1px solid var(--border);
-    gap: var(--space-xs);
+  .nav-inline {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xxs);
+    /* First in the bar's action cluster, so the sections read left-to-right
+       from the logo and the icon controls stay together at the far end. */
+    order: -1;
+    margin-right: var(--space-xs);
+  }
+}
+
+/* --------------------------------------------------------------- menu ----- */
+
+/* Everything here is `position: fixed` inside the sticky bar, which is what
+   keeps the panel pinned under the bar while the page scrolls behind it. The
+   bar owns a stacking context (it is positioned with a z-index), so no z-index
+   is needed on either of these to clear the page — and the scrim deliberately
+   starts below the bar rather than at the top of the viewport, because a child
+   of the bar painting over it would dim the logo and the button being used. */
+.menu-backdrop {
+  position: fixed;
+  inset: var(--bar-h) 0 0;
+  background: rgb(0 0 0 / 40%);
+}
+
+.menu-panel {
+  position: fixed;
+  top: calc(var(--bar-h) + var(--space-xs));
+  right: var(--space-s);
+  left: var(--space-s);
+  /* Full width of a phone, a panel on anything larger. */
+  max-width: 20rem;
+  margin-left: auto;
+  max-height: calc(100dvh - var(--bar-h) - var(--space-l));
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-xs);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 32px rgb(13 33 52 / 18%);
+  animation: menu-in 0.14s ease-out;
+}
+
+/* The one shadow in the app. Everything else is flat by design, but a layer
+   floating over the page is the case a border alone does not carry. */
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+.menu-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-s);
+  width: 100%;
+  min-height: var(--tap);
+  padding: var(--space-xs) var(--space-s);
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu-item:hover:not(:disabled) {
+  background: var(--surface-nested);
+  color: var(--text);
+}
+
+.menu-item[aria-current='page'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Sign out: present, findable, and not competing with the section you came
+   here to reach. */
+.menu-item-quiet {
+  color: var(--text-alt);
+  font-weight: 500;
+}
+
+.menu-rule {
+  height: 1px;
+  margin: var(--space-xxs) var(--space-xs);
+  background: var(--border);
+}
+
+/* The sections are in the bar at this width, so what is left behind the button
+   is the account actions alone. This block has to come after the rules it
+   overrides: same specificity, so source order is what decides it — written
+   above them, the sections stay in the menu and the app grows two copies of
+   its own navigation on every desktop. */
+@media (min-width: 46rem) {
+  .menu-nav,
+  .menu-rule {
+    display: none;
   }
 
-  .tab {
-    flex: 0 0 auto;
-    flex-direction: row;
-    gap: var(--space-xs);
-    min-height: 36px;
-    padding: var(--space-xs) var(--space-s);
-    font-size: 14px;
+  /* A dropdown rather than a sheet at this width, so it hangs off the button
+     that opened it instead of off the edge of the window. Absolute against the
+     action cluster is what ties the two together — the cluster ends where the
+     button does, so `right: 0` lines their right edges up at any window width
+     without measuring anything. */
+  .menu-panel {
+    position: absolute;
+    top: calc(100% + var(--space-xs));
+    right: 0;
+    left: auto;
+    min-width: 12rem;
+    max-width: 16rem;
   }
 
-  .main {
-    padding-bottom: var(--space-xl);
+  /* The scrim earns its keep on a phone, where the sheet is most of the screen.
+     Behind a small dropdown it just dims the page for no reason — but the layer
+     stays, because it is also what catches the click-outside. */
+  .menu-backdrop {
+    background: transparent;
   }
 }
 

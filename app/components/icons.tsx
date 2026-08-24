@@ -4,7 +4,7 @@
  * Every one is a 24-grid stroke drawing in `currentColor`, so an icon is
  * coloured by the thing it sits inside and never needs a variant per theme.
  * They are inline components rather than a sprite or a package because there
- * are eight of them: a dependency for this would be more code than the icons.
+ * are a dozen of them: a dependency for this would be more code than the icons.
  */
 type IconProps = { size?: number };
 
@@ -75,5 +75,23 @@ export const CheckIcon = ({ size = 16 }: IconProps) => (
 export const PlusIcon = ({ size = 18 }: IconProps) => (
   <svg {...base(size)}>
     <path d="M12 5v14M5 12h14" />
+  </svg>
+);
+
+export const MenuIcon = ({ size = 22 }: IconProps) => (
+  <svg {...base(size)}>
+    <path d="M4 7h16M4 12h16M4 17h16" />
+  </svg>
+);
+
+export const CloseIcon = ({ size = 22 }: IconProps) => (
+  <svg {...base(size)}>
+    <path d="M6 6l12 12M18 6 6 18" />
+  </svg>
+);
+
+export const SignOutIcon = ({ size = 20 }: IconProps) => (
+  <svg {...base(size)}>
+    <path d="M15 4h3.5A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5H15M10 8l-4 4 4 4M6 12h11" />
   </svg>
 );

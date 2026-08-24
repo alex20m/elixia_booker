@@ -11,7 +11,16 @@ import { ActionButton } from './ActionButton';
  * requests and, on a slow connection, someone tapping a button that has already
  * worked.
  */
-export function SignOutButton({ id, className }: { id?: string; className?: string }) {
+export function SignOutButton({
+  id,
+  className,
+  icon,
+}: {
+  id?: string;
+  className?: string;
+  /** For the menu, where every row is an icon and a label. */
+  icon?: React.ReactNode;
+}) {
   return (
     <ActionButton
       id={id}
@@ -19,7 +28,8 @@ export function SignOutButton({ id, className }: { id?: string; className?: stri
       pendingLabel="Signing out…"
       onClick={() => authClient.signOut()}
     >
-      Sign out
+      {icon}
+      <span>Sign out</span>
     </ActionButton>
   );
 }

@@ -21,6 +21,7 @@ import { SettingsPanel } from './SettingsPanel';
 import { ActionButton } from './components/ActionButton';
 import { InstallButton, InstallCard } from './components/InstallCard';
 import { BusyBar, LoadingScreen, SkeletonCard, SkeletonList } from './components/Loading';
+import { NavMenu, type NavSection } from './components/NavMenu';
 import { Shell } from './components/Shell';
 import { SignOutButton } from './components/SignOutButton';
 import { CalendarIcon, CheckIcon, PulseIcon, SlidersIcon } from './components/icons';
@@ -192,7 +193,7 @@ function SignedOut() {
   );
 }
 
-const TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
+const SECTIONS: Array<NavSection<TabId>> = [
   { id: 'classes', label: 'Classes', icon: <CalendarIcon /> },
   { id: 'activity', label: 'Activity', icon: <PulseIcon /> },
   { id: 'settings', label: 'Settings', icon: <SlidersIcon /> },
@@ -232,28 +233,11 @@ function Dashboard({
       actions={
         <>
           <InstallButton onManual={() => selectTab('settings')} />
-          <SignOutButton id="signout-btn" className="btn-quiet btn-sm" />
+          <NavMenu sections={SECTIONS} current={tab} onSelect={selectTab} />
         </>
       }
     >
       <BusyBar busy={refreshing} label="Refreshing your classes…" />
-
-      {/* One control in two places: a thumb-reachable bar at the bottom of a
-          phone, a row of pills under the header on a desktop. */}
-      <nav className="tabs" aria-label="Sections">
-        {TABS.map((entry) => (
-          <button
-            key={entry.id}
-            type="button"
-            className="tab"
-            aria-current={tab === entry.id ? 'page' : undefined}
-            onClick={() => selectTab(entry.id)}
-          >
-            {entry.icon}
-            <span>{entry.label}</span>
-          </button>
-        ))}
-      </nav>
 
       <main className="main">
         <DeploymentAlerts view={view} />
