@@ -140,6 +140,23 @@ const chooseCenter = (center: string): Promise<void> => choose('s-center', cente
 const chooseClass = (className: string): Promise<void> => choose('s-class', className);
 const chooseSlot = (slot: string): Promise<void> => choose('s-slot', slot);
 
+// A plain `input.value = text` goes through React's own tracked setter, which
+// updates its recorded value at the same time — so the dispatched event sees
+// no difference and onChange never fires. Setting through the native
+// descriptor bypasses that tracker, the same way user typing would.
+const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+  window.HTMLInputElement.prototype,
+  'value',
+)!.set!;
+
+async function searchCenters(text: string): Promise<void> {
+  await act(async () => {
+    const input = container.querySelector<HTMLInputElement>('#s-center-search')!;
+    nativeInputValueSetter.call(input, text);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
 async function clickAdd(): Promise<void> {
   await act(async () => {
     container.querySelector<HTMLButtonElement>('#add-btn')!.click();
@@ -154,6 +171,53 @@ describe('finding a centre', () => {
     await render();
 
     expect(select('s-center').tagName).toBe('SELECT');
+    expect(optionLabels('s-center')).toContain('Tapiola');
+    expect(optionLabels('s-center')).toContain('Sello');
+    expect(optionLabels('s-center')).toContain('Kamppi');
+  });
+
+  it('narrows the dropdown to centres whose name matches the typed text', async () => {
+    // 226 clubs is a scroll, not a choice, so the search box exists to cut that
+    // list down to the handful whose name the person actually remembers.
+    await render();
+    await searchCenters('sel');
+
+    expect(optionLabels('s-center')).toContain('Sello');
+    expect(optionLabels('s-center')).not.toContain('Tapiola');
+    expect(optionLabels('s-center')).not.toContain('Kamppi');
+  });
+
+  it('matches regardless of case', async () => {
+    await render();
+    await searchCenters('KAMPPI');
+
+    expect(optionLabels('s-center')).toContain('Kamppi');
+    expect(optionLabels('s-center')).not.toContain('Tapiola');
+  });
+
+  it('says so when no centre matches the typed text', async () => {
+    await render();
+    await searchCenters('nowhere');
+
+    expect(optionLabels('s-center')).toEqual([expect.stringMatching(/no centres match/i)]);
+  });
+
+  it('keeps the chosen centre selectable even after the search text no longer matches it', async () => {
+    // Typing a second search over an already-chosen centre must not blank the
+    // select out from under a selection that is still in effect.
+    await render();
+    await chooseCenter('740');
+    await searchCenters('sel');
+
+    expect(optionLabels('s-center')).toContain('Tapiola');
+    expect(select('s-center').value).toBe('740');
+  });
+
+  it('clearing the search text brings every centre back', async () => {
+    await render();
+    await searchCenters('sel');
+    await searchCenters('');
+
     expect(optionLabels('s-center')).toContain('Tapiola');
     expect(optionLabels('s-center')).toContain('Sello');
     expect(optionLabels('s-center')).toContain('Kamppi');
