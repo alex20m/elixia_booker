@@ -101,23 +101,16 @@ needs credentials the sandbox does not have.
   simply absent, and the obvious reading is that your component is broken.
   Before touching the component, listen for failed responses in the driver
   (`page.on('response', r => r.status() >= 400 && console.log(r.status(),
-  r.url()))`) and for `pageerror`. Two independent causes produce exactly this
-  symptom, and both were hit in one session:
-
-  - **The sandbox's HTTP proxy swallows localhost.** Where the environment sets
-    `HTTP(S)_PROXY`, Chromium picks it up and routes even a loopback request
-    through it, which answers `403`. Launch the browser with
-    `args: ['--no-proxy-server']`. Setting `NO_PROXY` on the *driver* process
-    does not help — it is the browser's own proxy resolution that matters.
-  - **A dev server may refuse its own assets over an IP address.** Next's dev
-    server treats a page loaded from `http://127.0.0.1:<port>` as cross-origin
-    and answers `403` for `/_next/static/*`, while `curl` on the same URL
-    returns `200` — the block is on the *page's* origin, not the request. Its
-    log says so ("Blocked cross-origin request to Next.js dev resource"), which
-    is the fastest way to confirm it. Drive the browser at
-    `http://localhost:<port>` instead of the IP. Verified against Next 16.3.1.
-    Editing `allowedDevOrigins` in `next.config` also works but changes a
-    committed file for a throwaway route, so prefer the hostname.
+  r.url()))`) and for `pageerror` — a blocked request usually shows up there
+  before it shows up in your component's behaviour. One cause is general
+  enough to hit on any stack: **the sandbox's HTTP proxy can swallow a
+  loopback request.** Where the environment sets `HTTP(S)_PROXY`, Chromium
+  picks it up and routes even `localhost`/`127.0.0.1` through it, which can
+  answer `403`. Launch the browser with `args: ['--no-proxy-server']` —
+  setting `NO_PROXY` on the *driver* process does not help, since it is the
+  browser's own proxy resolution that matters. A framework's dev server can
+  independently refuse its own assets over one host and not another; see the
+  Next-specific case below for that shape of the same symptom.
 
 ### Framework traps for the throwaway route
 
