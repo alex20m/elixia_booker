@@ -109,49 +109,43 @@ export function InstallCard() {
 }
 
 /**
- * The compact header version, next to Sign out — hidden once the app is
+ * The compact header version, next to the menu button — hidden once the app is
  * already running installed, same as the card.
  *
  * Where the browser hands us a prompt, the tap installs and nothing else
- * happens. Where it does not, the steps come to the button as a small popup
- * hanging off the bar, rather than the button carrying the visitor off to
- * another screen: someone who taps install has said what they want, and
- * answering that with a navigation to Settings makes them find the offer a
- * second time — and lands them somewhere they did not ask to be.
+ * happens. Where it does not, the steps come to the button as a small popup,
+ * rather than the button carrying the visitor off to another screen: someone
+ * who taps install has said what they want, and answering that with a
+ * navigation to Settings makes them find the offer a second time — and lands
+ * them somewhere they did not ask to be.
+ *
+ * It borrows the nav menu's panel and backdrop wholesale, geometry and all: two
+ * popups hanging off the same bar that opened and closed differently would read
+ * as two different products, and the backdrop is also what catches the click
+ * outside.
  */
 export function InstallButton() {
   const state = useInstallability();
   const [open, setOpen] = useState(false);
-  const wrapper = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
 
   const ready = state === 'ready';
   const showSteps = open && !ready;
 
-  /**
-   * The two ways out that a popup has to honour beyond its own controls:
-   * Escape, and a click that lands anywhere else.
-   *
-   * The listeners sit on `document` so they see clicks the popup never
-   * receives, and the containment check is what keeps the very click that
-   * opened the popup — still on its way up to `document` — from closing it
-   * again on arrival.
-   */
+  /** Escape, with focus handed back to the button that was pressed — a
+   * keyboard visitor who opens and dismisses this should end up where they
+   * started, rather than at the top of the document. */
   useEffect(() => {
     if (!showSteps) return;
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
-    };
-    const onClick = (event: MouseEvent) => {
-      if (!wrapper.current?.contains(event.target as Node)) setOpen(false);
+      if (event.key !== 'Escape') return;
+      setOpen(false);
+      trigger.current?.focus();
     };
 
     document.addEventListener('keydown', onKeyDown);
-    document.addEventListener('click', onClick);
-    return () => {
-      document.removeEventListener('keydown', onKeyDown);
-      document.removeEventListener('click', onClick);
-    };
+    return () => document.removeEventListener('keydown', onKeyDown);
   }, [showSteps]);
 
   if (state === '' || state === 'installed') return null;
@@ -160,8 +154,9 @@ export function InstallButton() {
   const guide = manualInstall(platform);
 
   return (
-    <div className="install-anchor" ref={wrapper}>
+    <>
       <button
+        ref={trigger}
         id="install-header-btn"
         type="button"
         className="btn-icon"
@@ -174,23 +169,31 @@ export function InstallButton() {
       </button>
 
       {showSteps && (
-        <div id="install-popup" className="install-popup" role="dialog" aria-label={guide.title}>
-          <h2 className="card-title">{guide.title}</h2>
-          <ol className="install-steps">
-            {guide.steps.map((step) => (
-              <li key={step}>{step}</li>
-            ))}
-          </ol>
-          <button
-            id="install-popup-close"
-            type="button"
-            className="btn btn-secondary btn-sm btn-block mt-s"
-            onClick={() => setOpen(false)}
+        <>
+          <div className="menu-backdrop" onClick={() => setOpen(false)} />
+          <div
+            id="install-popup"
+            className="menu-panel install-popup"
+            role="dialog"
+            aria-label={guide.title}
           >
-            Got it
-          </button>
-        </div>
+            <h2 className="card-title">{guide.title}</h2>
+            <ol className="install-steps">
+              {guide.steps.map((step) => (
+                <li key={step}>{step}</li>
+              ))}
+            </ol>
+            <button
+              id="install-popup-close"
+              type="button"
+              className="btn btn-secondary btn-sm btn-block mt-s"
+              onClick={() => setOpen(false)}
+            >
+              Got it
+            </button>
+          </div>
+        </>
       )}
-    </div>
+    </>
   );
 }

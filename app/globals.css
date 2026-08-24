@@ -1199,50 +1199,20 @@ button.link .spinner {
 
 /*
  * The header button's own popup: where a browser gives us no prompt to replay,
- * the steps arrive here rather than on another screen. It hangs off the button
- * it belongs to, so the anchor has to establish the coordinates.
+ * the steps arrive here rather than on another screen.
+ *
+ * Geometry, backdrop and animation are the nav menu's `.menu-panel` — a sheet
+ * under the bar on a phone, a dropdown hanging off the action cluster on a
+ * desktop. Only the inside differs, so this is what is left: prose padding
+ * where the menu has none, since its own padding is sized for tap targets.
  */
-.install-anchor {
-  position: relative;
-  display: flex;
-}
-
-/* Still no shadow — a surface, a line and the bar's own z-index are the depth,
-   same as everywhere else. Its colours are the page's, not the navy bar's,
-   which it would otherwise inherit and render navy on navy.
-
-   On a phone it hangs off the bar rather than off the button: a panel wide
-   enough to read the steps in is wider than the space left of a button that
-   already sits near the right edge, so anchoring it there pushes it past the
-   left edge of the screen. */
 .install-popup {
-  position: fixed;
-  top: calc(var(--bar-h) + var(--space-xs));
-  left: var(--space-m);
-  right: var(--space-m);
-  z-index: 1;
   padding: var(--space-m);
-  background: var(--surface);
+  /* The panel is a child of the navy bar, so anything inside it that does not
+     name a colour inherits white — which the menu never notices, because every
+     one of its items sets its own. Prose has to say so itself. */
   color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
   text-align: left;
-}
-
-/* Once there is room, it belongs to the button it came from. */
-@media (min-width: 34rem) {
-  .install-popup {
-    position: absolute;
-    top: calc(100% + var(--space-xs));
-    left: auto;
-    right: 0;
-    width: max-content;
-    max-width: 300px;
-  }
-}
-
-.install-popup .install-steps {
-  font-size: 13px;
 }
 
 /* --------------------------------------------------------------- footer --- */

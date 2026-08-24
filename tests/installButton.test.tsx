@@ -128,19 +128,17 @@ describe('InstallButton', () => {
     });
 
     expect(popup()).toBeNull();
+    expect(document.activeElement).toBe(button());
   });
 
-  it('closes the popup when something outside it is clicked', () => {
-    const elsewhere = document.createElement('button');
-    document.body.append(elsewhere);
+  it('closes the popup when the page behind it is clicked', () => {
     render();
     click(button());
     expect(popup()).not.toBeNull();
 
-    click(elsewhere);
+    click(container.querySelector('.menu-backdrop')!);
 
     expect(popup()).toBeNull();
-    elsewhere.remove();
   });
 
   it('keeps the popup open while the steps themselves are being touched', () => {
