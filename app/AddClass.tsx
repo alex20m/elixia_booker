@@ -84,6 +84,8 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
   const [centers, setCenters] = useState<Remote<CenterOption[]>>({ status: 'loading' });
   /** Elixia's numeric club id: filtering by it skips a whole page fetch. */
   const [center, setCenter] = useState('');
+  /** Narrows the centre dropdown by name — 226 clubs is a scroll, not a choice. */
+  const [centerQuery, setCenterQuery] = useState('');
   // Tagged with the centre it describes, so a timetable is never read as
   // belonging to a centre it was not fetched for — the same trick the
   // dashboard plays with the signed-in user, and for the same reason: without
@@ -159,6 +161,18 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
 
   const all = centers.status === 'ready' ? centers.value : [];
 
+  // Matched by substring, case-insensitive, against the name — the id is
+  // Elixia's own and nobody types it. The already-chosen centre survives a
+  // query that no longer matches it, for the same reason a remembered centre
+  // survives: a select whose value no visible option carries renders blank
+  // while the form still believes that centre is chosen.
+  const centerFilter = centerQuery.trim().toLowerCase();
+  const filteredCenters = centerFilter
+    ? all.filter(
+        (option) => option.name.toLowerCase().includes(centerFilter) || option.id === center,
+      )
+    : all;
+
   // Anything not tagged with the selected centre is still on its way, which is
   // what makes the switch immediate rather than one render behind.
   const classes: Remote<ClassOption[]> | null = !center
@@ -233,14 +247,23 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
           <label htmlFor="s-center">
             Centre {centers.status === 'loading' && <Spinner label="Loading centres" />}
           </label>
+          <input
+            id="s-center-search"
+            type="text"
+            placeholder="Search centres…"
+            aria-label="Search centres"
+            value={centerQuery}
+            disabled={centers.status !== 'ready'}
+            onChange={(e) => setCenterQuery(e.target.value)}
+          />
           <select
             id="s-center"
             value={center}
             disabled={centers.status !== 'ready'}
             onChange={(e) => chooseCenter(e.target.value)}
           >
-            <option value="">{centerPlaceholder(centers)}</option>
-            {all.map((option) => (
+            <option value="">{centerPlaceholder(centers, filteredCenters.length, centerQuery)}</option>
+            {filteredCenters.map((option) => (
               <option key={option.id} value={option.id}>
                 {option.name}
               </option>
@@ -337,9 +360,14 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
   );
 }
 
-function centerPlaceholder(centers: Remote<CenterOption[]>): string {
+function centerPlaceholder(
+  centers: Remote<CenterOption[]>,
+  matchCount: number,
+  query: string,
+): string {
   if (centers.status === 'loading') return 'Loading centres…';
   if (centers.status === 'error') return 'Could not load centres';
+  if (matchCount === 0 && query.trim()) return `No centres match "${query.trim()}"`;
   return 'Choose a centre';
 }
 
