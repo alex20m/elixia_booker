@@ -48,10 +48,30 @@ needs credentials the sandbox does not have.
    on the root element, so you can toggle it in-page instead of restarting.
 6. **Delete the throwaway route and env file, then check `git status`.** A
    preview route that reaches the default branch is a live URL nobody meant to
-   publish. Do this before staging, not after.
+   publish. Do this before staging, not after. Then clear the framework's build
+   cache: a dev server that generates per-route types leaves one behind
+   *importing the route you just deleted*, so the typecheck fails on a
+   gitignored generated file and the error points at nothing you wrote.
 
 ## Traps
 
+- **The shutter can catch a transition mid-flight, and the half-interpolated
+  frame reads as a *state*.** A control whose colours are a third of the way
+  from filled to outlined photographs as a greyed-out, disabled-looking button,
+  and the obvious next move — hunting the CSS rule that disabled it — finds
+  nothing, because `getComputedStyle` returns the interpolated colour too and
+  agrees with the picture. Two habits kill it: move the pointer off the element
+  before shooting (whatever you clicked to get here is often exactly where the
+  new control lands, so it is hovered), and pause past the longest transition.
+  If a computed colour matches no token in the stylesheet, that is the tell.
+- **A third-party stylesheet can carry a reset that silently disables your own
+  rules.** A component library's CSS import commonly ships a preflight that
+  clears list markers, form styling and heading margins across the whole
+  document, so a rule of yours that assumes browser defaults renders as nothing
+  — and every test still passes, because no unit test applies CSS at all. The
+  give-away is a stylesheet that styles something invisible in the shot (a
+  `::marker` colour where no markers appear). Fix it by restating the property
+  explicitly rather than by fighting the import.
 - **The scratch script cannot resolve the browser driver** when it lives outside
   the project. Import it by absolute path from the project's modules, or run the
   script from the project root.
