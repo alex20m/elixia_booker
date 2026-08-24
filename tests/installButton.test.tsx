@@ -10,19 +10,31 @@ import { INSTALL_PROMPT_EVENT, INSTALL_PROMPT_KEY } from '@/lib/pwa';
  *
  * It shares its installability logic with `InstallCard`, so what is worth
  * pinning here is what is different about the header form: it disappears
- * once installed same as the card, but where the browser gives no prompt to
- * replay it has no room to print steps — it has to hand off to wherever the
- * caller points it (the Settings tab), rather than silently doing nothing.
+ * once installed same as the card, and where the browser gives no prompt to
+ * replay it opens its own small popup with the steps for the platform in
+ * hand — the offer is never a trip to another screen, and never a tap that
+ * silently does nothing.
  */
 
 let container: HTMLDivElement;
 let root: Root;
 let prompted: number;
-let manualCalls: number;
 
 const render = (): void => {
   act(() => {
-    root.render(<InstallButton onManual={() => (manualCalls += 1)} />);
+    root.render(<InstallButton />);
+  });
+};
+
+const button = (): HTMLButtonElement =>
+  container.querySelector<HTMLButtonElement>('#install-header-btn')!;
+
+const popup = (): HTMLElement | null => container.querySelector<HTMLElement>('#install-popup');
+
+/** Click through the DOM the way a visitor does: the event reaches document too. */
+const click = (element: Element): void => {
+  act(() => {
+    element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   });
 };
 
@@ -49,7 +61,6 @@ function stubBrowser({ standalone = false, userAgent = 'Mozilla/5.0 (Windows NT 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   prompted = 0;
-  manualCalls = 0;
   (window as unknown as Record<string, unknown>)[INSTALL_PROMPT_KEY] = null;
   stubBrowser();
   container = document.createElement('div');
@@ -69,23 +80,84 @@ describe('InstallButton', () => {
     render();
 
     await act(async () => {
-      container.querySelector<HTMLButtonElement>('#install-header-btn')!.click();
+      button().click();
     });
 
     expect(prompted).toBe(1);
-    expect(manualCalls).toBe(0);
+    expect(popup()).toBeNull();
   });
 
-  it('hands off to the caller instead, on a browser with no prompt to give', () => {
+  it('opens a popup with this platform’s own steps when there is no prompt to give', () => {
     stubBrowser({ userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)' });
     render();
 
+    expect(popup()).toBeNull();
+    click(button());
+
+    expect(popup()!.textContent).toContain('Add to Home Screen');
+    expect(popup()!.querySelectorAll('li')).toHaveLength(3);
+    expect(button().getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('gives desktop the address-bar route rather than a phone’s share sheet', () => {
+    render();
+    click(button());
+
+    expect(popup()!.textContent).toContain('address bar');
+    expect(popup()!.textContent).not.toContain('Share button');
+  });
+
+  it('closes the popup when the same button is tapped again', () => {
+    render();
+    click(button());
+    expect(popup()).not.toBeNull();
+
+    click(button());
+
+    expect(popup()).toBeNull();
+    expect(button().getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('closes the popup on Escape', () => {
+    render();
+    click(button());
+    expect(popup()).not.toBeNull();
+
     act(() => {
-      container.querySelector<HTMLButtonElement>('#install-header-btn')!.click();
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     });
 
-    expect(manualCalls).toBe(1);
-    expect(prompted).toBe(0);
+    expect(popup()).toBeNull();
+    expect(document.activeElement).toBe(button());
+  });
+
+  it('closes the popup when the page behind it is clicked', () => {
+    render();
+    click(button());
+    expect(popup()).not.toBeNull();
+
+    click(container.querySelector('.menu-backdrop')!);
+
+    expect(popup()).toBeNull();
+  });
+
+  it('keeps the popup open while the steps themselves are being touched', () => {
+    render();
+    click(button());
+
+    click(popup()!.querySelector('li')!);
+
+    expect(popup()).not.toBeNull();
+  });
+
+  it('closes the popup from its own dismiss control', () => {
+    render();
+    click(button());
+    expect(popup()).not.toBeNull();
+
+    click(popup()!.querySelector<HTMLButtonElement>('#install-popup-close')!);
+
+    expect(popup()).toBeNull();
   });
 
   it('says nothing at all once the app is already installed', () => {
@@ -96,23 +168,23 @@ describe('InstallButton', () => {
     expect(container.textContent).toBe('');
   });
 
-  it('switches from a hand-off to a direct install once a prompt arrives', async () => {
+  it('switches from the steps popup to a direct install once a prompt arrives', async () => {
     render();
-    const btn = () => container.querySelector<HTMLButtonElement>('#install-header-btn')!;
-    expect(btn().getAttribute('aria-label')).toMatch(/how to install/i);
+    click(button());
+    expect(popup()).not.toBeNull();
 
     act(() => {
       parkPrompt();
       window.dispatchEvent(new Event(INSTALL_PROMPT_EVENT));
     });
 
-    expect(btn().getAttribute('aria-label')).toMatch(/^install app$/i);
+    expect(popup()).toBeNull();
+    expect(button().getAttribute('aria-label')).toMatch(/^install app$/i);
 
     await act(async () => {
-      btn().click();
+      button().click();
     });
 
     expect(prompted).toBe(1);
-    expect(manualCalls).toBe(0);
   });
 });

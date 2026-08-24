@@ -1,6 +1,6 @@
 'use client';
 
-import { useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   INSTALL_PROMPT_EVENT,
   currentPlatform,
@@ -131,29 +131,91 @@ export function InstallCard() {
 }
 
 /**
- * The compact header version, next to Sign out — hidden once the app is
+ * The compact header version, next to the menu button — hidden once the app is
  * already running installed, same as the card.
  *
- * There is no room in the bar to print the manual steps, so a browser with no
- * install API just hands off to wherever `onManual` points — the Settings
- * tab, where the full `InstallCard` prints them.
+ * Where the browser hands us a prompt, the tap installs and nothing else
+ * happens. Where it does not, the steps come to the button as a small popup,
+ * rather than the button carrying the visitor off to another screen: someone
+ * who taps install has said what they want, and answering that with a
+ * navigation to Settings makes them find the offer a second time — and lands
+ * them somewhere they did not ask to be.
+ *
+ * It borrows the nav menu's panel and backdrop wholesale, geometry and all: two
+ * popups hanging off the same bar that opened and closed differently would read
+ * as two different products, and the backdrop is also what catches the click
+ * outside.
  */
-export function InstallButton({ onManual }: { onManual: () => void }) {
+export function InstallButton() {
   const state = useInstallability();
+  const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
+
+  const ready = state === 'ready';
+  const showSteps = open && !ready;
+
+  /** Escape, with focus handed back to the button that was pressed — a
+   * keyboard visitor who opens and dismisses this should end up where they
+   * started, rather than at the top of the document. */
+  useEffect(() => {
+    if (!showSteps) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setOpen(false);
+      trigger.current?.focus();
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [showSteps]);
 
   if (state === '' || state === 'installed') return null;
 
-  const ready = state === 'ready';
+  const platform = state.slice('manual:'.length) as Platform;
+  const guide = manualInstall(platform);
 
   return (
-    <button
-      id="install-header-btn"
-      type="button"
-      className="btn-icon"
-      aria-label={ready ? 'Install app' : 'How to install the app'}
-      onClick={() => (ready ? void replayInstallPrompt() : onManual())}
-    >
-      <InstallIcon />
-    </button>
+    <>
+      <button
+        ref={trigger}
+        id="install-header-btn"
+        type="button"
+        className="btn-icon"
+        aria-label={ready ? 'Install app' : 'How to install the app'}
+        aria-haspopup={ready ? undefined : 'dialog'}
+        aria-expanded={ready ? undefined : showSteps}
+        onClick={() => (ready ? void replayInstallPrompt() : setOpen((was) => !was))}
+      >
+        <InstallIcon />
+      </button>
+
+      {showSteps && (
+        <>
+          <div className="menu-backdrop" onClick={() => setOpen(false)} />
+          <div
+            id="install-popup"
+            className="menu-panel install-popup"
+            role="dialog"
+            aria-label={guide.title}
+          >
+            <h2 className="card-title">{guide.title}</h2>
+            <ol className="install-steps">
+              {guide.steps.map((step) => (
+                <li key={step}>{step}</li>
+              ))}
+            </ol>
+            <button
+              id="install-popup-close"
+              type="button"
+              className="btn btn-secondary btn-sm btn-block mt-s"
+              onClick={() => setOpen(false)}
+            >
+              Got it
+            </button>
+          </div>
+        </>
+      )}
+    </>
   );
 }

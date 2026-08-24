@@ -1176,6 +1176,9 @@ button.link .spinner {
   border-color: var(--accent-line);
 }
 
+/* The numbers are the point of an ordered list, and the auth UI's stylesheet
+   strips list markers app-wide — so they are asked for here explicitly, or the
+   steps read as one paragraph with no order to them. */
 .install-steps {
   /* Spelled out because the auth UI's stylesheet ships a reset that clears
      list markers on every ol — without this the steps print unnumbered, and
@@ -1183,14 +1186,37 @@ button.link .spinner {
   list-style: decimal;
   margin: var(--space-s) 0 0;
   padding-left: var(--space-m);
+  list-style: decimal;
   color: var(--text-alt);
   font-size: 14px;
   line-height: 1.5;
 }
 
+.install-steps li + li {
+  margin-top: var(--space-xxs);
+}
+
 .install-steps li::marker {
   color: var(--accent);
   font-weight: 600;
+}
+
+/*
+ * The header button's own popup: where a browser gives us no prompt to replay,
+ * the steps arrive here rather than on another screen.
+ *
+ * Geometry, backdrop and animation are the nav menu's `.menu-panel` — a sheet
+ * under the bar on a phone, a dropdown hanging off the action cluster on a
+ * desktop. Only the inside differs, so this is what is left: prose padding
+ * where the menu has none, since its own padding is sized for tap targets.
+ */
+.install-popup {
+  padding: var(--space-m);
+  /* The panel is a child of the navy bar, so anything inside it that does not
+     name a colour inherits white — which the menu never notices, because every
+     one of its items sets its own. Prose has to say so itself. */
+  color: var(--text);
+  text-align: left;
 }
 
 /* --------------------------------------------------------------- footer --- */
