@@ -37,9 +37,12 @@ function subscribeToInstallability(onChange: () => void): () => void {
  *
  * `useSyncExternalStore` compares snapshots by identity, so returning the state
  * object itself — freshly built on every read — would re-render forever. The
- * string is the same value in a shape that can be compared.
+ * string is the same value in a shape that can be compared. `''` is the one
+ * the server sees, and means "not knowable here yet".
  */
-function readInstallability(): string {
+export type Installability = '' | 'installed' | 'ready' | `manual:${Platform}`;
+
+function readInstallability(): Installability {
   const state = installState({
     standalone: isStandalone(),
     promptAvailable: parkedInstallPrompt() !== null,
@@ -49,13 +52,14 @@ function readInstallability(): string {
 }
 
 /**
- * The live installability, shared by the card and the header button.
+ * The live installability, shared by the card, the header button and the last
+ * page of the setup wizard.
  *
  * The empty snapshot is what the server sees: none of this is knowable
  * without a browser, and guessing would flash the wrong control at half of
  * visitors.
  */
-function useInstallability(): string {
+export function useInstallability(): Installability {
   return useSyncExternalStore(subscribeToInstallability, readInstallability, () => '');
 }
 
@@ -70,13 +74,45 @@ async function replayInstallPrompt(): Promise<void> {
   window.dispatchEvent(new Event(INSTALL_PROMPT_EVENT));
 }
 
+/**
+ * The offer itself — a one-tap button, or the steps to do it by hand.
+ *
+ * Split out from the card so the setup wizard can put the same offer on its
+ * own last page without nesting a card inside a card. The state is passed in
+ * rather than read here, so a caller that has already branched on it (the
+ * wizard drops its install page entirely when there is nothing to offer)
+ * cannot end up disagreeing with what this renders.
+ */
+export function InstallOffer({ state }: { state: Installability }) {
+  if (state === '' || state === 'installed') return null;
+
+  if (state === 'ready') {
+    return (
+      <button id="install-btn" type="button" onClick={() => void replayInstallPrompt()}>
+        <InstallIcon />
+        Install app
+      </button>
+    );
+  }
+
+  const { title, steps } = manualInstall(state.slice('manual:'.length) as Platform);
+
+  return (
+    <>
+      <h3 className="card-title">{title}</h3>
+      <ol className="install-steps">
+        {steps.map((step) => (
+          <li key={step}>{step}</li>
+        ))}
+      </ol>
+    </>
+  );
+}
+
 export function InstallCard() {
   const state = useInstallability();
 
   if (state === '' || state === 'installed') return null;
-
-  const ready = state === 'ready';
-  const platform = state.slice('manual:'.length) as Platform;
 
   return (
     <section className="card install">
@@ -89,21 +125,7 @@ export function InstallCard() {
         </div>
       </div>
 
-      {ready ? (
-        <button id="install-btn" type="button" onClick={() => void replayInstallPrompt()}>
-          <InstallIcon />
-          Install app
-        </button>
-      ) : (
-        <>
-          <h3 className="card-title">{manualInstall(platform).title}</h3>
-          <ol className="install-steps">
-            {manualInstall(platform).steps.map((step) => (
-              <li key={step}>{step}</li>
-            ))}
-          </ol>
-        </>
-      )}
+      <InstallOffer state={state} />
     </section>
   );
 }

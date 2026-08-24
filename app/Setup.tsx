@@ -9,6 +9,7 @@ import type { NotifyChannel } from '@/lib/types';
 import { ActionButton } from './components/ActionButton';
 import { LoadingScreen, SkeletonCard } from './components/Loading';
 import { Shell } from './components/Shell';
+import { InstallOffer, useInstallability } from './components/InstallCard';
 import { TelegramConnect } from './components/TelegramConnect';
 
 /**
@@ -40,16 +41,30 @@ import { TelegramConnect } from './components/TelegramConnect';
  * skimmed, and each page's Next is the thing that will not move until it has an
  * answer.
  *
- * The gym account page is last and submits separately from the other three:
- * `/api/elixia` only accepts a request once the account is already configured
- * (see lib/service.ts's note on why linking stays its own operation), so
- * finishing this wizard calls `/api/setup` first and `/api/elixia` second. If
- * Elixia rejects the credentials, the first call has already gone through —
- * which is fine, because an account that is configured but not yet linked is
- * exactly what the dashboard's own "Link your Elixia account" card is for.
+ * The gym account page is last of the four and submits separately from the
+ * other three: `/api/elixia` only accepts a request once the account is already
+ * configured (see lib/service.ts's note on why linking stays its own
+ * operation), so saving this wizard calls `/api/setup` first and `/api/elixia`
+ * second. If Elixia rejects the credentials, the first call has already gone
+ * through — which is fine, because an account that is configured but not yet
+ * linked is exactly what the dashboard's own "Link your Elixia account" card is
+ * for.
+ *
+ * After those four comes a fifth page that asks for nothing: the offer to
+ * install the app to a home screen. It is deliberately the only page that can
+ * be walked past, and deliberately placed *after* the save rather than before
+ * it — a page that can be skipped must not be able to take four pages of
+ * answers with it. Setup is the one moment the offer is certain to be seen, and
+ * an app opened from a home screen is the difference between a booker someone
+ * remembers to check and a tab they lose. Someone already running the installed
+ * app never sees the page at all.
  */
 
-const STEPS = ['Membership', 'Timezone', 'Notifications', 'Gym account'] as const;
+/** The pages that have to be answered. */
+const CONFIG_STEPS = ['Membership', 'Timezone', 'Notifications', 'Gym account'] as const;
+
+/** And the one that does not. */
+const INSTALL_STEP = 'Install app';
 
 export default function Setup({ onDone }: { onDone: () => void }) {
   const [step, setStep] = useState(0);
@@ -104,10 +119,23 @@ export default function Setup({ onDone }: { onDone: () => void }) {
 
   const connected = Boolean(state?.telegramChatId || chatId);
 
-  // What each page needs before it will let the visitor move on. The finish
-  // condition is the destination as well as the channel, because a channel
-  // with nowhere to send is the failure this page exists to prevent — the
-  // server refuses it too, and this is only the polite half.
+  const installability = useInstallability();
+  const onInstallStep = step === CONFIG_STEPS.length;
+  // Dropped for someone already running the installed app, where the offer
+  // would be nonsense.
+  const offersInstall = installability !== 'installed';
+  // Kept in the page list once the wizard is standing on it, so a browser that
+  // reports itself installed the moment the prompt is accepted cannot pull the
+  // page out from under the visitor still reading it.
+  const steps: readonly string[] =
+    offersInstall || onInstallStep ? [...CONFIG_STEPS, INSTALL_STEP] : CONFIG_STEPS;
+  const lastConfigStep = step === CONFIG_STEPS.length - 1;
+
+  // What each page needs before it will let the visitor move on. The gym
+  // account condition is the destination as well as the channel, because a
+  // channel with nowhere to send is the failure that page exists to prevent —
+  // the server refuses it too, and this is only the polite half. The install
+  // page asks for nothing, so nothing is required of it.
   const answered =
     step === 0
       ? windowDays !== ''
@@ -117,12 +145,12 @@ export default function Setup({ onDone }: { onDone: () => void }) {
           ? channel === 'none' ||
             (channel === 'email' && email.trim() !== '') ||
             (channel === 'telegram' && connected)
-          : elixiaEmail.trim() !== '' && elixiaPassword !== '';
+          : !lastConfigStep || (elixiaEmail.trim() !== '' && elixiaPassword !== '');
 
-  const finish = async (): Promise<void> => {
+  const save = async (): Promise<void> => {
     setError('');
     await api('/api/setup', {
-        method: 'POST',
+      method: 'POST',
       body: JSON.stringify({
         bookingWindowDays: Number(windowDays),
         timeZone,
@@ -139,7 +167,10 @@ export default function Setup({ onDone }: { onDone: () => void }) {
       method: 'POST',
       body: JSON.stringify({ email: elixiaEmail.trim(), password: elixiaPassword }),
     });
-    onDone();
+    // Everything asked for is saved; the install page is all that is left, and
+    // it is only shown where there is something to install.
+    if (offersInstall) setStep(step + 1);
+    else onDone();
   };
 
   // Drawn only once the server has answered. Two of these pages depend on what
@@ -162,7 +193,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
         <div className="hero">
           <h1>Set up your booker</h1>
           <p className="hero-sub">
-            Three quick questions. Your answers decide when your classes get booked, and whether
+            A few quick questions. Your answers decide when your classes get booked, and whether
             you hear about it.
           </p>
         </div>
@@ -172,16 +203,16 @@ export default function Setup({ onDone }: { onDone: () => void }) {
               there for anyone who wants it, and the bars say how much is left
               without being read. */}
           <div className="steps" aria-hidden="true">
-            {STEPS.map((name, index) => (
+            {steps.map((name, index) => (
               <span key={name} className={index <= step ? 'step-dot is-done' : 'step-dot'} />
             ))}
           </div>
 
           <div className="card-head">
             <div>
-              <h2 className="card-title">{STEPS[step]}</h2>
+              <h2 className="card-title">{steps[step]}</h2>
               <p className="card-sub" id="setup-progress">
-                Step {step + 1} of {STEPS.length}
+                Step {step + 1} of {steps.length}
               </p>
             </div>
           </div>
@@ -329,6 +360,27 @@ export default function Setup({ onDone }: { onDone: () => void }) {
             </div>
           )}
 
+          {onInstallStep && (
+            <div className="stack">
+              <p className="card-sub">
+                Add Elixia Booker to your home screen — it opens like an app, full screen, one tap
+                away.
+              </p>
+
+              {installability === 'installed' ? (
+                <p className="hint">Installed. Finish to open your dashboard.</p>
+              ) : (
+                <InstallOffer state={installability} />
+              )}
+
+              <p className="hint">
+                Optional, and nothing is waiting on it — your setup is already saved, and booking
+                runs whether or not the app is on your home screen. You can install it later from
+                Settings.
+              </p>
+            </div>
+          )}
+
           {error && (
             <div className="banner banner-err mt-m" id="setup-error">
               <span>{error}</span>
@@ -336,12 +388,38 @@ export default function Setup({ onDone }: { onDone: () => void }) {
           )}
 
           <div className="cluster mt-m">
-            {step > 0 && (
+            {/* No way back from the install page: what came before it has been
+                submitted already, and stepping back into it would offer to
+                submit it a second time. */}
+            {step > 0 && !onInstallStep && (
               <button className="btn-quiet" id="setup-back" onClick={() => setStep(step - 1)}>
                 Back
               </button>
             )}
-            {step < STEPS.length - 1 ? (
+            {onInstallStep ? (
+              // Outlined where there is a real install button above it to
+              // press, so the page has one filled button rather than two
+              // competing ones; filled where the offer is only instructions
+              // and this is the only thing to press.
+              <button
+                id="setup-done"
+                className={installability === 'ready' ? 'btn-secondary btn-grow' : 'btn-grow'}
+                onClick={onDone}
+              >
+                Finish
+              </button>
+            ) : lastConfigStep ? (
+              <ActionButton
+                id="setup-finish"
+                className="btn-grow"
+                disabled={!answered}
+                pendingLabel="Saving…"
+                onError={(err) => setError(err.message)}
+                onClick={save}
+              >
+                {offersInstall ? 'Save and continue' : 'Finish setup'}
+              </ActionButton>
+            ) : (
               <button
                 id="setup-next"
                 className="btn-grow"
@@ -350,17 +428,6 @@ export default function Setup({ onDone }: { onDone: () => void }) {
               >
                 Next
               </button>
-            ) : (
-              <ActionButton
-                id="setup-finish"
-                className="btn-grow"
-                disabled={!answered}
-                pendingLabel="Saving…"
-                onError={(err) => setError(err.message)}
-                onClick={finish}
-              >
-                Finish setup
-              </ActionButton>
             )}
           </div>
         </section>
