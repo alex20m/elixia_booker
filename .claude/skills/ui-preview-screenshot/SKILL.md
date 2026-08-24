@@ -98,6 +98,29 @@ needs credentials the sandbox does not have.
   preview server leaves an unrelated modification in the working tree. Notice it
   before staging, and decide deliberately whether that block belongs in your
   diff — do not let it ride along in an unrelated PR.
+- **`next dev` serves the page but 403s its own JavaScript when you browse via
+  `127.0.0.1`.** Next treats a request for a `/_next/*` dev resource from a host
+  it does not consider same-origin as cross-origin and refuses it — and
+  `localhost` and `127.0.0.1` are not the same host to it. The document itself
+  and the stylesheet still come back 200, so the screenshot renders fully
+  styled and looks right; only hydration never happens, and every click on the
+  page does nothing. The symptom therefore points at your component ("the
+  button does not open the menu") rather than at the URL you typed. The
+  attractive wrong explanation is the sandbox's HTTP proxy, because the same
+  chunk fetched with `curl` returns 200 — but the answer is in the dev server's
+  own log, which says in full sentences that it blocked the request. Browse via
+  `localhost`, or add the host to `allowedDevOrigins` in the Next config.
+  (Verified against Next 16.3.)
+- **Scripted focus lands nowhere on a control the browser is not rendering.**
+  Where a responsive design keeps two copies of something and hides one by CSS,
+  code that moves focus has to pick the live one, and the usual tests for that
+  do not survive both environments: a `display: none` ancestor does not change
+  a child's own computed `display`, so `getComputedStyle` happily returns
+  `flex` for something off-screen, while `offsetParent` and `getClientRects`
+  see it correctly but return nothing useful under a DOM implementation with no
+  layout, so the unit suite disagrees with the browser. Ask whether the focus
+  took instead: call `focus()`, then compare `document.activeElement`. That
+  reads the same with layout and without.
 - **Wait for the state, not for a duration.** Wait on the element that proves
   you arrived; use a short fixed pause only to let a transition settle before
   the shutter.
