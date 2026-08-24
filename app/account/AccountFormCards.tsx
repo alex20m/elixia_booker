@@ -5,15 +5,22 @@ import {
   AuthUIContext,
   ChangeEmailCard,
   ChangePasswordCard,
+  DeleteAccountCard,
   UpdateNameCard,
   useAuthenticate,
 } from '@neondatabase/auth-ui';
 
 /**
- * The three cards that used to live on Neon Auth's own /account/settings and
+ * The four cards that used to live on Neon Auth's own /account/settings and
  * /account/security pages, combined onto one page. Deliberately omits
  * SessionsCard (the "sessions" section the settings menu doesn't need) and the
  * avatar/username/2FA/passkey/provider cards this app never enables.
+ *
+ * DeleteAccountCard has to stay: it's the only place in the app a user can
+ * ask to delete their account at all, and app/api/auth/[...path]/route.ts
+ * purges the app's own data (subscriptions, the sealed Elixia secret,
+ * history) the moment this card's dialog confirms the deletion — with no
+ * entry point to trigger it, that cleanup would never run.
  *
  * The `account` check mirrors AccountView's own guard: at build time this page
  * renders with no AuthUIProvider above it, so the context falls back to `{}`
@@ -40,6 +47,7 @@ function AuthenticatedAccountFormCards() {
       <UpdateNameCard />
       <ChangeEmailCard />
       <ChangePasswordCard />
+      <DeleteAccountCard />
     </div>
   );
 }
