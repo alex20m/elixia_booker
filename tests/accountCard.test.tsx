@@ -13,13 +13,16 @@ const { AccountCard } = await import('@/app/AccountCard');
 
 /**
  * The Account card, linking out to Neon Auth's own account page for name,
- * email and password.
+ * email, password, and account deletion.
  *
  * This used to offer two separate links — one into a "Security" tab for the
  * password field, one into an "Account" tab for email — because those lived
  * on separate pages switched between by a sidebar nav that collapsed into a
  * hamburger drawer on phones and never opened. The two pages were combined
- * into one (see app/account/page.tsx), so a single link now covers both.
+ * into one (see app/account/page.tsx), so a single link now covers both — and
+ * it is labelled generically rather than by field name, so it does not
+ * misdescribe what is behind it the moment a fourth card (delete account)
+ * joins the three the label used to name.
  */
 
 let container: HTMLDivElement;
@@ -47,13 +50,22 @@ afterEach(() => {
 });
 
 describe('AccountCard', () => {
-  it('sends the account link to the combined name/email/password page', () => {
+  it('sends the account link to the combined account page', () => {
     render();
 
     const link = byId<HTMLAnchorElement>('account-settings-btn');
     expect(link).not.toBeNull();
     expect(link!.getAttribute('href')).toBe('/account');
-    expect(link!.textContent).toMatch(/password/i);
+  });
+
+  it('labels the link generically, rather than naming only some of what is behind it', () => {
+    // Naming specific fields ("Name, email & password") named three of the
+    // four cards on that page and gave nobody reason to expect the fourth —
+    // delete account — to be there too.
+    render();
+
+    const link = byId<HTMLAnchorElement>('account-settings-btn');
+    expect(link!.textContent).toBe('Account settings');
   });
 
   it('offers only one account link, not a separate one per section', () => {
