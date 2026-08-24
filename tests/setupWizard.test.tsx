@@ -4,6 +4,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import Setup from '@/app/Setup';
 import { TELEGRAM_POLL_MS } from '@/app/components/TelegramConnect';
+import { INSTALL_PROMPT_KEY } from '@/lib/pwa';
 
 /**
  * The configuration pages a new account has to go through before the app will
@@ -30,6 +31,34 @@ let root: Root;
 let posts: Array<{ url: string; body: unknown }>;
 let state: typeof STATE;
 let done: number;
+let prompted: number;
+
+/**
+ * The browser facts the install page reads. jsdom implements none of them —
+ * `matchMedia` is not even defined — so every render of the wizard needs them
+ * stubbed, and the defaults here are the ordinary case: a browser tab that is
+ * not running installed.
+ */
+function stubBrowser({ standalone = false, userAgent = 'Mozilla/5.0 (Windows NT 10.0)' } = {}): void {
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: standalone && query.includes('display-mode'),
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  }));
+  Object.defineProperty(window.navigator, 'userAgent', { value: userAgent, configurable: true });
+  Object.defineProperty(window.navigator, 'maxTouchPoints', { value: 0, configurable: true });
+}
+
+/** Pretend Chromium already handed us an install prompt, as its script does. */
+function parkPrompt(): void {
+  (window as unknown as Record<string, unknown>)[INSTALL_PROMPT_KEY] = {
+    prompt: async () => {
+      prompted += 1;
+    },
+    userChoice: Promise.resolve({ outcome: 'accepted' as const }),
+  };
+}
 
 function stubFetch(): void {
   vi.stubGlobal(
@@ -71,7 +100,10 @@ beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   posts = [];
   done = 0;
+  prompted = 0;
   state = { ...STATE };
+  (window as unknown as Record<string, unknown>)[INSTALL_PROMPT_KEY] = null;
+  stubBrowser();
   stubFetch();
   vi.stubGlobal('open', vi.fn());
   container = document.createElement('div');
@@ -146,6 +178,14 @@ async function throughToGymAccount(): Promise<void> {
   await choose('setup-channel', 'email');
   await type('setup-email', 'alerts@example.com');
   await click('setup-next');
+}
+
+/** Answer every page that has to be answered, leaving the install offer. */
+async function throughToInstall(): Promise<void> {
+  await throughToGymAccount();
+  await type('setup-elixia-email', 'me@elixia.example');
+  await type('setup-elixia-password', 'hunter2');
+  await click('setup-finish');
 }
 
 describe('the membership page', () => {
@@ -323,7 +363,6 @@ describe('finishing', () => {
         body: { email: 'me@elixia.example', password: 'hunter2' },
       },
     ]);
-    expect(done).toBe(1);
   });
 
   it('shows the server\'s reason and stays put when the setup submission is refused', async () => {
@@ -351,6 +390,13 @@ describe('finishing', () => {
     expect(el<HTMLInputElement>('setup-elixia-email').value).toBe('me@elixia.example');
   });
 
+  it('does not treat the install offer as another thing to save', async () => {
+    await throughToInstall();
+    await click('setup-done');
+
+    expect(posts.map((p) => p.url)).toEqual(['/api/setup', '/api/elixia']);
+  });
+
   it('shows Elixia\'s rejection and stays put without finishing, even though setup was saved', async () => {
     await throughToGymAccount();
     await type('setup-elixia-email', 'me@elixia.example');
@@ -362,5 +408,77 @@ describe('finishing', () => {
     expect(posts.map((p) => p.url)).toEqual(['/api/setup', '/api/elixia']);
     // The answers are kept, so correcting the password does not mean redoing the wizard.
     expect(el<HTMLInputElement>('setup-elixia-email').value).toBe('me@elixia.example');
+  });
+});
+
+/**
+ * The one page of the wizard that asks for nothing.
+ *
+ * It comes last and after everything has been saved, because it is the only
+ * page a visitor is allowed to walk past: an app that never reaches a home
+ * screen still books classes, so refusing to finish without it would be
+ * holding the account hostage over a nicety. What must hold is that walking
+ * past it costs nothing — the answers are already on the server by the time it
+ * appears — and that it is not shown at all to someone who is already running
+ * the installed app.
+ */
+describe('the install page', () => {
+  it('comes after the answers are saved, so skipping it cannot lose them', async () => {
+    await throughToInstall();
+
+    expect(posts.map((p) => p.url)).toEqual(['/api/setup', '/api/elixia']);
+    // Saved, but not finished: the wizard is still showing, on its last page.
+    expect(done).toBe(0);
+    expect(container.textContent).toMatch(/Step 5 of 5/);
+    expect(maybe('setup-done')).not.toBeNull();
+  });
+
+  it('finishes the wizard when the offer is skipped', async () => {
+    await throughToInstall();
+    await click('setup-done');
+
+    expect(done).toBe(1);
+  });
+
+  it('offers the browser its own install prompt, and actually calls it', async () => {
+    parkPrompt();
+    await throughToInstall();
+
+    await act(async () => {
+      el<HTMLButtonElement>('install-btn').click();
+    });
+
+    expect(prompted).toBe(1);
+  });
+
+  it('prints the Share-sheet steps on iOS, where there is no prompt to offer', async () => {
+    stubBrowser({ userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)' });
+    await throughToInstall();
+
+    expect(maybe('install-btn')).toBeNull();
+    expect(container.textContent).toMatch(/add to home screen/i);
+    // Still leaveable — the platform that cannot be prompted is the one most
+    // likely to strand someone on a page with no way forward.
+    expect(disabled('setup-done')).toBe(false);
+  });
+
+  it('is left out entirely when the app is already running installed', async () => {
+    stubBrowser({ standalone: true });
+    await throughToGymAccount();
+
+    expect(container.textContent).toMatch(/Step 4 of 4/);
+
+    await type('setup-elixia-email', 'me@elixia.example');
+    await type('setup-elixia-password', 'hunter2');
+    await click('setup-finish');
+
+    expect(done).toBe(1);
+    expect(maybe('setup-done')).toBeNull();
+  });
+
+  it('offers no way back into answers it has already submitted', async () => {
+    await throughToInstall();
+
+    expect(maybe('setup-back')).toBeNull();
   });
 });
