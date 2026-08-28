@@ -78,6 +78,14 @@ export const PlusIcon = ({ size = 18 }: IconProps) => (
   </svg>
 );
 
+/* Points down because it marks a control that opens a list downwards — the
+   same arrow the selects beside it draw in CSS. */
+export const ChevronIcon = ({ size = 18 }: IconProps) => (
+  <svg {...base(size)}>
+    <path d="m6 9 6 6 6-6" />
+  </svg>
+);
+
 export const MenuIcon = ({ size = 22 }: IconProps) => (
   <svg {...base(size)}>
     <path d="M4 7h16M4 12h16M4 17h16" />

@@ -1,12 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiRequest as api, titleCase } from '@/lib/dashboardState';
 import type { CenterDefaults } from '@/lib/service';
 import type { CenterOption, ClassOption } from '@/lib/types';
 import { ActionButton } from './components/ActionButton';
 import { Spinner } from './components/Loading';
-import { PlusIcon } from './components/icons';
+import { ChevronIcon, PlusIcon } from './components/icons';
 
 /**
  * Picking a class, from the classes that exist.
@@ -37,12 +37,20 @@ import { PlusIcon } from './components/icons';
  * The centre is asked for in one box rather than a search field feeding a
  * dropdown. Two controls for one answer is two things to work out before the
  * first question is even answered, and the pair could disagree — text reading
- * one club over a form acting on another. So the box is the picker: it carries
- * the whole catalogue as its own list, the browser narrows that list as the
- * name is typed, and a centre counts as chosen only once what is in the box is
- * a club Elixia lists. Anything else left in it is put back to the chosen
- * centre when the box is left, so it never shows a club the form is not
- * actually using.
+ * one club over a form acting on another. So the box is the picker: a centre
+ * counts as chosen only once what is in the box is a club Elixia lists, and
+ * anything else left in it is put back to the chosen centre when the box is
+ * left, so it never shows a club the form is not actually using.
+ *
+ * The list under it is drawn here rather than handed to a native `<datalist>`,
+ * which is what this started as and could not stay. A datalist takes no styling
+ * at all, so it renders as a raw browser popup next to two styled selects;
+ * browsers disagree on whether it opens before anything is typed, which turns
+ * "pick your gym from the list" into "already know how it is spelled"; several
+ * match only the *start* of a name, hiding Sello from "ell"; and on iOS Safari
+ * it barely appears. Owning the list costs the keyboard and ARIA wiring below
+ * and buys a control that behaves the same everywhere: it opens on focus
+ * showing every club, matches anywhere in the name, and is picked with one tap.
  *
  * The centre is remembered between visits, because it does not change:
  * someone books at their own gym week after week, and picking it out of 226
@@ -99,6 +107,17 @@ const sameName = (value: string): string => value.trim().toLowerCase().replace(/
 /** Identifies a slot within one class, and survives the list being refetched. */
 const slotKey = (option: ClassOption): string => `${option.weekday}|${option.startTime}`;
 
+/**
+ * Keep the arrowed-to row on screen.
+ *
+ * The list scrolls at around eight rows and the catalogue runs to 226, so
+ * without this the highlight walks off the bottom on the ninth press and the
+ * keyboard stops being a way to reach anything. Optional-called because jsdom
+ * has no layout and so does not implement it.
+ */
+const scrollActiveIntoView = (row: HTMLLIElement | null): void =>
+  row?.scrollIntoView?.({ block: 'nearest' });
+
 export default function AddClass({ refresh }: { refresh: () => Promise<void> }) {
   const [centers, setCenters] = useState<Remote<CenterOption[]>>({ status: 'loading' });
   /** Elixia's numeric club id: filtering by it skips a whole page fetch. */
@@ -108,6 +127,21 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
    * is free text until it spells one of Elixia's clubs exactly.
    */
   const [centerText, setCenterText] = useState('');
+  /** Whether the list is showing. Opening it is how the catalogue is browsed. */
+  const [centerOpen, setCenterOpen] = useState(false);
+  /**
+   * Whether what is in the box should narrow the list.
+   *
+   * Not the same as "the box has text in it": a chosen centre fills the box
+   * with its own name, and filtering on that would reopen the list showing
+   * only the club already picked — a dropdown that offers nothing but the
+   * current answer, so switching gyms would mean clearing the box first.
+   * Typing turns it on; choosing and reopening turn it back off.
+   */
+  const [centerFiltering, setCenterFiltering] = useState(false);
+  /** Row the keyboard would commit; -1 until an arrow key picks one out. */
+  const [centerActive, setCenterActive] = useState(-1);
+  const centerInput = useRef<HTMLInputElement>(null);
   // Tagged with the centre it describes, so a timetable is never read as
   // belonging to a centre it was not fetched for — the same trick the
   // dashboard plays with the signed-in user, and for the same reason: without
@@ -188,16 +222,18 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
 
   const all = centers.status === 'ready' ? centers.value : [];
 
-  // Narrowing the list as the name is typed is the browser's job — the box
-  // carries every centre and it shows the matching ones. What is left to do
-  // here is say when there are none, and that has to mean "there is nothing
-  // here" rather than "you have not finished typing": a substring test stays
-  // quiet through "sel" on the way to "Sello", and speaks up on "nowhere".
+  // Matched anywhere in the name rather than only at the start: someone
+  // reaching for Sello may well begin at "ell", and a club they cannot spell
+  // the opening of is a club they cannot find.
   const typedCenter = sameName(centerText);
-  const noCenterMatches =
-    centers.status === 'ready' &&
-    typedCenter !== '' &&
-    !all.some((option) => sameName(option.name).includes(typedCenter));
+  const centerMatches =
+    centerFiltering && typedCenter !== ''
+      ? all.filter((option) => sameName(option.name).includes(typedCenter))
+      : all;
+  // "There is nothing here", not "you have not finished typing" — a substring
+  // test stays quiet through "sel" on the way to "Sello", and speaks up on
+  // "nowhere".
+  const noCenterMatches = centers.status === 'ready' && centerMatches.length === 0;
 
   // Anything not tagged with the selected centre is still on its way, which is
   // what makes the switch immediate rather than one render behind.
@@ -278,6 +314,10 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
    */
   const typeCenter = (text: string): void => {
     setCenterText(text);
+    // Typing is a search, so the list opens and starts narrowing to it.
+    setCenterFiltering(true);
+    setCenterOpen(true);
+    setCenterActive(-1);
     const match = all.find((option) => sameName(option.name) === sameName(text));
     if (match) {
       if (match.id !== center) chooseCenter(match.id);
@@ -286,15 +326,73 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
     if (sameName(text) === '' && center) chooseCenter('');
   };
 
+  /** Committing a row: the one-tap path a dropdown is supposed to have. */
+  const pickCenter = (option: CenterOption): void => {
+    setCenterText(option.name);
+    setCenterOpen(false);
+    setCenterFiltering(false);
+    setCenterActive(-1);
+    if (option.id !== center) chooseCenter(option.id);
+  };
+
   /**
-   * Leaving the box puts back what is actually chosen.
+   * Opening shows the catalogue whole.
+   *
+   * Filtering is switched off on the way in on purpose — see `centerFiltering`.
+   * The chosen club is where the keyboard starts from, so arrowing off it
+   * lands on its neighbour rather than back at the top of 226 clubs.
+   */
+  const openCenter = (): void => {
+    if (centers.status !== 'ready') return;
+    setCenterOpen(true);
+    setCenterFiltering(false);
+    setCenterActive(all.findIndex((option) => option.id === center));
+  };
+
+  /**
+   * Closing puts back what is actually chosen.
    *
    * Without this the box is the one control that can lie: half a name, or a
    * club that does not exist, sitting over a form that is still acting on the
    * centre chosen before it. Re-spelling the chosen centre also tidies the
    * case someone typed it in.
    */
-  const settleCenter = (): void => setCenterText(centerName);
+  const settleCenter = (): void => {
+    setCenterText(centerName);
+    setCenterOpen(false);
+    setCenterFiltering(false);
+    setCenterActive(-1);
+  };
+
+  /**
+   * Arrow keys move, Enter commits, Escape abandons the search.
+   *
+   * Enter is only swallowed when it has a row to act on; left alone otherwise
+   * so it still submits whatever encloses this.
+   */
+  const centerKey = (event: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (!centerOpen) {
+        openCenter();
+        return;
+      }
+      const step = event.key === 'ArrowDown' ? 1 : -1;
+      const last = centerMatches.length - 1;
+      if (last < 0) return;
+      setCenterActive((current) => Math.min(Math.max(current + step, 0), last));
+      return;
+    }
+    if (event.key === 'Enter' && centerOpen && centerMatches[centerActive]) {
+      event.preventDefault();
+      pickCenter(centerMatches[centerActive]);
+      return;
+    }
+    if (event.key === 'Escape' && centerOpen) {
+      event.preventDefault();
+      settleCenter();
+    }
+  };
 
   return (
     <section className="card">
@@ -312,29 +410,90 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
           <label htmlFor="s-center">
             Centre {centers.status === 'loading' && <Spinner label="Loading centres" />}
           </label>
-          <input
-            id="s-center"
-            type="text"
-            // The list is what makes this a picker rather than a text field:
-            // the browser draws it, narrows it as the name is typed, and
-            // drives it with whatever the device is best at — the phone
-            // keyboard's own suggestion strip included.
-            list="s-center-options"
-            // The browser's memory of what was typed into other boxes named
-            // like this one has no business competing with the catalogue.
-            autoComplete="off"
-            placeholder={centerPlaceholder(centers)}
-            value={centerText}
-            disabled={centers.status !== 'ready'}
-            onChange={(e) => typeCenter(e.target.value)}
-            onBlur={settleCenter}
-          />
-          <datalist id="s-center-options">
-            {all.map((option) => (
-              <option key={option.id} value={option.name} />
-            ))}
-          </datalist>
-          {noCenterMatches && <p className="hint">No centres match “{centerText.trim()}”</p>}
+          <div className="combo">
+            <input
+              id="s-center"
+              ref={centerInput}
+              type="text"
+              role="combobox"
+              aria-expanded={centerOpen}
+              aria-controls="s-center-list"
+              // The list is the suggestions, so the box itself is never
+              // rewritten under the typing — only the highlight moves.
+              aria-autocomplete="list"
+              aria-activedescendant={
+                centerOpen && centerMatches[centerActive]
+                  ? `s-center-opt-${centerMatches[centerActive].id}`
+                  : undefined
+              }
+              // The browser's memory of what was typed into other boxes named
+              // like this one has no business competing with the catalogue.
+              autoComplete="off"
+              placeholder={centerPlaceholder(centers)}
+              value={centerText}
+              disabled={centers.status !== 'ready'}
+              onChange={(e) => typeCenter(e.target.value)}
+              onFocus={openCenter}
+              // Focus alone does not cover clicking back into a box that is
+              // already focused after the list was closed with Escape.
+              onClick={openCenter}
+              onKeyDown={centerKey}
+              // Fires for the whole combo, so moving between the box and its
+              // own list does not read as leaving — only going elsewhere does.
+              onBlur={settleCenter}
+            />
+            <button
+              type="button"
+              className="combo-toggle"
+              // The list it opens is already announced by the box beside it,
+              // and a second control in the tab order to reach the same rows
+              // is one more stop between here and the class being added.
+              tabIndex={-1}
+              aria-hidden="true"
+              disabled={centers.status !== 'ready'}
+              // Down on the box would blur it and close the list before the
+              // click resolved, so the toggle acts here and keeps the focus.
+              onMouseDown={(e) => {
+                e.preventDefault();
+                if (centerOpen) settleCenter();
+                else {
+                  openCenter();
+                  centerInput.current?.focus();
+                }
+              }}
+            >
+              <ChevronIcon />
+            </button>
+            {centerOpen && (
+              <ul className="combo-list" id="s-center-list" role="listbox" aria-label="Centres">
+                {centerMatches.map((option, index) => (
+                  <li
+                    key={option.id}
+                    id={`s-center-opt-${option.id}`}
+                    role="option"
+                    aria-selected={option.id === center}
+                    className="combo-option"
+                    data-active={index === centerActive}
+                    ref={index === centerActive ? scrollActiveIntoView : undefined}
+                    // Same reason as the toggle: a plain click arrives after
+                    // the blur that would have reverted the box already.
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      pickCenter(option);
+                    }}
+                    onMouseEnter={() => setCenterActive(index)}
+                  >
+                    {option.name}
+                  </li>
+                ))}
+                {noCenterMatches && (
+                  <li className="combo-empty" role="presentation">
+                    No centres match “{centerText.trim()}”
+                  </li>
+                )}
+              </ul>
+            )}
+          </div>
         </div>
         <div className="field">
           <label htmlFor="s-class">
