@@ -24,7 +24,15 @@ on:
     # jittery trigger costs nothing. Every 3 hours leaves wide overlap against
     # the job's own budget below, so the next watcher is already running well
     # before the previous one's deadline — see the comment above.
-    - cron: '0 */3 * * *'
+    #
+    # Minute 23, not 0: GitHub documents the top of every hour as when
+    # scheduled-workflow load peaks, and a trigger there can be delayed
+    # enough to be dropped outright rather than just fired late — which
+    # already happened once, leaving no watcher running for hours with
+    # nothing in the Actions log to show it (no queued run, no failed run,
+    # just an absent one). A trigger anywhere off the hour avoids that
+    # shared peak.
+    - cron: '23 */3 * * *'
   workflow_dispatch: {}
 
 # A new watcher must never race the one already running for the same release.

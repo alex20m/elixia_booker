@@ -264,6 +264,19 @@ describe('the booking watcher', () => {
     expect(schedule?.[0]?.cron).not.toBe('* * * * *');
   });
 
+  it('does not schedule on the hour, GitHub’s own worst time for schedule delay', () => {
+    // GitHub documents that scheduled triggers are most likely to be delayed
+    // — or dropped outright — at the start of every hour, since that's when
+    // load across all of Actions peaks. A watcher scheduled at minute 0 can
+    // go multiple cycles with no run ever created (not queued, not failed,
+    // just absent), leaving no watcher awake for hours: this happened for
+    // real and cost a missed booking. Picking any other minute avoids that
+    // shared peak.
+    const schedule = (watch.on as { schedule?: { cron: string }[] } | undefined)?.schedule;
+    const minuteField = schedule?.[0]?.cron.split(' ')[0];
+    expect(minuteField).not.toBe('0');
+  });
+
   it('never lets two watchers race for the same release', () => {
     const text = readFileSync(
       fileURLToPath(new URL('../.github/workflows/watch.yml', import.meta.url)),
