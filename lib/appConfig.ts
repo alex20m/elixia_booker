@@ -38,6 +38,22 @@ export interface AppConfig {
   // for during setup instead; see lib/service.ts `completeSetup`.
   /** Shared secret the cron endpoints require. */
   cronSecret?: string;
+  /**
+   * QStash API token. Without one, release instants are not published and the
+   * GitHub Actions watcher remains the only thing driving booking — see
+   * lib/qstash.ts for why that scheduler is the one being replaced.
+   */
+  qstashToken?: string;
+  /**
+   * This deployment's own public origin, e.g. https://booker.example.
+   *
+   * Needed only because QStash calls the app from outside: a scheduled message
+   * has to carry an absolute URL, and nothing else in the app has ever needed
+   * to know its own address. Without it the QStash path stays dormant, since a
+   * message pointed at the wrong origin fails silently at delivery time rather
+   * than here.
+   */
+  appUrl?: string;
   /** True when running on the in-memory repo, which does not survive requests. */
   ephemeralStore: boolean;
   /**
@@ -118,6 +134,8 @@ export function loadAppConfig(options: LoadOptions = {}): AppConfig {
     dryRun: flag(process.env.DRY_RUN),
     mock: flag(process.env.MOCK_ELIXIA),
     ...(process.env.CRON_SECRET ? { cronSecret: process.env.CRON_SECRET } : {}),
+    ...(process.env.QSTASH_TOKEN ? { qstashToken: process.env.QSTASH_TOKEN } : {}),
+    ...(process.env.APP_URL ? { appUrl: process.env.APP_URL } : {}),
     ephemeralStore: options.repo === undefined,
   };
 }
