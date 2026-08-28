@@ -333,6 +333,24 @@ treating an absent status as meaningful, then poll.
   get the deployment's `readyState`, and `vercel inspect <url> --logs` for the
   build log once you know which deployment to look at.
 
+**Check that your GitHub tooling can actually reach an arbitrary commit before
+relying on the first option.** A plain `gh api repos/<owner>/<repo>/commits/<sha>/status`
+(or the check-runs equivalent) works for any commit and needs nothing beyond
+what step 3 already used — but a GitHub *MCP* server's status/check-run calls
+are commonly wrapped as PR methods (e.g. `pull_request_read` with
+`get_status` / `get_check_runs`, taking a `pullNumber`), and a closed PR's
+`head.sha` is the old branch head, never the new merge commit. Where that is
+all you have — verified against the `mcp__github__` server bundled with
+Claude Code Remote sessions, which exposes no commit-scoped equivalent — the
+first bullet is not actually reachable post-merge, whatever it looks like
+from the description alone. Try it once to confirm rather than assuming
+either way. If it is unreachable and no platform token is available either,
+say exactly that in the task report instead of claiming the deploy was
+confirmed: hand back the dashboard link the platform's own bot comment
+already posted on the PR (Vercel's `inspectorUrl`/`target_url`) for a human
+to check, rather than silently skipping step 8 or guessing at the outcome
+from the PR's pre-merge preview build.
+
 Poll on the same cadence as step 2 — wait, then check one field, don't spin.
 Terminal states:
 
