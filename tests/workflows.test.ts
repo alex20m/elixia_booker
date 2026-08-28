@@ -300,3 +300,64 @@ describe('the booking watcher', () => {
     expect(commands).toMatch(/\/api\/cron\/next/);
   });
 });
+
+describe('the booking watchdog', () => {
+  // A cheap, frequent safety net for the watcher above: GitHub can drop a
+  // scheduled trigger outright rather than just delay it (see the watcher's
+  // own header comment for the incident that proved it), and when that
+  // happens nothing else notices — no failed run, nothing queued, just an
+  // absent one. This checks whether a watcher is currently active and
+  // re-dispatches one when it isn't, on a much tighter cadence than the
+  // watcher's own.
+  const watchdogText = readFileSync(
+    fileURLToPath(new URL('../.github/workflows/watchdog.yml', import.meta.url)),
+    'utf8',
+  );
+  const watchdog = parse(watchdogText) as Workflow & {
+    jobs: Record<string, Job & { 'timeout-minutes'?: number }>;
+  };
+
+  it('checks hourly, far tighter than the watcher’s own 3-hour cadence', () => {
+    // Bounds how long a dropped watcher trigger can go unnoticed to about an
+    // hour instead of up to three.
+    const schedule = (watchdog.on as { schedule?: { cron: string }[] } | undefined)?.schedule;
+    const [minute, hour] = schedule?.[0]?.cron.split(' ') ?? [];
+    expect(hour).toBe('*');
+    expect(minute).not.toBe('*');
+  });
+
+  it('lands on a different minute than the watcher, so one load spike can’t drop both', () => {
+    const watcher = parse(
+      readFileSync(fileURLToPath(new URL('../.github/workflows/watch.yml', import.meta.url)), 'utf8'),
+    ) as Workflow;
+    const watcherMinute = (watcher.on as { schedule?: { cron: string }[] } | undefined)?.schedule?.[0]?.cron.split(
+      ' ',
+    )[0];
+    const watchdogMinute = (watchdog.on as { schedule?: { cron: string }[] } | undefined)?.schedule?.[0]?.cron.split(
+      ' ',
+    )[0];
+
+    expect(watchdogMinute).toBeDefined();
+    expect(watchdogMinute).not.toBe(watcherMinute);
+  });
+
+  it('only re-dispatches when no watcher run is active, rather than piling on regardless', () => {
+    // A blind dispatch every hour would just be a second, uncoordinated
+    // scheduler. The concurrency group on watch.yml would absorb the excess,
+    // but the check should still gate the action rather than fire blindly.
+    const commands = commandsOf(watchdog, 'watchdog');
+    expect(commands).toMatch(/gh run list/);
+    expect(commands).toMatch(/gh workflow run/);
+    expect(commands).toMatch(/if\s*\[\s*"\$active"\s*-eq 0\s*\]/);
+  });
+
+  it('has only the permission it needs to list and dispatch runs', () => {
+    expect(watchdog.permissions).toEqual({ actions: 'write' });
+  });
+
+  it('stops itself quickly rather than lingering like the watcher it checks on', () => {
+    const timeout = watchdog.jobs.watchdog?.['timeout-minutes'];
+    expect(timeout).toBeGreaterThan(0);
+    expect(timeout).toBeLessThanOrEqual(10);
+  });
+});
