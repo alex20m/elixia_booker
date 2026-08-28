@@ -127,6 +127,24 @@ export class ClassNotListedError extends Error {
 }
 
 /**
+ * Elixia said no to this email and password.
+ *
+ * Its own type because it is the one login failure that is the *user's* to
+ * fix. Everything else that can go wrong in the sign-in chain — the site being
+ * unreachable, the Keycloak form having changed shape, a redirect loop — says
+ * nothing about whether the credentials are good, and telling someone their
+ * password is wrong during an outage sends them hunting for a typo that is not
+ * there. The two have to be told apart at the point they are raised, because
+ * by the time they reach the browser they are both just "login failed".
+ */
+export class ElixiaCredentialsRejected extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ElixiaCredentialsRejected';
+  }
+}
+
+/**
  * The centre is not one Elixia has.
  *
  * Told apart from a listing that came back empty, because the two look

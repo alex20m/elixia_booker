@@ -214,6 +214,35 @@ describe('linking a gym account', () => {
     expect(stored!.elixiaSecret).toBeUndefined();
   });
 
+  it('refuses the link when Elixia could not be reached, without blaming the password', async () => {
+    // An outage must not be reported as "wrong password" — the user would go
+    // hunting for a typo in credentials that are perfectly good — and it must
+    // not link the account either, since nothing was verified.
+    // A working backend in every other respect — only reaching Elixia fails.
+    const offline: BookingBackend = Object.assign(new MockElixiaClient(), {
+      login: async (): Promise<StoredTokens> => {
+        throw new Error('fetch failed');
+      },
+    });
+    const profile = await getOrCreateProfile({ ...config, backend: offline }, USER_ID);
+
+    const err = await linkElixia(
+      { ...config, backend: offline },
+      profile,
+      'gym@example.com',
+      'correct-horse',
+      nowMs,
+    ).catch((e: unknown) => e as ServiceError);
+
+    expect(err).toBeInstanceOf(ServiceError);
+    expect((err as ServiceError).status).toBe(502);
+    expect((err as ServiceError).message).not.toMatch(/rejected/i);
+
+    const stored = await repo.getProfile(USER_ID);
+    expect(stored!.elixiaStatus).toBe('unlinked');
+    expect(stored!.elixiaSecret).toBeUndefined();
+  });
+
   it('requires both fields', async () => {
     const profile = await getOrCreateProfile(config, USER_ID);
     await expect(linkElixia(config, profile, '', 'pw', nowMs)).rejects.toThrow(/required/);

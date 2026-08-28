@@ -22,7 +22,12 @@
  *      something the booking call would choke on.
  */
 
-import { ClassNotListedError, UnknownCenterError, WEEKDAYS } from './types';
+import {
+  ClassNotListedError,
+  ElixiaCredentialsRejected,
+  UnknownCenterError,
+  WEEKDAYS,
+} from './types';
 import type {
   AttemptOutcome,
   CenterOption,
@@ -35,7 +40,7 @@ import type {
 // Defined in types.ts, not here, so booking.ts can branch on it without
 // depending on the adapter. Re-exported because this is the file whose
 // functions throw it.
-export { ClassNotListedError, UnknownCenterError };
+export { ClassNotListedError, ElixiaCredentialsRejected, UnknownCenterError };
 
 /**
  * What the booking engine needs from a backend.
@@ -141,19 +146,43 @@ function jarHeader(jar: Map<string, string>): string {
  * `Headers#get('set-cookie')` collapses multiple cookies into one
  * comma-joined string that cannot be split back apart safely, since a
  * `Max-Age`/`Expires` value can itself contain a comma.
+ *
+ * **A deletion removes the cookie rather than storing it.** A server clears a
+ * cookie by re-setting it empty with `Max-Age=0`, which is what a signed-out
+ * visit to www.elixia.fi does to `.SATS_GROUP_AUTH` on the way to the login
+ * form. Keeping that in the jar puts the session cookie's *name* there without
+ * a session behind it — and the name is precisely what `performElixiaLogin`
+ * reads as "signed in". (`Expires` in the past is the other deletion spelling;
+ * it was not observed in any captured run, so it is not parsed here.)
+ *
+ * `issued`, when given, collects the names this response actually set, so a
+ * caller can ask what one particular request produced rather than what the jar
+ * has accumulated over the whole chain.
  */
-function absorbSetCookies(headers: Headers, jar: Map<string, string>, ttl: { ms: number }): void {
+function absorbSetCookies(
+  headers: Headers,
+  jar: Map<string, string>,
+  ttl: { ms: number },
+  issued?: Set<string>,
+): void {
   for (const line of headers.getSetCookie()) {
     const pair = line.split(';', 1)[0] ?? '';
     const eq = pair.indexOf('=');
     if (eq === -1) continue;
     const name = pair.slice(0, eq).trim();
-    jar.set(name, pair.slice(eq + 1).trim());
+    const value = pair.slice(eq + 1).trim();
+    const maxAge = /max-age=(-?\d+)/i.exec(line);
 
-    if (name === SESSION_COOKIE_NAME) {
-      const maxAge = /max-age=(\d+)/i.exec(line);
-      if (maxAge) ttl.ms = Number(maxAge[1]) * 1000;
+    if (value === '' || (maxAge && Number(maxAge[1]) <= 0)) {
+      jar.delete(name);
+      issued?.delete(name);
+      continue;
     }
+
+    jar.set(name, value);
+    issued?.add(name);
+
+    if (name === SESSION_COOKIE_NAME && maxAge) ttl.ms = Number(maxAge[1]) * 1000;
   }
 }
 
@@ -174,6 +203,7 @@ async function fetchFollowing(
   ttl: { ms: number },
   url: string,
   init: RequestInit = {},
+  issued?: Set<string>,
 ): Promise<Response> {
   let currentUrl = url;
   let currentInit: RequestInit = init;
@@ -184,7 +214,7 @@ async function fetchFollowing(
     if (cookie) headers.set('cookie', cookie);
 
     const response = await fetchImpl(currentUrl, { ...currentInit, headers, redirect: 'manual' });
-    absorbSetCookies(response.headers, jar, ttl);
+    absorbSetCookies(response.headers, jar, ttl, issued);
 
     if (response.status < 300 || response.status >= 400) return response;
     const location = response.headers.get('location');
@@ -247,18 +277,37 @@ export async function performElixiaLogin(
     );
   }
 
-  await fetchFollowing(fetchImpl, jar, ttl, action, {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ username: email, password, credentialId: '' }).toString(),
-  });
+  // Which cookies *this* request produced, as opposed to what the jar picked
+  // up on the way to the form. The distinction is the whole check below.
+  const issued = new Set<string>();
+  await fetchFollowing(
+    fetchImpl,
+    jar,
+    ttl,
+    action,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ username: email, password, credentialId: '' }).toString(),
+    },
+    issued,
+  );
 
   // A wrong password does not come back as an error status — Keycloak
   // re-renders the same login form (HTTP 200, no redirect) instead. So
   // "the session cookie never showed up" is the actual failure signal here,
   // not any particular status code.
-  if (!jar.has(SESSION_COOKIE_NAME)) {
-    throw new Error('Elixia rejected the email or password');
+  //
+  // It has to be the cookie *this submission* earned, not merely one sitting
+  // in the jar: only the post-login callback on www.elixia.fi issues a real
+  // `.SATS_GROUP_AUTH` (docs/api.md §1), but the hops that lead to the form
+  // can leave the same name behind — a sign-out clears it by re-setting it
+  // empty, and a `Set-Cookie` from any earlier hop would do just as well.
+  // Reading the jar alone would then accept any password at all, seal the
+  // credentials as verified, and leave the booker to fail silently weeks
+  // later against a session it never had.
+  if (!issued.has(SESSION_COOKIE_NAME)) {
+    throw new ElixiaCredentialsRejected('Elixia rejected the email or password');
   }
 
   return {

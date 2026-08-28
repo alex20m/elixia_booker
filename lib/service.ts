@@ -38,7 +38,7 @@ import {
 import { DEFAULT_TIMINGS } from './config';
 import { createLimiter, type Limiter } from './concurrency';
 import { needsRefresh } from './tokens';
-import { isConfigured, UnknownCenterError, WEEKDAYS } from './types';
+import { isConfigured, ElixiaCredentialsRejected, UnknownCenterError, WEEKDAYS } from './types';
 import type { AppConfig } from './appConfig';
 import type {
   BookingConfig,
@@ -374,10 +374,25 @@ export async function linkElixia(
     throw new ServiceError('Elixia email and password are required', 400);
   }
 
+  // Nothing is stored unless Elixia itself accepts the pair: an account linked
+  // on unverified credentials looks healthy on the dashboard and then fails at
+  // T-0, weeks later, on the one request that had to work.
   let tokens;
   try {
     tokens = await backendFor(config).login(email.trim(), password, nowMs);
   } catch (err) {
+    // Only a real rejection is reported as one. Everything else — Elixia
+    // unreachable, the sign-in flow changed shape — is a failure to *check*,
+    // and saying "wrong password" there sends someone hunting for a typo in
+    // credentials that are fine. Either way the link is refused, because in
+    // neither case has anything been verified.
+    if (!(err instanceof ElixiaCredentialsRejected)) {
+      const detail = config.mock ? ` (${(err as Error).message})` : '';
+      throw new ServiceError(
+        `Could not reach Elixia to check those credentials${detail}. Try again in a moment.`,
+        502,
+      );
+    }
     const detail = config.mock ? ` (${(err as Error).message})` : '';
     throw new ServiceError(`Elixia rejected those credentials${detail}`, 401);
   }
