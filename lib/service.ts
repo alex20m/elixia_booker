@@ -35,6 +35,7 @@ import {
   telegramDeepLink,
 } from './telegramLink';
 import { DEFAULT_TIMINGS } from './config';
+import { createLimiter, type Limiter } from './concurrency';
 import { needsRefresh } from './tokens';
 import { isConfigured, UnknownCenterError, WEEKDAYS } from './types';
 import type { AppConfig } from './appConfig';
@@ -1048,12 +1049,41 @@ export interface TickClock {
 const MINUTE_MS = 60_000;
 
 /**
+ * How much of a tick's *off-race* work may run at once.
+ *
+ * Preparation and follow-up are gated so a busy release minute cannot open one
+ * database connection and one gym login per user simultaneously; the race to
+ * T-0 never is. See lib/concurrency.ts for why gating the race would be the
+ * bug rather than the fix.
+ */
+const TICK_CONCURRENCY = 8;
+
+/** Everything one user's bookings need in hand before the release instant. */
+interface PreparedUser {
+  profile: ConfiguredProfile;
+  subscriptions: Subscription[];
+  tokens: StoredTokens;
+}
+
+/**
  * Book everything due right now, across all users.
  *
  * The window spans the previous, current and next minute: the next minute gives
  * the handler lead time to prepare a session before sleeping to the exact
  * instant, and the previous one means a tick that fires late still finds the
  * slot rather than skipping it.
+ *
+ * **Every due booking races on its own.** This used to be one loop — user after
+ * user, class after class — which quietly made a release a queue: the second
+ * user's booking did not begin its sleep to T-0 until the first user's had
+ * finished retrying, written history and sent a notification. One user retrying
+ * for ten seconds pushed everyone behind them ten seconds past the instant they
+ * were promised, and the further down the loop you were, the worse it got.
+ * There is no ordering here worth that: the bookings are independent, and the
+ * whole design of lib/booking.ts is that nothing stands between T-0 and the
+ * POST. So preparation runs for all users at once, every booking then sleeps to
+ * its own release, and history and notifications happen afterwards, off
+ * everyone else's critical path.
  */
 export async function runDueBookings(
   config: AppConfig,
@@ -1071,74 +1101,157 @@ export async function runDueBookings(
   }
 
   const backend = backendFor(config);
-  let handled = 0;
+  const gate = createLimiter(TICK_CONCURRENCY);
 
-  for (const [userId, userEntries] of byUser) {
-    const profile = await config.repo.getProfile(userId);
-    // Unconfigured is not merely unusual here, it is unreachable: linking a gym
-    // account is behind setup, and a due entry only exists for a linked one.
-    // Skipping rather than defaulting keeps it that way — a release computed
-    // from a guessed timezone fires at the wrong minute and books nothing.
-    if (!profile || !isConfigured(profile) || profile.elixiaStatus !== 'ok') continue;
+  const handledPerUser = await Promise.all(
+    [...byUser].map(([userId, userEntries]) =>
+      bookForUser(config, backend, gate, userId, userEntries, nowMs, clock),
+    ),
+  );
 
-    const subscriptions = await config.repo.listSubscriptions(userId);
-    const timings = timingConfig(profile);
+  return handledPerUser.reduce((total, n) => total + n, 0);
+}
 
-    // Prepare the session before sleeping to T-0, never during the race.
-    let tokens;
-    try {
-      tokens = await elixiaSession(config, profile, backend, nowMs);
-    } catch (err) {
-      // Loud, not silent: mark it dead so the UI prompts for re-linking.
-      await config.repo.upsertProfile({
-        ...profile,
-        elixiaStatus: 'expired',
-        elixiaCheckedAtMs: nowMs,
-      });
-      logger.log('session.dead', {
-        userId,
-        error: err instanceof DecryptionError ? 'decryption failed' : (err as Error).message,
-      });
-      await announce(
-        config,
-        profile,
+/**
+ * One user's share of a tick: prepare once, then race every entry at once.
+ *
+ * Failures are contained here rather than propagating. Now that users run
+ * concurrently, letting one rejection out of `Promise.all` would abandon
+ * everybody else's bookings mid-race — a database hiccup reading one profile
+ * would cost every other user their slot, which is precisely the coupling this
+ * function exists to remove.
+ */
+async function bookForUser(
+  config: AppConfig,
+  backend: BookingBackend,
+  gate: Limiter,
+  userId: string,
+  entries: DueEntry[],
+  nowMs: number,
+  clock: TickClock,
+): Promise<number> {
+  const logger = new Logger(clock.now);
+
+  let loaded: PreparedUser | null;
+  try {
+    loaded = await gate(() => prepareUser(config, backend, logger, userId, nowMs));
+  } catch (err) {
+    logger.log('user.failed', { userId, stage: 'prepare', error: (err as Error).message });
+    return 0;
+  }
+  if (!loaded) return 0;
+
+  const prepared = loaded;
+  const results = await Promise.all(
+    entries.map((entry) => bookEntry(config, backend, gate, prepared, entry, nowMs, clock)),
+  );
+
+  return results.filter(Boolean).length;
+}
+
+/**
+ * Load the profile, its classes and a live gym session.
+ *
+ * Returns null when this user has nothing to do — the two "skip quietly"
+ * cases below — and throws only when something unexpected went wrong.
+ */
+async function prepareUser(
+  config: AppConfig,
+  backend: BookingBackend,
+  logger: Logger,
+  userId: string,
+  nowMs: number,
+): Promise<PreparedUser | null> {
+  const profile = await config.repo.getProfile(userId);
+  // Unconfigured is not merely unusual here, it is unreachable: linking a gym
+  // account is behind setup, and a due entry only exists for a linked one.
+  // Skipping rather than defaulting keeps it that way — a release computed
+  // from a guessed timezone fires at the wrong minute and books nothing.
+  if (!profile || !isConfigured(profile) || profile.elixiaStatus !== 'ok') return null;
+
+  const subscriptions = await config.repo.listSubscriptions(userId);
+
+  // Prepare the session before sleeping to T-0, never during the race.
+  let tokens;
+  try {
+    tokens = await elixiaSession(config, profile, backend, nowMs);
+  } catch (err) {
+    // Loud, not silent: mark it dead so the UI prompts for re-linking.
+    await config.repo.upsertProfile({
+      ...profile,
+      elixiaStatus: 'expired',
+      elixiaCheckedAtMs: nowMs,
+    });
+    logger.log('session.dead', {
+      userId,
+      error: err instanceof DecryptionError ? 'decryption failed' : (err as Error).message,
+    });
+    await announce(
+      config,
+      profile,
+      logger,
+      '🚨 Elixia rejected your saved credentials and booking is paused. Re-link your account to resume.',
+    );
+    return null;
+  }
+
+  return { profile, subscriptions, tokens };
+}
+
+/**
+ * Race one release, then record it.
+ *
+ * The logger is per-booking, not shared with the rest of the tick: every line
+ * it writes is stamped with its offset from *this* booking's T-0, and two
+ * bookings running side by side have two different T-0s. A shared logger would
+ * measure one booking's lines against the other's release instant, which turns
+ * the one number the log exists to report into a lie.
+ */
+async function bookEntry(
+  config: AppConfig,
+  backend: BookingBackend,
+  gate: Limiter,
+  prepared: PreparedUser,
+  entry: DueEntry,
+  nowMs: number,
+  clock: TickClock,
+): Promise<boolean> {
+  const { profile, subscriptions, tokens } = prepared;
+  const subscription = subscriptions.find((s) => s.id === entry.subscriptionId);
+  // The schedule is derived data; live subscriptions are the authority.
+  if (!subscription || !subscription.enabled) return false;
+
+  const logger = new Logger(clock.now);
+
+  try {
+    const report = await executeBooking(
+      {
+        desired: {
+          ...subscription,
+          bookingWindowDays: subscription.bookingWindowDays ?? profile.bookingWindowDays,
+        },
+        releaseEpochMs: entry.releaseEpochMs,
+        classEpochMs: entry.classEpochMs,
+        classDate: entry.classDate,
+        ...(entry.releaseNote ? { releaseNote: entry.releaseNote } : {}),
+      },
+      {
+        book: (t, classId, signal) => backend.book(t, classId, signal),
+        resolveClassId: (planned) => backend.resolveClassId(tokens, subscription, planned.classDate),
+        tokens,
         logger,
-        '🚨 Elixia rejected your saved credentials and booking is paused. Re-link your account to resume.',
-      );
-      continue;
-    }
+        config: timingConfig(profile),
+        dryRun: config.dryRun,
+        ...(clock.now ? { now: clock.now } : {}),
+        ...(clock.sleep ? { sleep: clock.sleep } : {}),
+        ...(clock.deadlineMs !== undefined ? { deadlineMs: clock.deadlineMs } : {}),
+      },
+    );
 
-    for (const entry of userEntries) {
-      const subscription = subscriptions.find((s) => s.id === entry.subscriptionId);
-      // The schedule is derived data; live subscriptions are the authority.
-      if (!subscription || !subscription.enabled) continue;
-
-      const report = await executeBooking(
-        {
-          desired: {
-            ...subscription,
-            bookingWindowDays: subscription.bookingWindowDays ?? profile.bookingWindowDays,
-          },
-          releaseEpochMs: entry.releaseEpochMs,
-          classEpochMs: entry.classEpochMs,
-          classDate: entry.classDate,
-          ...(entry.releaseNote ? { releaseNote: entry.releaseNote } : {}),
-        },
-        {
-          book: (t, classId, signal) => backend.book(t, classId, signal),
-          resolveClassId: (planned) =>
-            backend.resolveClassId(tokens!, subscription, planned.classDate),
-          tokens,
-          logger,
-          config: timings,
-          dryRun: config.dryRun,
-          ...(clock.now ? { now: clock.now } : {}),
-          ...(clock.sleep ? { sleep: clock.sleep } : {}),
-          ...(clock.deadlineMs !== undefined ? { deadlineMs: clock.deadlineMs } : {}),
-        },
-      );
-
-      await config.repo.appendHistory(userId, {
+    // Gated: the slot is already won or lost by now, and a hundred users all
+    // writing history and sending mail at once is load nobody is waiting on.
+    await gate(async () => {
+      await config.repo.appendHistory(profile.id, {
         atMs: nowMs,
         subscriptionId: subscription.id,
         className: subscription.className,
@@ -1152,11 +1265,17 @@ export async function runDueBookings(
       });
 
       await announce(config, profile, logger, describeReport(report));
-      handled += 1;
-    }
-  }
+    });
 
-  return handled;
+    return true;
+  } catch (err) {
+    logger.log('booking.failed', {
+      userId: profile.id,
+      subscriptionId: subscription.id,
+      error: (err as Error).message,
+    });
+    return false;
+  }
 }
 
 /** Nightly: reproject every linked profile, and drop releases long past. */

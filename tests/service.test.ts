@@ -26,7 +26,12 @@ import { releasesInRange } from '../lib/planner';
 import { MockElixiaClient } from '../lib/mock';
 import type { BookingBackend } from '../lib/elixia';
 import type { AppConfig } from '../lib/appConfig';
-import type { ConfiguredProfile, Subscription } from '../lib/types';
+import type {
+  AttemptOutcome,
+  ConfiguredProfile,
+  StoredTokens,
+  Subscription,
+} from '../lib/types';
 
 /**
  * The application's behaviour without HTTP or a database: create a profile, link
@@ -50,11 +55,46 @@ function setNow(ms: number): void {
   vi.setSystemTime(ms);
 }
 
-/** A clock for the cron that advances instantly instead of really sleeping. */
-const instantClock = () => ({
-  now: () => nowMs,
-  sleep: async (ms: number) => setNow(nowMs + ms),
-});
+/**
+ * A clock for the cron that advances instantly instead of really sleeping.
+ *
+ * Virtual, not additive: `sleep` registers a wake-up instant and the clock
+ * jumps to the earliest one still pending. Two bookings sleeping 30s side by
+ * side both wake at +30s, where simply adding to the clock would push it to
+ * +60s — making concurrent waits indistinguishable from consecutive ones,
+ * which is the single distinction the fairness tests below are about.
+ */
+const instantClock = () => {
+  const waiters: { at: number; wake: () => void }[] = [];
+  let pumping = false;
+
+  async function pump(): Promise<void> {
+    if (pumping) return;
+    pumping = true;
+    while (waiters.length > 0) {
+      // Let everything that can make progress at the current instant do so, so
+      // the clock only moves when the run is genuinely waiting on it.
+      for (let i = 0; i < 20; i += 1) await new Promise((r) => setImmediate(r));
+
+      const earliest = Math.min(...waiters.map((w) => w.at));
+      if (earliest > nowMs) setNow(earliest);
+
+      const ready = waiters.filter((w) => w.at <= nowMs);
+      for (const w of ready) waiters.splice(waiters.indexOf(w), 1);
+      for (const w of ready) w.wake();
+    }
+    pumping = false;
+  }
+
+  return {
+    now: () => nowMs,
+    sleep: (ms: number) =>
+      new Promise<void>((wake) => {
+        waiters.push({ at: nowMs + ms, wake });
+        void pump();
+      }),
+  };
+};
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
@@ -547,6 +587,149 @@ describe('the booking tick', () => {
 
     expect(handled).toBe(1);
     expect(await repo.listHistory(profile.id)).toHaveLength(1);
+  });
+});
+
+/**
+ * A release is a race, and it has to be the same race for everyone in it.
+ *
+ * These are the tests for the tick handling users concurrently rather than one
+ * after another. The measurement they all turn on is `firstAttemptOffsetMs`:
+ * how far from T-0 a booking's first request actually went out. A booking that
+ * has to queue behind someone else's retries does not fail — it just fires
+ * seconds late, wins nothing, and reports a perfectly ordinary miss.
+ */
+describe('a release with several users in it', () => {
+  /** Ten seconds of booking, the length of a full-ish retry sequence. */
+  const SLOW_BOOKING_MS = 10_000;
+
+  /** The mock gym, but every booking request takes real time to come back. */
+  class SlowBookingBackend extends MockElixiaClient {
+    constructor(
+      private readonly pause: (ms: number) => Promise<void>,
+      private readonly delayMs: number,
+    ) {
+      super();
+    }
+
+    override async book(tokens: StoredTokens, classId: string): Promise<AttemptOutcome> {
+      await this.pause(this.delayMs);
+      return super.book(tokens, classId);
+    }
+  }
+
+  /** Both of these run on Tuesday at 09:00, so they share a release instant. */
+  const SPIN = { ...BODYPUMP, className: 'Full House Spin' };
+
+  async function offsetsByClass(userId: string): Promise<Record<string, number | null>> {
+    const history = await repo.listHistory(userId);
+    return Object.fromEntries(history.map((h) => [h.className, h.firstAttemptOffsetMs]));
+  }
+
+  it('fires every user’s booking at T-0, however slow another user’s is', async () => {
+    const alice = await linkedProfile(USER_ID, 'alice@example.com');
+    const bob = await linkedProfile(OTHER_ID, 'bob@example.com');
+    const aliceSub = await addSubscription(config, alice, BODYPUMP, nowMs);
+    const bobSub = await addSubscription(config, bob, SPIN, nowMs);
+
+    // The premise: without one shared release instant there is no race to be
+    // fair about, and the assertions below would prove nothing.
+    const release = firstRelease(aliceSub);
+    expect(firstRelease(bobSub)).toBe(release);
+
+    setNow(release - 30_000);
+    const clock = instantClock();
+    config.backend = new SlowBookingBackend(clock.sleep, SLOW_BOOKING_MS);
+
+    expect(await runDueBookings(config, nowMs, clock)).toBe(2);
+
+    // Serially, whoever went second could not even start sleeping to T-0 until
+    // the first user's ten-second booking had come back.
+    expect((await offsetsByClass(alice.id))['Bodypump']).toBe(0);
+    expect((await offsetsByClass(bob.id))['Full House Spin']).toBe(0);
+  });
+
+  it('fires a user’s second class at T-0 rather than after their first', async () => {
+    // The same queue, one level down: two classes opening at the same instant
+    // for one person are still two independent races.
+    const profile = await linkedProfile();
+    const first = await addSubscription(config, profile, BODYPUMP, nowMs);
+    const second = await addSubscription(config, profile, SPIN, nowMs);
+    expect(firstRelease(second)).toBe(firstRelease(first));
+
+    setNow(firstRelease(first) - 30_000);
+    const clock = instantClock();
+    config.backend = new SlowBookingBackend(clock.sleep, SLOW_BOOKING_MS);
+
+    expect(await runDueBookings(config, nowMs, clock)).toBe(2);
+
+    const offsets = await offsetsByClass(profile.id);
+    expect(offsets['Bodypump']).toBe(0);
+    expect(offsets['Full House Spin']).toBe(0);
+  });
+
+  it('books everyone else when one user’s profile cannot be read', async () => {
+    // Concurrency turns a single failed read into a shared failure unless each
+    // user's run is contained: one rejection would abandon every booking still
+    // sleeping towards T-0.
+    const alice = await linkedProfile(USER_ID, 'alice@example.com');
+    const bob = await linkedProfile(OTHER_ID, 'bob@example.com');
+    const sub = await addSubscription(config, alice, BODYPUMP, nowMs);
+    await addSubscription(config, bob, SPIN, nowMs);
+
+    const getProfile = repo.getProfile.bind(repo);
+    config.repo = {
+      ...repo,
+      getProfile: async (userId: string) => {
+        if (userId === alice.id) throw new Error('connection reset');
+        return getProfile(userId);
+      },
+    };
+
+    setNow(firstRelease(sub) - 30_000);
+    expect(await runDueBookings(config, nowMs, instantClock())).toBe(1);
+    expect(await repo.listHistory(bob.id)).toHaveLength(1);
+  });
+
+  it('measures each booking’s log against its own release, not another’s', async () => {
+    // Every log line carries its distance from T-0, and that is the number
+    // anyone diagnosing a missed class reads first. Two bookings running side
+    // by side have two different T-0s, so they cannot share the logger that
+    // stamps them.
+    const alice = await linkedProfile(USER_ID, 'alice@example.com');
+    const bob = await linkedProfile(OTHER_ID, 'bob@example.com');
+    const aliceSub = await addSubscription(config, alice, BODYPUMP, nowMs);
+    const bobSub = await addSubscription(config, bob, BODYPUMP, nowMs);
+
+    // Releases the mock timetable cannot express — 30s apart, both inside the
+    // tick's claim window — written straight into the schedule.
+    const tickAt = nowMs;
+    const scheduled = await repo.claimDue(0, tickAt + 30 * 86_400_000);
+    const rewrite = async (userId: string, subscriptionId: string, releaseEpochMs: number) => {
+      const entry = scheduled.find((e) => e.subscriptionId === subscriptionId);
+      // replaceDueEntries writes fresh, unclaimed rows, so the tick below can
+      // still claim them despite the read above having taken the originals.
+      await repo.replaceDueEntries(userId, [{ ...entry!, releaseEpochMs }]);
+    };
+    await rewrite(alice.id, aliceSub.id, tickAt + 10_000);
+    await rewrite(bob.id, bobSub.id, tickAt + 40_000);
+
+    const lines: Record<string, unknown>[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line: string) => {
+      lines.push(JSON.parse(line) as Record<string, unknown>);
+    });
+
+    try {
+      expect(await runDueBookings(config, tickAt, instantClock())).toBe(2);
+    } finally {
+      spy.mockRestore();
+    }
+
+    const attempts = lines.filter((l) => l['event'] === 'attempt.result');
+    expect(attempts).toHaveLength(2);
+    // Each request went out at its own release instant, so each line's own
+    // offset is zero. A shared target would report one of them 30s out.
+    expect(attempts.map((l) => l['offsetMs'])).toEqual([0, 0]);
   });
 });
 
