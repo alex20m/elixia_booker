@@ -142,9 +142,12 @@ describe('NavMenu', () => {
     expect(signOut).toHaveBeenCalledTimes(1);
   });
 
-  it('also offers sign out directly in the bar, for the width where the menu behind the button would otherwise hold nothing else', async () => {
+  /* The bar's own copy, for the width where there is no menu to open. Same
+     assertion as above rather than a rendering one, because which of the two
+     is on screen is CSS's business and this file has no layout. */
+  it('signs out from the bar, where there is no menu to open', async () => {
     render();
-    await click(byId('bar-signout-btn'));
+    await click(byId('nav-signout-btn'));
 
     expect(signOut).toHaveBeenCalledTimes(1);
   });
