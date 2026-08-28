@@ -15,6 +15,7 @@ import {
 } from '@/lib/dashboardState';
 import type { DashboardView } from '@/lib/service';
 import { AccountCard } from './AccountCard';
+import { ElixiaLink } from './ElixiaLink';
 import AddClass from './AddClass';
 import Setup from './Setup';
 import { SettingsPanel } from './SettingsPanel';
@@ -24,7 +25,7 @@ import { BusyBar, LoadingScreen, SkeletonCard, SkeletonList } from './components
 import { NavMenu, type NavSection } from './components/NavMenu';
 import { Shell } from './components/Shell';
 import { SignOutButton } from './components/SignOutButton';
-import { CalendarIcon, CheckIcon, PulseIcon, SlidersIcon } from './components/icons';
+import { CalendarIcon, PulseIcon, SlidersIcon } from './components/icons';
 import { ThemeChoiceControl } from './components/theme';
 
 const OUTCOME_LABELS: Record<string, [string, string]> = {
@@ -348,117 +349,6 @@ function SettingsTab({
 
       <p className="foot">Books only your own account. Retries are bounded and rate-limit aware.</p>
     </>
-  );
-}
-
-function ElixiaLink({ view, refresh }: { view: DashboardView; refresh: () => Promise<void> }) {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-
-  if (view.account.elixiaStatus === 'ok') {
-    return (
-      <section className="card">
-        <div className="card-head">
-          <h2 className="card-title">Gym account</h2>
-          <span className="pill pill-ok">
-            <CheckIcon size={13} /> Connected
-          </span>
-        </div>
-        <div className="row">
-          <div className="row-main">
-            <div className="row-title" id="account-line">
-              {view.account.elixiaEmail}
-            </div>
-            <div className="row-meta">Credentials stored encrypted</div>
-          </div>
-          <div className="row-actions">
-            <ActionButton
-              className="btn-danger btn-sm"
-              id="unlink-btn"
-              pendingLabel="Unlinking…"
-              onClick={async () => {
-                await api('/api/elixia', { method: 'DELETE' });
-                await refresh();
-              }}
-            >
-              Unlink
-            </ActionButton>
-          </div>
-        </div>
-      </section>
-    );
-  }
-
-  return (
-    <section className="card">
-      <div className="card-head">
-        <div>
-          <h2 className="card-title">Link your Elixia account</h2>
-          <p className="card-sub">Booker needs it to reserve classes on your behalf.</p>
-        </div>
-      </div>
-
-      {view.account.elixiaStatus === 'expired' && (
-        <div className="banner banner-warn mt-m">
-          <span>
-            Elixia rejected the saved credentials, so booking is paused. Re-link to resume.
-          </span>
-        </div>
-      )}
-      {error && (
-        <div className="banner banner-err mt-m">
-          <span>{error}</span>
-        </div>
-      )}
-
-      <div className="grid-2">
-        <div className="field">
-          <label htmlFor="ex-email">Elixia email</label>
-          <input
-            id="ex-email"
-            type="email"
-            autoComplete="username"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-          />
-        </div>
-        <div className="field">
-          <label htmlFor="ex-password">Elixia password</label>
-          <input
-            id="ex-password"
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-        </div>
-      </div>
-
-      <ActionButton
-        id="link-btn"
-        className="btn-block mt-m"
-        pendingLabel="Checking…"
-        onError={(err) => setError(err.message)}
-        onClick={async () => {
-          setError('');
-          await api('/api/elixia', {
-            method: 'POST',
-            body: JSON.stringify({ email, password }),
-          });
-          setPassword('');
-          await refresh();
-        }}
-      >
-        Link account
-      </ActionButton>
-
-      <p className="hint mt-s">
-        Your Elixia password is stored <strong>encrypted</strong>, because the bot has to
-        re-authenticate on its own when a session expires — otherwise booking would stop silently
-        until you noticed. Unlinking erases it.
-      </p>
-    </section>
   );
 }
 

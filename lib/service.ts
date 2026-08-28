@@ -410,6 +410,44 @@ export async function linkElixia(
   return updated;
 }
 
+/**
+ * Change the email, the password, or both, on a link that already exists.
+ *
+ * The alternative — unlink, then link again — is not merely two steps instead
+ * of one: `unlinkElixia` clears the due-entry queue, so using it to fix a typo
+ * throws away every booking the cron had scheduled. Editing in place keeps the
+ * link, and `linkElixia` reindexes from the same subscriptions afterwards.
+ *
+ * A blank field means different things on either side, because the form treats
+ * them differently. The address arrives prefilled with the stored one, so
+ * clearing it is a deliberate act and is refused rather than silently ignored.
+ * The password field is never prefilled — there is nothing to prefill it with
+ * that would not send the plaintext back to the browser — so leaving it empty
+ * means "keep the stored one", which is what makes an address-only correction
+ * possible without knowing the password by heart.
+ *
+ * Verification is `linkElixia`'s, unchanged: Elixia is asked to accept the
+ * combination before anything is written, so a wrong new password fails the
+ * edit instead of replacing a working link with a broken one.
+ */
+export async function updateElixiaCredentials(
+  config: AppConfig,
+  profile: Profile,
+  changes: { email?: string; password?: string },
+  nowMs: number,
+): Promise<Profile> {
+  if (!profile.elixiaSecret || !profile.elixiaEmail) {
+    throw new ServiceError('No Elixia account linked', 409);
+  }
+
+  const email = changes.email === undefined ? profile.elixiaEmail : changes.email;
+  // Only opened when it is actually needed, so an edit that supplies a password
+  // still works against a secret this deployment's key can no longer decrypt.
+  const password = changes.password ? changes.password : (await openSecret(config, profile)).password;
+
+  return linkElixia(config, profile, email, password, nowMs);
+}
+
 /** Forget the stored credentials entirely and stop booking. */
 export async function unlinkElixia(
   config: AppConfig,

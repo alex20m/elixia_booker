@@ -20,6 +20,7 @@ import {
   saveCenterDefaults,
   ServiceError,
   unlinkElixia,
+  updateElixiaCredentials,
   updateSettings,
 } from '../lib/service';
 import { releasesInRange } from '../lib/planner';
@@ -299,6 +300,148 @@ describe('linking a gym account', () => {
 
     await unlinkElixia(config, profile, nowMs);
     expect(await repo.claimDue(0, nowMs + 30 * 86_400_000)).toHaveLength(0);
+  });
+});
+
+/**
+ * Correcting a mistyped address, or catching up with a password changed at the
+ * gym, without going through unlink-and-link-again.
+ *
+ * That detour was never merely tedious: unlinking erases the schedule (see the
+ * test above), so a member who used it to fix a typo silently lost every
+ * booking the cron had queued and got it back only if the relink happened to
+ * reindex in time. Editing keeps the same link, so there is nothing to lose.
+ *
+ * The two fields are deliberately asymmetric about what a blank means. The
+ * form arrives with the current address filled in, so an empty email is
+ * someone clearing a field and is refused; a password field is never
+ * prefilled — there is nothing to prefill it with that would not put the
+ * plaintext back on the wire — so an empty password means "leave it alone".
+ */
+describe('editing the linked credentials', () => {
+  it('changes the stored address without asking for the password again', async () => {
+    const profile = await linkedProfile();
+
+    await updateElixiaCredentials(config, profile, { email: 'moved@example.com' }, nowMs);
+
+    const stored = await repo.getProfile(USER_ID);
+    expect(stored!.elixiaEmail).toBe('moved@example.com');
+    expect(stored!.elixiaStatus).toBe('ok');
+    // The password the app re-authenticates with is the one already held.
+    expect((await openSecret(config, stored!)).password).toBe('correct-horse');
+  });
+
+  it('changes the stored password while keeping the linked address', async () => {
+    const profile = await linkedProfile();
+
+    await updateElixiaCredentials(config, profile, { password: 'new-passphrase' }, nowMs);
+
+    const stored = await repo.getProfile(USER_ID);
+    expect(stored!.elixiaEmail).toBe('gym@example.com');
+    expect((await openSecret(config, stored!)).password).toBe('new-passphrase');
+    expect(repo.dump()).not.toContain('new-passphrase');
+  });
+
+  it('leaves the working link untouched when Elixia refuses the new credentials', async () => {
+    // The failure that makes this feature worth having: a typo must not cost
+    // someone the link they already had.
+    const profile = await linkedProfile();
+
+    await expect(
+      updateElixiaCredentials(config, profile, { password: 'x' }, nowMs),
+    ).rejects.toThrow(ServiceError);
+
+    const stored = await repo.getProfile(USER_ID);
+    expect(stored!.elixiaEmail).toBe('gym@example.com');
+    expect(stored!.elixiaStatus).toBe('ok');
+    expect((await openSecret(config, stored!)).password).toBe('correct-horse');
+  });
+
+  it('keeps the queued bookings, which unlinking and linking again would drop', async () => {
+    const profile = await linkedProfile();
+    await addSubscription(config, profile, BODYPUMP, nowMs);
+
+    await updateElixiaCredentials(config, profile, { email: 'moved@example.com' }, nowMs);
+
+    expect(await repo.claimDue(0, nowMs + 30 * 86_400_000)).not.toHaveLength(0);
+  });
+
+  it('keeps the link intact when Elixia cannot be reached to check the edit', async () => {
+    // An outage during an edit is a failure to *check*, not a rejection, and
+    // the credentials already on file are still perfectly good — so the link
+    // has to survive it untouched rather than being downgraded on the strength
+    // of a request that never got an answer.
+    const profile = await linkedProfile();
+    const offline: BookingBackend = Object.assign(new MockElixiaClient(), {
+      login: async (): Promise<StoredTokens> => {
+        throw new Error('fetch failed');
+      },
+    });
+
+    const err = await updateElixiaCredentials(
+      { ...config, backend: offline },
+      profile,
+      { email: 'moved@example.com' },
+      nowMs,
+    ).catch((e: unknown) => e as ServiceError);
+
+    expect((err as ServiceError).status).toBe(502);
+
+    const stored = await repo.getProfile(USER_ID);
+    expect(stored!.elixiaEmail).toBe('gym@example.com');
+    expect(stored!.elixiaStatus).toBe('ok');
+    expect((await openSecret(config, stored!)).password).toBe('correct-horse');
+  });
+
+  it('refuses an address cleared to blank rather than silently keeping the old one', async () => {
+    const profile = await linkedProfile();
+
+    await expect(updateElixiaCredentials(config, profile, { email: '   ' }, nowMs)).rejects.toThrow(
+      /required/,
+    );
+    expect((await repo.getProfile(USER_ID))!.elixiaEmail).toBe('gym@example.com');
+  });
+
+  it('refuses to edit an account that was never linked', async () => {
+    // There is no password to fall back on, and nothing to correct. Refused
+    // even when both fields are supplied — that is a first link, and linking
+    // is what POST is for; letting an edit stand in for it would mean a UI
+    // that reached for the wrong verb still worked, right up until it did not.
+    const profile = await getOrCreateProfile(config, USER_ID);
+    const configured = await completeSetup(config, profile, SETUP, nowMs);
+
+    await expect(
+      updateElixiaCredentials(config, configured, { email: 'gym@example.com' }, nowMs),
+    ).rejects.toThrow(/No Elixia account linked/);
+    await expect(
+      updateElixiaCredentials(
+        config,
+        configured,
+        { email: 'gym@example.com', password: 'correct-horse' },
+        nowMs,
+      ),
+    ).rejects.toThrow(/No Elixia account linked/);
+
+    expect((await repo.getProfile(USER_ID))!.elixiaStatus).toBe('unlinked');
+  });
+
+  it('brings a rejected link back to working without a relink', async () => {
+    // What a member does after changing their password at the gym: the stored
+    // one stopped working, the status went to expired, and the fix is one
+    // field rather than typing the address in again.
+    const profile = await linkedProfile();
+    await repo.upsertProfile({ ...profile, elixiaStatus: 'expired' });
+
+    await updateElixiaCredentials(
+      config,
+      requireConfigured((await repo.getProfile(USER_ID))!),
+      { password: 'new-passphrase' },
+      nowMs,
+    );
+
+    const stored = await repo.getProfile(USER_ID);
+    expect(stored!.elixiaStatus).toBe('ok');
+    expect(stored!.elixiaEmail).toBe('gym@example.com');
   });
 });
 
