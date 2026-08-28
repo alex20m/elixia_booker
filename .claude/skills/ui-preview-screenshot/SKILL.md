@@ -72,6 +72,27 @@ needs credentials the sandbox does not have.
   give-away is a stylesheet that styles something invisible in the shot (a
   `::marker` colour where no markers appear). Fix it by restating the property
   explicitly rather than by fighting the import.
+- **Your own element-level base styles leak into a component library's
+  controls, and can render them invisible.** The mirror image of the trap
+  above, and the more dangerous one, because the damage lands in *their*
+  markup. A base rule on a bare element — `button { background: …; color: … }`
+  — matches every button in the document, including the ones a library renders.
+  Its filled variants set their own background and win, so most of the UI looks
+  right; its *link* variants set only a colour and inherit yours, and if their
+  colour token and your background token resolve to the same value, the control
+  paints as a solid block with its label the same colour as its fill. What you
+  see is a button with no text on it, in whichever theme the two tokens happen
+  to collide in — and the accompanying screenshot of the other theme can look
+  perfectly fine. Nothing catches it: no unit test applies CSS, and
+  `getComputedStyle` will happily report the label's colour without noticing
+  what is behind it. Guard the base rule with a selector that excludes the
+  library's own elements rather than patching the one control you noticed —
+  shadcn-derived libraries stamp `data-slot` on everything they render, so
+  `button:not([data-slot])` is usually the whole fix, and it costs one
+  specificity step you should re-check against your own modifier classes. Then
+  assert it where it is written: a test that scans the stylesheet for
+  element-level selectors missing the guard is the only kind that can fail
+  here.
 - **The scratch script cannot resolve the browser driver** when it lives outside
   the project. Import it by absolute path from the project's modules, or run the
   script from the project root.

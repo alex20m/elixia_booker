@@ -397,7 +397,7 @@ Client side, `createAuthClient()` from `@neondatabase/auth/next`, and the vanill
 client takes the auth URL directly. A React SPA installs `@neondatabase/neon-js`
 instead and reads `VITE_NEON_AUTH_URL`.
 
-Seven things that bite:
+Eight things that bite:
 
 - **The catch-all segment must be `[...path]`.** The handler reads `params.path`,
   so any other name routes nothing. The package's own JSDoc example says
@@ -437,6 +437,33 @@ Seven things that bite:
   Skipping it is a delayed failure: sign-up works, but confirmation and
   password-reset links point at localhost, and only the developer fails to
   notice.
+- **A proxy in front of a hosted auth service must not let `fetch` follow the
+  redirect**, or the session it just minted is lost. This is the shape: the
+  provider's SDK mounts a catch-all route that forwards each request upstream
+  with a plain `fetch` and re-signs the upstream `Set-Cookie` onto *your*
+  origin — that re-signing is the whole reason the proxy exists. But
+  `fetch` follows redirects by default and exposes only the final response, so
+  when an endpoint answers `302 + Set-Cookie` — which is exactly what an email
+  verification or confirmation link does — the cookie is set on a hop nobody
+  can read and the browser gets the *body of the redirect target* instead. The
+  visitor lands back on the app signed out, on the page they had just
+  clicked their way past, and has to sign in by hand. Nothing errors, and
+  reading the proxy explains nothing, because the bug is in a default.
+  The fix depends on which side you can move. Better Auth decides between a
+  redirect and JSON purely on whether the request carries a `callbackURL`, and
+  it sets the session cookie *before* that branch — so stripping `callbackURL`
+  from the request before forwarding it gets the same verification back as a
+  200 with the cookie intact, leaving your own route to issue the redirect
+  (`303`, so it is followed as a `GET`) with those cookies attached. Where you
+  cannot change the request, `redirect: 'manual'` on the upstream fetch is the
+  general version of the same move. Either way, send the browser to the UI
+  library's own callback view rather than to `/`: that view refetches the
+  session and announces the change before forwarding on, which is what stops
+  the destination from rendering as signed-out until a manual reload. Verified
+  by reading `better-auth@1.6.23`'s `api/routes/email-verification` and
+  `@neondatabase/auth@0.5.0-beta`'s proxy; when a flow "works but the user
+  isn't signed in afterwards", read the endpoint's source for that
+  redirect-versus-JSON branch before anything else.
 
 Managed Better Auth is documented as **AWS regions only** (no Azure), and as not
 supporting projects with IP Allow or Private Networking enabled. Confirm against
