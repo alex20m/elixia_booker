@@ -34,35 +34,6 @@ runner's clock, not the scheduler. Releases are claimed atomically so two
 overlapping watchers can't double-book. `lib/schedule.ts` does the "N days
 before" math in the user's own timezone, DST included.
 
-### Scheduling through QStash (dormant until provisioned)
-
-The watcher still depends on GitHub's scheduler to *start* it, and GitHub
-documents a sufficiently loaded `schedule` trigger as dropped outright rather
-than delayed — which happened on 2026-08-28, leaving no watcher awake for nine
-hours. `watchdog.yml` bounds that to about an hour; QStash removes the
-dependency instead.
-
-`lib/qstash.ts` publishes one delayed HTTP call per upcoming release instant,
-so a release is delivered by a service whose product is exactly that, with
-retries and a dead-letter queue behind it. It leans on two properties the app
-already had: the tick claims a *window* (one invocation serves every user due
-at that instant, so messages dedupe by instant) and `claimDue` is atomic (so
-QStash's at-least-once delivery costs nothing). Every reindex republishes every
-upcoming instant; QStash's own deduplication makes the repeats free, so nothing
-tracks message ids and nothing is cancelled when a subscription changes.
-
-**This path is inert until all three of `QSTASH_TOKEN`, `APP_URL` and
-`CRON_SECRET` are set** — being partly configured fails at delivery time, hours
-later and invisibly, so it is refused up front. To provision:
-
-```bash
-vercel install upstash-qstash     # sets QSTASH_TOKEN in the project
-vercel env add APP_URL production # this deployment's own public origin
-```
-
-The GitHub Actions watcher remains the live mechanism and books from the same
-rows; remove it only once QStash has been observed firing a real booking.
-
 ## Setup that can't be skipped
 
 Every new account must set **membership** (7 or 14 day window), **timezone**,
