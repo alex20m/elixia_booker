@@ -18,7 +18,7 @@ import type { MetadataRoute } from 'next';
 export default function manifest(): MetadataRoute.Manifest {
   return {
     name: 'Elixia Booker',
-    short_name: 'Elixia Booker',
+    short_name: 'ElixiaBooker',
     description: 'Books your group fitness classes the moment booking opens.',
     start_url: '/',
     scope: '/',
