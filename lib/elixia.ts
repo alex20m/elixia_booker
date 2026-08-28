@@ -431,7 +431,7 @@ export function weekdayOfIsoDate(isoDate: string): Weekday | null {
 }
 
 /** Monday first: a timetable is read as a week, not from Sunday. */
-const WEEK_ORDER: readonly Weekday[] = [
+export const WEEK_ORDER: readonly Weekday[] = [
   'monday',
   'tuesday',
   'wednesday',
