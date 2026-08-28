@@ -787,8 +787,17 @@ input::placeholder {
 /* `a.btn` exists because signing in and reaching the account pages are
    navigations to Neon Auth's own routes, not actions. They stay anchors —
    openable in a new tab, reachable like every other link — and only borrow the
-   look of the buttons beside them. */
-button,
+   look of the buttons beside them.
+
+   `:not([data-slot])` keeps this off @neondatabase/auth-ui's own controls, and
+   it has to: this rule paints a filled --primary-bg background on every button
+   in the document, and their link-style buttons ("Sign In" under the sign-up
+   form) set only a colour — `text-foreground`, which is bridged to the same
+   navy. The result was a filled block with its label the same colour as its
+   background: a solid navy — white, in dark mode — button with no readable text
+   on it. Every element auth-ui renders carries a `data-slot`, and nothing here
+   does, so the attribute is what separates their controls from ours. */
+button:not([data-slot]),
 a.btn {
   display: inline-flex;
   align-items: center;
@@ -809,12 +818,12 @@ a.btn {
     color 0.12s ease;
 }
 
-button:hover:not(:disabled),
+button:not([data-slot]):hover:not(:disabled),
 a.btn:hover {
   background: var(--primary-bg-hover);
 }
 
-button:disabled {
+button:not([data-slot]):disabled {
   background: var(--disabled-bg);
   color: var(--disabled-fg);
   cursor: not-allowed;

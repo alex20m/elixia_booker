@@ -142,3 +142,79 @@ describe('every other auth request', () => {
     expect(await response.json()).toEqual({ ok: true });
   });
 });
+
+/**
+ * The link in the verification email.
+ *
+ * Better Auth verifies the token, sets the session cookie, and only then looks
+ * at `callbackURL` to decide whether to answer with a redirect or with JSON —
+ * so the cookie is already on the response either way. That ordering is the
+ * whole reason the redirect can be taken away from it: the proxy in front of
+ * Neon Auth reaches upstream with a plain `fetch`, which follows redirects
+ * itself, and a followed redirect's `Set-Cookie` never reaches the browser.
+ * With `callbackURL` left on, the visitor arrived back at the app with the
+ * session dropped somewhere inside a server-side fetch — signed out, on the
+ * page they had just verified their way past.
+ */
+describe('GET /api/auth/verify-email', () => {
+  it('keeps the session cookie the verification set instead of losing it to a followed redirect', async () => {
+    getHandler.mockImplementation(async (request: Request) => {
+      // What upstream answers only when nothing asked it to redirect.
+      expect(new URL(request.url).searchParams.has('callbackURL')).toBe(false);
+      expect(new URL(request.url).searchParams.get('token')).toBe('tok');
+      const response = jsonResponse({ status: true, user: null });
+      response.headers.append('set-cookie', 'neon-auth.session_token=abc; Path=/; HttpOnly');
+      response.headers.append('set-cookie', 'neon-auth.session_data=xyz; Path=/; HttpOnly');
+      return response;
+    });
+
+    const response = await GET(
+      new Request('http://x/api/auth/verify-email?token=tok&callbackURL=%2F'),
+      context(['verify-email']),
+    );
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get('location')).toBe('/auth/callback');
+    expect(response.headers.getSetCookie()).toEqual([
+      'neon-auth.session_token=abc; Path=/; HttpOnly',
+      'neon-auth.session_data=xyz; Path=/; HttpOnly',
+    ]);
+  });
+
+  it('sends a link that no longer works to sign-in, saying which way it failed', async () => {
+    getHandler.mockResolvedValue(jsonResponse({ code: 'TOKEN_EXPIRED', message: 'Token expired' }, 401));
+
+    const response = await GET(
+      new Request('http://x/api/auth/verify-email?token=old&callbackURL=%2F'),
+      context(['verify-email']),
+    );
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get('location')).toBe('/auth/sign-in?error=TOKEN_EXPIRED');
+  });
+
+  it('names no reason when the failure carries no code of its own', async () => {
+    getHandler.mockResolvedValue(new Response('gateway timeout', { status: 504 }));
+
+    const response = await GET(
+      new Request('http://x/api/auth/verify-email?token=old&callbackURL=%2F'),
+      context(['verify-email']),
+    );
+
+    expect(response.headers.get('location')).toBe('/auth/sign-in?error=VERIFICATION_FAILED');
+  });
+
+  it('leaves a verification asked for from script alone', async () => {
+    // `authClient.verifyEmail()` sends no callbackURL because it wants the JSON
+    // back. Turning that into a redirect would break the caller.
+    getHandler.mockResolvedValue(jsonResponse({ status: true, user: null }));
+
+    const response = await GET(
+      new Request('http://x/api/auth/verify-email?token=tok'),
+      context(['verify-email']),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: true, user: null });
+  });
+});

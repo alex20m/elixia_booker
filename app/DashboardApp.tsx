@@ -160,34 +160,41 @@ function LoadFailed({ message, retry }: { message: string; retry: () => Promise<
   );
 }
 
-function SignedOut() {
+/**
+ * The first screen anyone who is not signed in sees.
+ *
+ * It carries one sentence about what the app does and the two doors into it,
+ * and nothing else. The install offer used to sit under them, and on a phone
+ * it was the taller half of the page — a numbered how-to for a home-screen
+ * icon, addressed to someone who has not yet decided to have an account.
+ * Installing is worth offering *after* there is something to install for, so
+ * it lives in Settings and in the last step of setup, where the same
+ * `InstallCard` is shown to someone who has somewhere to go back to. The note
+ * about the Elixia login moved to the sign-in and sign-up pages, which is
+ * where a password is actually being typed.
+ */
+export function SignedOut() {
   return (
     <Shell>
       <main className="main main-narrow">
         <div className="hero">
           <h1>Never miss a class again.</h1>
           <p className="hero-sub">
-            Pick the classes you want. Booker signs in and books them the second Elixia opens
-            the window — while you are asleep.
+            Pick the classes you want. Booker books them the second Elixia opens the window —
+            while you are asleep.
           </p>
         </div>
 
-        <section className="card">
-          <div className="stack">
-            <Link className="btn btn-block" id="auth-btn" href="/auth/sign-in">
-              Sign in
-            </Link>
-            <Link className="btn btn-secondary btn-block" id="auth-toggle" href="/auth/sign-up">
-              Create an account
-            </Link>
-            <p className="hint">
-              Your Booker account is separate from your Elixia login. You link the gym account
-              after signing in.
-            </p>
-          </div>
-        </section>
-
-        <InstallCard />
+        {/* No card around them: a panel drawn around two full-width buttons
+            and nothing else is a border for its own sake. */}
+        <div className="stack">
+          <Link className="btn btn-block" id="auth-btn" href="/auth/sign-in">
+            Sign in
+          </Link>
+          <Link className="btn btn-secondary btn-block" id="auth-toggle" href="/auth/sign-up">
+            Create an account
+          </Link>
+        </div>
       </main>
     </Shell>
   );
