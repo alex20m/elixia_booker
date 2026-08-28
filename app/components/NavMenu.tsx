@@ -27,11 +27,16 @@ export type NavSection<Id extends string = string> = {
  * the copy that is off-screen at the width you happen to be developing at is
  * exactly the one that rots when there are two hand-written lists.
  *
- * Sign out lives at the bottom of the menu, under a rule, rather than sitting
- * in the bar: it was a permanent one-tap button next to the logo, which is a
- * lot of prominence for the one action nobody means to press. It is still
- * spelled out in full in Settings → Account, which is where a visitor goes
- * looking for it.
+ * Sign out lives at the bottom of the phone menu, under a rule, rather than
+ * sitting in the bar: it was a permanent one-tap button next to the logo,
+ * which is a lot of prominence for the one action nobody means to press. It
+ * is still spelled out in full in Settings → Account, which is where a
+ * visitor goes looking for it.
+ *
+ * Wide enough for the sections to move into the bar and sign out is the only
+ * thing left behind the menu button — a whole hamburger for one item is worse
+ * than the item itself, so at that width sign out moves into the bar too,
+ * as its own quiet control next to the sections rather than a menu of one.
  */
 export function NavMenu<Id extends string>({
   sections,
@@ -108,6 +113,15 @@ export function NavMenu<Id extends string>({
         ))}
       </nav>
 
+      {/* The bar's own copy of sign out, shown only once the sections above have
+          moved into the bar and left the menu with nothing else in it. Its own
+          element rather than the menu's, so it never depends on `open`. */}
+      <SignOutButton
+        id="bar-signout-btn"
+        className="nav-link bar-signout"
+        icon={<SignOutIcon />}
+      />
+
       <button
         ref={triggerRef}
         id="menu-btn"
@@ -125,8 +139,8 @@ export function NavMenu<Id extends string>({
         <>
           {/* A tap anywhere else is the commonest way out of a menu on a phone,
               and on a desktop it is how a dropdown is expected to behave. */}
-          <div className="menu-backdrop" onClick={() => close(false)} />
-          <div className="menu-panel" id="nav-menu" ref={panelRef}>
+          <div className="menu-backdrop nav-menu-backdrop" onClick={() => close(false)} />
+          <div className="menu-panel nav-menu-panel" id="nav-menu" ref={panelRef}>
             <nav className="menu-nav" aria-label="Sections">
               {sections.map((section) => (
                 <button

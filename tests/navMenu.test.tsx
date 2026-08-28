@@ -142,6 +142,13 @@ describe('NavMenu', () => {
     expect(signOut).toHaveBeenCalledTimes(1);
   });
 
+  it('also offers sign out directly in the bar, for the width where the menu behind the button would otherwise hold nothing else', async () => {
+    render();
+    await click(byId('bar-signout-btn'));
+
+    expect(signOut).toHaveBeenCalledTimes(1);
+  });
+
   it('moves focus into the menu so it can be driven from the keyboard', async () => {
     render();
     await open();
