@@ -1,24 +1,20 @@
 ---
 name: merge-on-green
 description: >-
-  Watch an open pull request's CI through to completion, merge it the moment it
-  is genuinely green, and then confirm the platform's own deploy of the merge
-  commit also goes green before calling the task finished. Use this whenever a
-  task's changes still need to land on the default branch — right after pushing
-  a branch or opening a PR/MR, and any time the request involves waiting for CI,
-  checking the pipeline, "is the build done", "merge it when it's green", or
-  babysitting/monitoring a PR. Use it even for what sounds like a one-off status
-  check, because *how* you read the status is exactly what goes wrong — both for
-  the pre-merge CI and for the post-merge deploy. Defines what "green" actually
-  means at each stage, how to wait without burning context, and how to merge,
-  confirm it landed, and confirm it deployed.
+  Watch an open pull request's CI through to completion and merge it the moment
+  it is genuinely green. Use this whenever a task's changes still need to land on
+  the default branch — right after pushing a branch or opening a PR/MR, and any
+  time the request involves waiting for CI, checking the pipeline, "is the build
+  done", "merge it when it's green", or babysitting/monitoring a PR. Use it even
+  for what sounds like a one-off status check, because *how* you read the status
+  is exactly what goes wrong. Defines what "green" actually means, how to wait
+  without burning context, and how to merge and confirm it landed.
 ---
 
 # Merge on green
 
-Take an open PR from *pushed*, through *merged*, to *deployed* — without ever
-merging code that CI has not actually vetted, and without calling the task done
-before the platform's own build of that merge commit has actually succeeded.
+Take an open PR from *pushed* to *merged*, without ever merging code that CI has
+not actually vetted.
 
 Wait for everything to finish, then merge. The whole difficulty is that GitHub
 will happily tell you everything has finished when it has not yet started.
@@ -280,103 +276,7 @@ means GitHub refused — re-read `mergeable_state` for the reason instead of
 retrying. Note that `list_pull_requests` reports `merged: false` even for merged
 PRs, so trust `merged_at` from `pull_request_read`.
 
-Record the `sha` the merge response returns — that is the **merge commit**, a
-new commit that did not exist before this call, and it is what step 8 watches
-next. It is not `head.sha` from step 1: a squash merge mints a fresh SHA on the
-default branch, distinct from every commit that was ever on the PR branch.
-
-## 8. Watch the deploy
-
-`merged_at` being set answers "is this commit in the repo's history." It does
-not answer "does the app the repo builds actually run" — on a repo whose
-hosting platform deploys straight from its git integration (the default for
-every app project here; see `cli-first-provisioning`), that question is
-answered by a *second* pipeline that starts only now, triggered by the push
-your merge just made to the default branch, and running completely decoupled
-from the CI you just watched. CI validated the PR's code in CI's environment;
-the platform is about to build and promote that same commit against production
-credentials and the production database migration has not run yet. Those are
-different events, and only the second one is what a user will actually hit.
-This is exactly the gap `cli-first-provisioning` describes: migrations run in
-the platform's build command, not in a workflow, precisely because nothing in
-CI exercises them. A merge that "went well" by every signal available before
-this step can still be the first deploy in weeks to fail its migration.
-
-So the task is not finished at `merged_at`. It is finished when the deployment
-built from the merge commit reaches a successful terminal state.
-
-**Anchor to the merge commit, not the PR's head SHA.** The deploy is triggered
-by, and its status is reported against, the commit from step 7 — a squash merge
-is a new commit that never existed on the branch CI ran on.
-
-**Give it a floor before reading "nothing" as "nothing to do."** The same trap
-from step 2 repeats here: query the merge commit's status in the first few
-seconds after merging and you will typically find no deployment status object
-at all, because the platform's webhook consumer has not picked up the push yet.
-That is not evidence there is nothing to deploy — it is evidence you asked too
-early. Wait on the order of a minute (background `sleep`, per step 2) before
-treating an absent status as meaningful, then poll.
-
-**Read it through whichever of these you have:**
-
-- **The GitHub commit status/check the platform's own GitHub App posts** —
-  this needs no extra credential, because it is the same rollup step 3 already
-  reads, just addressed at the merge commit instead of a PR. On Vercel this
-  status carries the context/check name `Vercel` and transitions
-  pending → success (Ready) or failure/error, with a `target_url` pointing at
-  the deployment. Read it with the same commit-status/check-runs calls step 3
-  uses, pointed at the merge SHA rather than a PR number.
-- **The platform's own CLI or API, when you have a token for it** — richer,
-  and worth reaching for when the GitHub status alone doesn't explain a
-  failure. On Vercel: `vercel ls -m githubCommitSha=<merge-sha> --json` (or the
-  equivalent `GET /v6/deployments?meta-githubCommitSha=<merge-sha>` call) to
-  get the deployment's `readyState`, and `vercel inspect <url> --logs` for the
-  build log once you know which deployment to look at.
-
-**Check that your GitHub tooling can actually reach an arbitrary commit before
-relying on the first option.** A plain `gh api repos/<owner>/<repo>/commits/<sha>/status`
-(or the check-runs equivalent) works for any commit and needs nothing beyond
-what step 3 already used — but a GitHub *MCP* server's status/check-run calls
-are commonly wrapped as PR methods (e.g. `pull_request_read` with
-`get_status` / `get_check_runs`, taking a `pullNumber`), and a closed PR's
-`head.sha` is the old branch head, never the new merge commit. Where that is
-all you have — verified against the `mcp__github__` server bundled with
-Claude Code Remote sessions, which exposes no commit-scoped equivalent — the
-first bullet is not actually reachable post-merge, whatever it looks like
-from the description alone. Try it once to confirm rather than assuming
-either way. If it is unreachable and no platform token is available either,
-say exactly that in the task report instead of claiming the deploy was
-confirmed: hand back the dashboard link the platform's own bot comment
-already posted on the PR (Vercel's `inspectorUrl`/`target_url`) for a human
-to check, rather than silently skipping step 8 or guessing at the outcome
-from the PR's pre-merge preview build.
-
-Poll on the same cadence as step 2 — wait, then check one field, don't spin.
-Terminal states:
-
-| State | Meaning | Done? |
-|---|---|---|
-| `success` / `READY` | Build finished, this commit is now serving (or promoted to) production | **Yes** |
-| `pending` / `BUILDING` / `QUEUED` | Still running | No — keep waiting |
-| `failure` / `error` / `ERROR` / `CANCELED` | The deploy did not complete | No — diagnose and fix |
-
-A failed deploy here is not lower stakes than a failed CI run — it is the same
-class of problem discovered later, on `main` instead of a branch, and it is
-usually the exact case CI structurally cannot catch: a migration that only
-breaks against the real production database, or an environment variable set
-for preview but not production. Read the build log, fix the underlying cause,
-and push a new commit through the normal PR flow — the previous deployment
-keeps serving production while you do, per `cli-first-provisioning`, so this is
-urgent but not an outage.
-
-**This step only applies where the platform actually deploys the repo.** A
-repo with no hosting project wired up — a library, or an app not yet past the
-provisioning steps in `cli-first-provisioning` — has nothing here to watch;
-`vercel.json` or a linked `.vercel/project.json` is the quick check for
-whether it does.
-
-Report the outcome plainly: merged and deployed, or what is blocking either
-one.
+Report the outcome plainly: merged, or what is blocking it.
 
 ## Do not
 
@@ -403,16 +303,6 @@ one.
   `clean`.** `clean` means the head commit's own checks passed, not that
   `main` has stood still — those are different questions unless the repo
   requires branches to be up to date.
-- **Do not treat `merged_at` as the end of the task on a repo the platform
-  deploys.** It proves the commit is in history, not that it builds or runs —
-  step 8 is what proves that, and skipping it means finding out from a user
-  instead.
-- **Do not poll the deploy status by the PR's head SHA.** A squash merge mints
-  a new commit; the deployment step 8 watches is triggered by, and reported
-  against, that new SHA, not the one you validated CI against in steps 1–6.
-- **Do not read an empty deploy status moments after merging as "nothing to
-  deploy."** Give the platform's webhook the same floor CI got in step 2 —
-  absence this early is a timing artifact, not a verdict.
 
 ## How to delete the floor: require the checks
 
