@@ -136,7 +136,6 @@ async function choose(id: string, value: string): Promise<void> {
   });
 }
 
-const chooseCenter = (center: string): Promise<void> => choose('s-center', center);
 const chooseClass = (className: string): Promise<void> => choose('s-class', className);
 const chooseSlot = (slot: string): Promise<void> => choose('s-slot', slot);
 
@@ -149,13 +148,38 @@ const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
   'value',
 )!.set!;
 
-async function searchCenters(text: string): Promise<void> {
+function centerBox(): HTMLInputElement {
+  const element = container.querySelector<HTMLInputElement>('#s-center');
+  if (!element) throw new Error('no #s-center in the form');
+  return element;
+}
+
+/** Every centre the box offers, which is the browser's to filter, not ours. */
+function centerList(): string[] {
+  return [...container.querySelectorAll<HTMLOptionElement>('#s-center-options option')].map(
+    (option) => option.value,
+  );
+}
+
+async function typeCenter(text: string): Promise<void> {
   await act(async () => {
-    const input = container.querySelector<HTMLInputElement>('#s-center-search')!;
-    nativeInputValueSetter.call(input, text);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
+    const box = centerBox();
+    nativeInputValueSetter.call(box, text);
+    box.dispatchEvent(new Event('input', { bubbles: true }));
   });
 }
+
+/** React listens for focusout, not the blur that does not bubble. */
+async function leaveCenter(): Promise<void> {
+  await act(async () => {
+    centerBox().dispatchEvent(new Event('focusout', { bubbles: true }));
+  });
+}
+
+// Named by id because that is what the form works in, typed by name because
+// that is what a person puts in the box.
+const chooseCenter = (id: string): Promise<void> =>
+  typeCenter(CENTERS.find((option) => option.id === id)?.name ?? id);
 
 async function clickAdd(): Promise<void> {
   await act(async () => {
@@ -167,60 +191,121 @@ const addDisabled = (): boolean =>
   container.querySelector<HTMLButtonElement>('#add-btn')!.disabled;
 
 describe('finding a centre', () => {
-  it("offers Elixia's own centres rather than a box to type one into", async () => {
+  it('asks for the centre in one box, not a search field and a dropdown', async () => {
+    // Two controls for one answer is two things to understand before the
+    // first question is even answered.
     await render();
 
-    expect(select('s-center').tagName).toBe('SELECT');
-    expect(optionLabels('s-center')).toContain('Tapiola');
-    expect(optionLabels('s-center')).toContain('Sello');
-    expect(optionLabels('s-center')).toContain('Kamppi');
+    expect(centerBox().tagName).toBe('INPUT');
+    expect(container.querySelector('#s-center-search')).toBeNull();
+    expect(container.querySelectorAll('#s-center, select[id^="s-center"]')).toHaveLength(1);
   });
 
-  it('narrows the dropdown to centres whose name matches the typed text', async () => {
-    // 226 clubs is a scroll, not a choice, so the search box exists to cut that
-    // list down to the handful whose name the person actually remembers.
+  it("offers Elixia's own centres through the box's list rather than free text", async () => {
+    // The box accepts typing, but what it resolves to is still one of Elixia's
+    // clubs — the list behind it is the whole catalogue, and the browser
+    // narrows it as the person types.
     await render();
-    await searchCenters('sel');
 
-    expect(optionLabels('s-center')).toContain('Sello');
-    expect(optionLabels('s-center')).not.toContain('Tapiola');
-    expect(optionLabels('s-center')).not.toContain('Kamppi');
+    expect(centerList()).toEqual(['Tapiola', 'Sello', 'Kamppi']);
+    expect(centerBox().getAttribute('list')).toBe('s-center-options');
   });
 
-  it('matches regardless of case', async () => {
+  it('picks the centre whose name is typed in full', async () => {
     await render();
-    await searchCenters('KAMPPI');
+    await typeCenter('Tapiola');
 
-    expect(optionLabels('s-center')).toContain('Kamppi');
-    expect(optionLabels('s-center')).not.toContain('Tapiola');
+    expect(optionLabels('s-class').join('|')).toMatch(/Bodypump/);
+    expect(saved).toEqual([{ center: '740' }]);
   });
 
-  it('says so when no centre matches the typed text', async () => {
+  it('picks it regardless of case and stray spacing', async () => {
+    // Names come back from the box the way a person types them, and "sello"
+    // typed at speed is the same club as the "Sello" on the list.
     await render();
-    await searchCenters('nowhere');
+    await typeCenter('  kAMPPI ');
 
-    expect(optionLabels('s-center')).toEqual([expect.stringMatching(/no centres match/i)]);
+    expect(optionLabels('s-class').join('|')).toMatch(/Bodypump/);
+    expect(saved).toEqual([{ center: '742' }]);
   });
 
-  it('keeps the chosen centre selectable even after the search text no longer matches it', async () => {
-    // Typing a second search over an already-chosen centre must not blank the
-    // select out from under a selection that is still in effect.
+  it('picks nothing from a name that is still half typed', async () => {
+    // "Tap" matches Tapiola and nothing else, but a prefix is not a choice:
+    // acting on it would pick a club out from under someone mid-word.
+    await render();
+    await typeCenter('Tap');
+
+    expect(select('s-class').options[0]?.textContent).toBe('Choose a centre first');
+    expect(saved).toEqual([]);
+    expect(addDisabled()).toBe(true);
+  });
+
+  it('says so when nothing on the list matches what was typed', async () => {
+    await render();
+    await typeCenter('nowhere');
+
+    expect(container.textContent).toMatch(/no centres match/i);
+  });
+
+  it('stays quiet while a half-typed name still matches something', async () => {
+    // The warning has to mean "there is nothing here", not "you have not
+    // finished typing" — otherwise it is on screen for most of every search.
+    await render();
+    await typeCenter('sel');
+
+    expect(container.textContent).not.toMatch(/no centres match/i);
+  });
+
+  it('restores the chosen centre when the box is left holding something else', async () => {
+    // A box reading "nonsense" over a form that is still acting on Tapiola is
+    // the one lie a single control can tell that two could not.
     await render();
     await chooseCenter('740');
-    await searchCenters('sel');
+    await chooseClass('Bodypump');
+    await typeCenter('nonsense');
 
-    expect(optionLabels('s-center')).toContain('Tapiola');
-    expect(select('s-center').value).toBe('740');
+    // Still Tapiola's form while the search is under way: every search for a
+    // second gym passes through text that matches nothing, and emptying the
+    // class list there throws away a choice already made for a search that may
+    // end in giving up.
+    expect(optionLabels('s-class').join('|')).toMatch(/Bodypump/);
+    expect(select('s-class').value).toBe('Bodypump');
+
+    await leaveCenter();
+
+    expect(centerBox().value).toBe('Tapiola');
+    expect(optionLabels('s-class').join('|')).toMatch(/Bodypump/);
   });
 
-  it('clearing the search text brings every centre back', async () => {
+  it('empties the box when it is left holding a centre that was never chosen', async () => {
     await render();
-    await searchCenters('sel');
-    await searchCenters('');
+    await typeCenter('nonsense');
+    await leaveCenter();
 
-    expect(optionLabels('s-center')).toContain('Tapiola');
-    expect(optionLabels('s-center')).toContain('Sello');
-    expect(optionLabels('s-center')).toContain('Kamppi');
+    expect(centerBox().value).toBe('');
+    expect(select('s-class').options[0]?.textContent).toBe('Choose a centre first');
+  });
+
+  it('clearing the box unpicks the centre and the classes with it', async () => {
+    await render();
+    await chooseCenter('740');
+    await chooseClass('Bodypump');
+    await typeCenter('');
+
+    expect(select('s-class').options[0]?.textContent).toBe('Choose a centre first');
+    expect(select('s-class').disabled).toBe(true);
+    expect(addDisabled()).toBe(true);
+  });
+
+  it('clearing the box does not forget where you train', async () => {
+    // Editing the text is how every search starts. Writing an empty centre
+    // away mid-keystroke would spend the memory of a real choice on a
+    // half-typed one.
+    await render();
+    await chooseCenter('740');
+    await typeCenter('');
+
+    expect(saved).toEqual([{ center: '740' }]);
   });
 });
 
@@ -266,7 +351,7 @@ describe('choosing what to train', () => {
     await render();
     await chooseCenter('740');
     await chooseClass('Bodypump');
-    await choose('s-center', '741');
+    await chooseCenter('741');
 
     expect(optionLabels('s-class').join('|')).not.toMatch(/Bodypump/);
     expect(optionLabels('s-class').join('|')).toMatch(/Loading/);
@@ -362,7 +447,7 @@ describe('remembering where you train', () => {
     defaults = { center: '740' };
     await render();
 
-    expect(select('s-center').value).toBe('740');
+    expect(centerBox().value).toBe('Tapiola');
     // The saved centre is only worth anything if it saves the fetch too.
     expect(optionLabels('s-class').join('|')).toMatch(/Bodypump/);
   });
@@ -391,7 +476,7 @@ describe('remembering where you train', () => {
     defaults = { center: '999' };
     await render();
 
-    expect(select('s-center').value).toBe('');
+    expect(centerBox().value).toBe('');
     expect(container.textContent).not.toMatch(/999/);
     expect(select('s-class').options[0]?.textContent).toBe('Choose a centre first');
     expect(addDisabled()).toBe(true);
@@ -409,6 +494,6 @@ describe('remembering where you train', () => {
     );
 
     await render();
-    expect(optionLabels('s-center')).toContain('Tapiola');
+    expect(centerList()).toContain('Tapiola');
   });
 });

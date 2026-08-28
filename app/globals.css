@@ -756,7 +756,11 @@ select {
   font-size: 14px;
 }
 
-select {
+/* A box carrying a datalist is a picker as much as a select is, so it wears the
+   same chevron: without one it reads as free text, and the list behind it — the
+   whole point of the control — goes unfound. */
+select,
+input[list] {
   /* The native picker is kept on purpose: on a phone it is a full-height wheel
      the OS already knows how to drive, and no scripted listbox comes close. */
   appearance: none;
@@ -766,6 +770,19 @@ select {
   background-position: right 17px center, right 13px center;
   background-size: 5px 5px, 5px 5px;
   background-repeat: no-repeat;
+}
+
+/* Chromium draws its own arrow for a list-bearing input, but only once the box
+   is hovered or focused — which is exactly when it is too late to tell someone
+   the box is a picker. Ours is always there, so theirs is a second arrow beside
+   it the moment the field is touched. Only one of them can be the always-on
+   one, and it cannot be theirs: no other engine draws it. Hiding it costs
+   nothing — clicking the box still opens the list, as does the down arrow. */
+input[list]::-webkit-calendar-picker-indicator {
+  opacity: 0;
+  width: 0;
+  margin: 0;
+  padding: 0;
 }
 
 input:focus-visible,

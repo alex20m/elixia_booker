@@ -130,6 +130,23 @@ const byId = <T extends HTMLElement>(id: string): T | null => container.querySel
 const statusText = (): string =>
   [...container.querySelectorAll('[role="status"]')].map((n) => n.textContent).join(' ');
 
+// A plain `input.value = text` goes through React's own tracked setter, so the
+// event it then sees carries no change. Setting through the native descriptor
+// bypasses that tracker, the way typing does.
+const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+  window.HTMLInputElement.prototype,
+  'value',
+)!.set!;
+
+/** Name the centre in its box, which is how that one is chosen. */
+const pickCenter = async (name: string): Promise<void> => {
+  const box = byId<HTMLInputElement>('s-center')!;
+  await act(async () => {
+    nativeInputValueSetter.call(box, name);
+    box.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+};
+
 /** Set a <select> and let React see the change. */
 const pick = async (id: string, value: string): Promise<void> => {
   const select = byId<HTMLSelectElement>(id)!;
@@ -279,7 +296,7 @@ describe('adding a class', () => {
 
     // Centre, then class, then the slot within it — the three the chooser asks
     // for before Add becomes pressable at all.
-    await pick('s-center', '740');
+    await pickCenter('Tapiola');
     await pick('s-class', 'Bodypump');
     await pick('s-slot', 'monday|09:00');
 
