@@ -326,6 +326,29 @@ describe('managing classes', () => {
     expect(await repo.listSubscriptions(profile.id)).toHaveLength(3);
   });
 
+  it('lists booked classes for the week starting Monday, then by time', async () => {
+    // Added out of week order and out of time order within a day, so the
+    // dashboard's order can only come from sorting, not insertion order.
+    const profile = await linkedProfile();
+    await addSubscription(config, profile, { ...BODYPUMP, weekday: 'friday' }, nowMs);
+    await addSubscription(
+      config,
+      profile,
+      { ...BODYPUMP, className: 'Busy Bootcamp', weekday: 'monday', startTime: '07:00' },
+      nowMs,
+    );
+    await addSubscription(config, profile, { ...BODYPUMP, weekday: 'monday' }, nowMs);
+    await addSubscription(config, profile, { ...BODYPUMP, weekday: 'wednesday' }, nowMs);
+
+    const view = await buildDashboard(config, profile, nowMs);
+    expect(view.subscriptions.map((s) => `${s.weekday} ${s.startTime} ${s.className}`)).toEqual([
+      'monday 07:00 Busy Bootcamp',
+      'monday 09:00 Bodypump',
+      'wednesday 09:00 Bodypump',
+      'friday 09:00 Bodypump',
+    ]);
+  });
+
   it('pauses, resumes and removes', async () => {
     const profile = await linkedProfile();
     const sub = await addSubscription(config, profile, BODYPUMP, nowMs);

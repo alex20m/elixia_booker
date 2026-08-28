@@ -15,6 +15,7 @@ import {
   API_DISCOVERED,
   ElixiaClient,
   normalizeTime,
+  WEEK_ORDER,
   type BookingBackend,
 } from './elixia';
 import { MockElixiaClient } from './mock';
@@ -552,6 +553,14 @@ export async function buildDashboard(
   const subscriptions = await config.repo.listSubscriptions(profile.id);
   const timings = timingConfig(profile);
 
+  // Monday first, then by time, so the dashboard reads like a timetable
+  // rather than the order classes happened to be added in.
+  const byWeek = [...subscriptions].sort(
+    (a, b) =>
+      WEEK_ORDER.indexOf(a.weekday) - WEEK_ORDER.indexOf(b.weekday) ||
+      a.startTime.localeCompare(b.startTime),
+  );
+
   return {
     account: {
       bookingWindowDays: profile.bookingWindowDays,
@@ -562,7 +571,7 @@ export async function buildDashboard(
       elixiaEmail: profile.elixiaEmail ?? '',
       elixiaStatus: profile.elixiaStatus,
     },
-    subscriptions: subscriptions.map((s) => {
+    subscriptions: byWeek.map((s) => {
       const next = releasesFor(
         { ...s, bookingWindowDays: s.bookingWindowDays ?? profile.bookingWindowDays },
         nowMs,
