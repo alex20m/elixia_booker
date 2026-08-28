@@ -6,343 +6,97 @@ the moment booking opens.
 **TypeScript · Next.js · Neon (Postgres + Auth) · Vercel · GitHub Actions** — all
 on free tiers.
 
-You deploy it once. After that anyone you share the URL with creates an account,
+Deploy it once. After that, anyone you share the URL with creates an account,
 answers three setup questions, links their gym login, picks their classes, and
 is done.
 
 ---
 
-## The Elixia API is discovered
+## How it works
 
-`lib/elixia.ts` speaks the real thing — login, schedule listing and booking —
-implemented from captured traffic and written up in [docs/api.md](docs/api.md).
-A mock backend (`MOCK_ELIXIA=1`) is still there for local work and tests.
+- `lib/elixia.ts` talks to the real Elixia API (login, schedule, booking),
+  reverse-engineered from captured traffic — see [docs/api.md](docs/api.md).
+  A mock backend (`MOCK_ELIXIA=1`) covers local dev and tests.
+- Sign-in is cookie-based (a SATS Group Keycloak OAuth2 flow), not tokens.
+- Booking never gets rejected outright — you're either booked or waitlisted,
+  and both count as success.
+- A class doesn't appear on the schedule until its booking window opens, so
+  its id is resolved right before booking if it wasn't available earlier.
 
-Three findings are worth knowing before reading any further, because each one
-is the opposite of what the app originally assumed:
+### The booking watcher
 
-- **Sign-in is cookies, not tokens.** Elixia delegates to a SATS Group Keycloak
-  realm over a plain OAuth2 redirect chain, and the session is four cookies
-  lasting 14 days. There is no bearer token and no refresh endpoint.
-- **A full class is not a rejection.** One `POST /api/book` either books you or
-  puts you on the waiting list, and says which. There is no waitlist flag to
-  set and no way to decline a waiting-list place — so the app books, and counts
-  a place in the queue as success.
-- **A class does not exist until its window opens.** It is absent from the
-  schedule rather than refused, so "too early" means *resolution* failing, not
-  a booking error — which is why the class id is resolved again at T-0 if it
-  could not be resolved ahead of time.
+`.github/workflows/watch.yml` runs a long-lived job that sleeps until the
+exact release millisecond, then books with jittered retries inside a ~30s
+budget. GitHub Actions' own cron isn't punctual enough for this, so instead:
+a new watcher job starts every 3 hours and each one runs for ~5h50m, so one
+is always awake well before the previous deadline — timing comes from the
+runner's clock, not the scheduler. Releases are claimed atomically so two
+overlapping watchers can't double-book. `lib/schedule.ts` does the "N days
+before" math in the user's own timezone, DST included.
 
-**One thing discovery could not settle:** whether the booking call works from
-outside a browser at all. Everything observed says yes, but a browser capture
-cannot prove the absence of a JS challenge or TLS fingerprinting. The first
-live run is that test.
+## Setup that can't be skipped
 
----
-
-## Nothing has a default
-
-A new account is asked three things before the app will show it anything, and
-none of them has a fallback anywhere in the code or the environment:
-
-| | Why it cannot be guessed |
-|---|---|
-| **Membership** (7 or 14 days) | It is a property of the contract with Elixia. Guess low and a Premium member books a week late, every week. |
-| **Timezone** | A release instant is a wall-clock time turned into an epoch millisecond. An hour out books an hour out. |
-| **Notification channel** | With none chosen there is nowhere to send the message that matters most — that booking has stopped. |
-
-Each of those failures is silent: the app keeps running and the classes quietly
-do not get booked. A default would make every account claim an answer nobody
-gave, so instead `lib/service.ts` refuses — every endpoint answers **428
-Precondition Required** until the setup pages are finished, and `Profile`
-carries the three fields as optional so nothing can read them hopefully.
-
-The timezone and the membership are **picked from lists**
-(`lib/timezones.ts`, `lib/membership.ts`), and the server accepts only what
-those lists contain: a text field takes "Europe/Helsinky" without complaint,
-and nobody looks at it again until a class they wanted has been full for weeks.
-
-The one thing that *is* remembered for you is the centre you last booked at —
-it does not change week to week, and finding it again among 226 clubs is a
-chore in front of the decision that matters.
-
----
+Every new account must set **membership** (7 or 14 day window), **timezone**,
+and a **notification channel** — none of these have a default, because a
+wrong guess means silently missing bookings. Until they're set, the API
+returns `428 Precondition Required`.
 
 ## Two logins, on purpose
 
 Your **Booker account** (Neon Auth) is separate from your **Elixia
-credentials**, which you link afterwards.
+credentials**, which you link afterwards. This keeps the app usable even if
+Elixia's own login is hostile to automation, and lets Neon Auth handle
+verification, password reset and sessions.
 
-That is not ceremony for its own sake. If sign-in went through Elixia directly,
-app access would be hostage to an API nobody has verified: were Elixia's login an
-OAuth redirect, or always 2FA-gated, nobody could sign in at all — not even to
-find out. Separating them means the app works regardless, and Neon Auth handles
-email verification, password reset and session refresh instead of hand-rolled
-cookie code.
-
-### What is stored, and how
-
-- **Your Booker password** — never seen by this app. Neon Auth handles it.
-- **Your Elixia password** — kept, **encrypted with AES-256-GCM** under a key
-  that lives only in the app's environment, never in the database. A database
-  dump is inert without it.
-- **Elixia session tokens** — sealed in the same record.
-- **The centre you last chose a class from** — kept in plain text so the
-  chooser can start there next time. Not the class: that is the decision being
-  made each time, and a prefilled one is a subscription nobody meant to
-  create.
-
-Keeping the gym password is a deliberate trade-off, not laziness: the bot runs
-unattended for weeks, and re-authenticating is the only way to survive a session
-finally expiring without emailing you to come and re-link. The UI says so
-plainly, and unlinking erases it.
-
-Isolation between users is enforced by the server, which is the only thing
-holding a database connection: the browser talks to `/api/*`, never to Postgres,
-and every statement the repo issues is scoped to the signed-in user's id. That
-predicate is load-bearing rather than decorative, so `tests/neonRepo.test.ts`
-runs the real schema against real Postgres and checks that one account cannot
-read, pause or delete another's rows.
-
----
-
-## How the booking works
-
-The booking watcher (`.github/workflows/watch.yml`) fires the tick precisely.
-One tick does:
-
-1. **Look up.** One indexed range scan over precomputed release instants.
-   Nothing due → immediate exit.
-2. **Verify.** The schedule is derived data; live subscriptions are the
-   authority, so a paused class is dropped.
-3. **Prepare.** Decrypt the credentials, re-authenticate if the session has
-   lapsed, and try to resolve the class id — all *before* the sleep.
-4. **Sleep** to the exact release millisecond.
-5. **Book**, retrying with jittered exponential backoff inside a ~30s budget,
-   clamped by the serverless function's own deadline. If the class was not
-   resolvable earlier — because it was not on the schedule yet — resolution is
-   retried here too, and counts as "too early" until it succeeds. Permanent
-   outcomes (overlapping booking, credentials rejected) stop the loop at once.
-6. **Record and notify** — booked or waitlisted, both are success.
-
-A nightly job reprojects every account's releases and prunes old ones.
-
-### Why GitHub Actions rather than Vercel Cron
-
-Vercel's Hobby plan runs cron jobs **once a day**, which is useless for booking
-that opens at an exact minute. GitHub Actions has minute granularity and is
-free — but its own schedules are documented as *queued, not punctual*, and
-under load a trigger can land late enough that a release falls outside even a
-generous claim window and is simply missed, not just fired late.
-
-That is why timing does not depend on a scheduled trigger landing on time at
-all. **The booking watcher** (`watch.yml`) is a single long-running job, and
-GitHub caps any one job at ~6 hours — there is no way to make a job run
-forever. Instead a new job starts every 3 hours and each one runs for up to
-~5h50m, so a job is always already running well before the previous one's
-deadline. Once running, it asks `/api/cron/next` for the next unclaimed
-release and sleeps to it using the runner's own accurate clock, not GitHub's
-scheduler — the schedule trigger only has to land sometime in that ~2h50m
-overlap, not on the second, for a watcher to always be awake. `claimDue`
-claims a release atomically (`CLAIM_LEASE_MS` in `lib/db/repo.ts`), because
-the watcher's own loop can otherwise re-fire a release it just booked on its
-next iteration; a claim that is never finished — a crashed invocation —
-becomes reclaimable rather than lost. Every attempt still logs its offset
-from T-0.
-
-### The timing detail that matters
-
-"7 days before" is a claim about the **wall clock in the user's own zone** —
-the one they picked during setup — not elapsed time. Subtracting `7 × 24h` from the class instant is wrong twice a year: an hour
-early each spring (a wasted run) and **an hour late each autumn** — by which
-point a popular class is gone.
-
-`lib/schedule.ts` does the arithmetic on the calendar and resolves back through
-the zone. It also handles a release landing in the skipped spring-forward hour
-(shifted forward) and one landing in the repeated autumn hour (resolved to the
-earlier instant, because being early is recoverable and being late is not).
-
----
+- Your Booker password is never seen by this app.
+- Your Elixia password and session cookies are encrypted at rest
+  (AES-256-GCM) under a key that lives only in the environment.
+- Every database query is scoped to the signed-in user; `tests/neonRepo.test.ts`
+  checks isolation against real Postgres.
 
 ## Layout
 
 ```
-app/                    Next.js App Router
-  layout.tsx            the shell, and the two scripts that must run before React
-  globals.css           the whole visual system: tokens, then components
-  DashboardApp.tsx      the dashboard's three tabs (client component)
-  SettingsPanel.tsx     booking and notification settings
-  AddClass.tsx          the class chooser, built from the live schedule
-  Setup.tsx             the configuration pages a new account cannot skip
-  components/           the mark, the icons, the theme and install controls
-  manifest.ts           the web app manifest, so the app can be installed
-  offline/              what the service worker shows with no network
-  auth/[path]           Neon Auth's own pages: sign in, reset
-  account/               Neon Auth's own cards, combined onto one page: name, email, password
-  api/…/route.ts        JSON API — thin: authenticate, call a service, serialise
-  api/cron/tick         the booking tick, secret-guarded
-  api/cron/next         peeks the next unclaimed release, for the watcher to sleep to
-lib/
-  theme.ts              light/dark/system, and the script that paints before React
-  pwa.ts                whether to offer an install, and how, per platform
-  schedule.ts           DST-correct release-instant maths
-  timezones.ts          the zones on offer, and the guard that accepts only them
-  membership.ts         the two booking windows Elixia sells
-  planner.ts            weekly recurrence → concrete releases
-  service.ts            the app's behaviour, independent of HTTP and Postgres
-  booking.ts, retry.ts  the critical path and its bounded retry loop
-  auth/crypto.ts        AES-GCM sealing of stored credentials
-  auth/stack.ts         Neon Auth (Stack) server app
-  db/                   Repo interface + Neon and in-memory implementations
-  elixia.ts             the Elixia adapter — login, listing, booking
-  mock.ts               stand-in backend for local work and tests
-db/migrations/          numbered schema migrations, applied once each
-db/migrate.ts           `npm run migrate` — node-pg-migrate, configured
-public/sw.js            the service worker — three caching rules, hand-written
-public/icons/           the app icons a manifest is required to name
-public/fonts/           Plus Jakarta Sans, self-hosted (OFL)
-.github/workflows/      the checks, the booking watcher, the nightly reindex
+app/          Next.js App Router — pages, dashboard, setup, API routes
+lib/          booking logic, Elixia adapter, scheduling, crypto, db repo
+db/           migrations (node-pg-migrate)
+public/       service worker, icons, fonts
+.github/      CI workflows and the booking watcher
 ```
 
-The `Repo` interface is why moving storage — Workers KV, then Redis, now
-Postgres — has never required touching the booking logic.
+The `Repo` interface (`lib/db/`) is why the storage backend has changed
+twice without touching booking logic.
 
----
+## Interface
 
-## The interface
-
-Mobile first, because that is where a class gets added — usually while standing
-in one. Three tabs (Classes, Activity, Settings) render from one piece of markup
-as a thumb-reachable bar across the bottom of a phone and a row of pills under
-the header on a desktop. There is no separate account or security section:
-everything that would be in one already lives on Neon Auth's own page, and
-Settings links straight to it.
-
-`app/globals.css` is the whole visual system. Its palette, type scale, spacing
-grid and radii are **SATS DNA** — the design system behind Elixia, SATS and Fresh
-Fitness — so the app looks like it belongs beside the gym's own. Everything is a
-token: no component picks a colour, radius or shadow of its own, which is what
-lets the two themes be two lists of values rather than two sets of components,
-and class names describe the thing rather than the look (`.btn-danger`, never
-`.btn-red`).
-
-Four of that system's rules are the ones habit breaks:
-
-- **Body text is 14px**, not 16. It is a dense, information-first system.
-- **No shadows.** Depth is layered surface colour — page `#F3F4F5`, surface
-  `#FFFFFF`, nested `#F7F7F7` — plus 1px `#DCDEE0` borders.
-- **Navy `#0D2134` is structure, coral `#FA5333` is state.** Coral means active,
-  selected, in progress or featured. It is never decoration and never a second
-  button colour.
-- **Filled coral uses `#C84229`**, or white text on it fails contrast.
-
-The name and the `EB` mark are this app's own. Matching a spacing and type system
-is fair; the ELIXIA wordmark and the proprietary SATS Headline face are not ours
-to ship, and neither is used.
-
-**Theme.** The visitor's choice — system, light or dark — is stored under the
-key next-themes uses and applied as the class next-themes writes, because
-`@neondatabase/auth-ui` mounts next-themes underneath the whole app. Agreeing
-with it rather than running a second system in parallel is what keeps Neon's own
-sign-in pages in the same palette as the dashboard. A blocking script in `<head>`
-paints before the first frame, so the page never appears in the wrong theme and
-then corrects itself. `storeThemeChoice` also dispatches a synthetic `storage`
-event: next-themes only re-reads storage when one fires, and without it an
-OS-level palette change would overwrite a choice the visitor made by hand.
-
-**Installable.** A manifest, a hand-written service worker and an install card
-that is always offered — as a one-tap button where Chromium gave us a prompt,
-and as the Share ▸ Add to Home Screen steps on iOS, which has no prompt API at
-all. The worker never intercepts `/api/*` and never stores HTML; only
-fingerprinted assets are cached, because their URL changes when their content
-does. It is executed against a fake global scope in `tests/serviceWorker.test.ts`
-and asserted on by outcome.
-
----
+Mobile-first: three tabs (Classes, Activity, Settings), styled with SATS
+Group's own design tokens (`app/globals.css`) so it feels at home next to
+the gym's app. Installable as a PWA on both desktop and mobile.
 
 ## Tests
 
 ```bash
-npm test           # the full suite, no services required
+npm test           # full suite, no services required
 npm run typecheck
 npm run lint
 npm run build
 ```
 
-Covering the DST-aware release maths and its edge cases, the weekly planner, the
-retry loop's bounds and host-deadline clamping, encryption at rest, cron
-authorisation, per-user isolation, the schedule and its cascade behaviour,
-response classification, and dry-run mode. The
-in-memory repo reproduces the constraints the real schema enforces — the
-duplicate-class unique index and cascade-on-delete — so a fake that is more
-permissive than production cannot hide bugs.
+Covers DST-aware scheduling, retry bounds, encryption, cron auth, per-user
+isolation, and CI pipeline shape. Also mutation-tested against dozens of
+deliberately broken variants to confirm the suite actually catches them.
 
-These were not merely observed passing. The suite has been re-run against
-twenty-six deliberate mutations across this and previous revisions — naive epoch
-subtraction, DST edges resolved the wrong way, a fixed AES nonce, an
-unauthenticated cron endpoint, a prefix-matched secret, the host deadline ignored
-— and each was caught.
+### CI/CD
 
-Six real bugs surfaced that way and are fixed:
-
-- a retry budget a slow request could overshoot, and a hanging request that was
-  unbounded entirely;
-- redaction collapsing a whole subtree and destroying the structure the capture
-  exists to document;
-- `TOO_EARLY`-style error codes falling through to a generic error, because the
-  markers read as English while the codes are SCREAMING_SNAKE_CASE;
-- nothing stopping a user adding the same class twice, which would have raced two
-  requests for one slot at T-0;
-- a deadline-clamp test that could not fail, because the mock booked on the first
-  attempt and the retry loop was never reached;
-- the cron endpoint loading configuration *before* checking authorisation, so an
-  anonymous request got a 500 describing the deployment instead of a flat 401.
-
-Verified beyond the unit tests: built and served as a production Next.js app,
-driven through a headless browser in both themes and at phone width,
-with the persisted data inspected directly to confirm no plaintext credential is
-written.
-
-### The pipeline
-
-Two workflows run those same four commands: `.github/workflows/pull-request.yml`
-on every pull request, and `.github/workflows/main.yml` on every push to `main`.
-Neither deploys — **Vercel's Git integration is the only route to production**,
-building each pull request as a preview and each push to `main` as production,
-on its own.
-
-That makes the pull-request run the gate that actually holds: by the time
-`main.yml` goes red, Vercel has already deployed the commit. Merge on green, and
-read the `main` run as the record of what landed rather than as a barrier.
-
-Schema migrations ride the deploy rather than racing it. `vercel.json` sets the
-build command to `npm run migrate && next build`, so every deployment migrates
-before it serves anything, and a failed migration fails the build and leaves the
-previous deployment in place. Nothing in Actions migrates, which is also why no
-workflow needs a Vercel token.
-
-Because no human reviews these merges, the pipeline's own shape is tested too:
-`tests/workflows.test.ts` asserts that both workflows install from the lockfile
-and run all four checks, that each triggers on its own event alone, and that
-neither deploys, migrates, nor carries Vercel credentials — a second route to
-production would race Vercel's and silently undo a rollback. It also asserts the
-ordering itself: that the build command runs the migration first and joins the
-two with `&&` rather than `;`, so a failed migration cannot be built over. Those
-no-op assertions match nothing by design, so further tests prove each detector
-still fires against a workflow that *does* deploy or migrate. Every assertion was
-confirmed to fail against a workflow or config edited to break it.
-
----
+Two workflows (`pull-request.yml`, `main.yml`) run lint/typecheck/test/build
+— neither deploys or migrates. Vercel's Git integration deploys every push;
+`vercel.json` runs migrations as part of the build (`npm run migrate && next
+build`) so a failed migration blocks the deploy instead of shipping a broken
+schema.
 
 ## Design constraints
 
-- **No browser anywhere.** The adapter reaches Elixia with plain `fetch` — the
-  login chain and the schedule page are both parseable without one, which is
-  what makes booking from a serverless function possible at all.
-- **Each user acts only on their own account.** Every statement the repo issues
-  names the user, and `tests/neonRepo.test.ts` proves it against real Postgres.
-- **Bounded and polite.** ~30s per slot, jittered backoff, `Retry-After`
-  honoured, requests aborted at the deadline, permanent failures stop the loop,
-  and duplicate subscriptions are refused so the app never races itself.
-- **Fail loudly.** Credentials that stop working mark the account, surface in the
-  UI, and notify — never a silent no-op.
+- No browser automation — the Elixia adapter uses plain `fetch`.
+- Every action is scoped to the acting user's own account.
+- Bounded, polite retries; duplicate subscriptions are refused.
+- Failures are surfaced and notified, never silent.
