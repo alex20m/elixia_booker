@@ -34,6 +34,16 @@ import { PlusIcon } from './components/icons';
  * as long as the centre has classes, and the times are only the times that one
  * class runs.
  *
+ * The centre is asked for in one box rather than a search field feeding a
+ * dropdown. Two controls for one answer is two things to work out before the
+ * first question is even answered, and the pair could disagree — text reading
+ * one club over a form acting on another. So the box is the picker: it carries
+ * the whole catalogue as its own list, the browser narrows that list as the
+ * name is typed, and a centre counts as chosen only once what is in the box is
+ * a club Elixia lists. Anything else left in it is put back to the chosen
+ * centre when the box is left, so it never shows a club the form is not
+ * actually using.
+ *
  * The centre is remembered between visits, because it does not change:
  * someone books at their own gym week after week, and picking it out of 226
  * clubs is a chore in front of the choice that actually matters. It was worth
@@ -77,6 +87,15 @@ async function fetchRemote<T>(load: () => Promise<T>): Promise<Remote<T>> {
  */
 const sameClass = (value: string): string => value.trim().toLowerCase().replace(/\s+/g, ' ');
 
+/**
+ * How a typed centre matches the one on the list.
+ *
+ * Same folding as class names, for the same reason and one more: what arrives
+ * here was typed rather than clicked, so "sello" at speed and a trailing space
+ * from a paste both have to land on the club the catalogue calls "Sello".
+ */
+const sameName = (value: string): string => value.trim().toLowerCase().replace(/\s+/g, ' ');
+
 /** Identifies a slot within one class, and survives the list being refetched. */
 const slotKey = (option: ClassOption): string => `${option.weekday}|${option.startTime}`;
 
@@ -84,8 +103,11 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
   const [centers, setCenters] = useState<Remote<CenterOption[]>>({ status: 'loading' });
   /** Elixia's numeric club id: filtering by it skips a whole page fetch. */
   const [center, setCenter] = useState('');
-  /** Narrows the centre dropdown by name — 226 clubs is a scroll, not a choice. */
-  const [centerQuery, setCenterQuery] = useState('');
+  /**
+   * What is in the centre box, which is not the same as the centre chosen: it
+   * is free text until it spells one of Elixia's clubs exactly.
+   */
+  const [centerText, setCenterText] = useState('');
   // Tagged with the centre it describes, so a timetable is never read as
   // belonging to a centre it was not fetched for — the same trick the
   // dashboard plays with the signed-in user, and for the same reason: without
@@ -130,7 +152,12 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
      * and open on an error about a centre the visitor never picked.
      */
     function applySaved(options: CenterOption[], saved: CenterDefaults): void {
-      if (options.some((option) => option.id === saved.center)) setCenter(saved.center);
+      const option = options.find((entry) => entry.id === saved.center);
+      if (!option) return;
+      setCenter(option.id);
+      // The box has to say so as well: a chosen centre it does not name is the
+      // same silence as no centre at all.
+      setCenterText(option.name);
     }
 
     return () => {
@@ -161,17 +188,16 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
 
   const all = centers.status === 'ready' ? centers.value : [];
 
-  // Matched by substring, case-insensitive, against the name — the id is
-  // Elixia's own and nobody types it. The already-chosen centre survives a
-  // query that no longer matches it, for the same reason a remembered centre
-  // survives: a select whose value no visible option carries renders blank
-  // while the form still believes that centre is chosen.
-  const centerFilter = centerQuery.trim().toLowerCase();
-  const filteredCenters = centerFilter
-    ? all.filter(
-        (option) => option.name.toLowerCase().includes(centerFilter) || option.id === center,
-      )
-    : all;
+  // Narrowing the list as the name is typed is the browser's job — the box
+  // carries every centre and it shows the matching ones. What is left to do
+  // here is say when there are none, and that has to mean "there is nothing
+  // here" rather than "you have not finished typing": a substring test stays
+  // quiet through "sel" on the way to "Sello", and speaks up on "nowhere".
+  const typedCenter = sameName(centerText);
+  const noCenterMatches =
+    centers.status === 'ready' &&
+    typedCenter !== '' &&
+    !all.some((option) => sameName(option.name).includes(typedCenter));
 
   // Anything not tagged with the selected centre is still on its way, which is
   // what makes the switch immediate rather than one render behind.
@@ -225,11 +251,50 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
   const chooseCenter = (value: string): void => {
     setCenter(value);
     chooseClass('');
+    // Only a real centre is written down. Editing the box is how every search
+    // starts, and it passes through "nothing chosen" on the way — saving that
+    // would spend the memory of a gym someone actually trains at on a
+    // half-typed name.
+    if (!value) return;
     void api('/api/preferences', {
       method: 'PUT',
       body: JSON.stringify({ center: value } satisfies CenterDefaults),
     }).catch(() => {});
   };
+
+  /**
+   * Typing in the box, which chooses a centre only when the name is complete.
+   *
+   * A prefix is not a choice: "Tap" names Tapiola and nothing else, but acting
+   * on it would pick a club out from under someone mid-word, and fetch a
+   * timetable per keystroke doing it.
+   *
+   * Half-typed text does not un-choose anything either. Editing the box is how
+   * someone looks for a second gym, and every search passes through text that
+   * matches nothing — dropping the centre there would empty the class list
+   * mid-word and throw away the class already picked, for a search that may
+   * well end in giving up. Emptying the box is the one way to say "none": it is
+   * deliberate, and it is what the search started from.
+   */
+  const typeCenter = (text: string): void => {
+    setCenterText(text);
+    const match = all.find((option) => sameName(option.name) === sameName(text));
+    if (match) {
+      if (match.id !== center) chooseCenter(match.id);
+      return;
+    }
+    if (sameName(text) === '' && center) chooseCenter('');
+  };
+
+  /**
+   * Leaving the box puts back what is actually chosen.
+   *
+   * Without this the box is the one control that can lie: half a name, or a
+   * club that does not exist, sitting over a form that is still acting on the
+   * centre chosen before it. Re-spelling the chosen centre also tidies the
+   * case someone typed it in.
+   */
+  const settleCenter = (): void => setCenterText(centerName);
 
   return (
     <section className="card">
@@ -248,27 +313,28 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
             Centre {centers.status === 'loading' && <Spinner label="Loading centres" />}
           </label>
           <input
-            id="s-center-search"
-            type="text"
-            placeholder="Search centres…"
-            aria-label="Search centres"
-            value={centerQuery}
-            disabled={centers.status !== 'ready'}
-            onChange={(e) => setCenterQuery(e.target.value)}
-          />
-          <select
             id="s-center"
-            value={center}
+            type="text"
+            // The list is what makes this a picker rather than a text field:
+            // the browser draws it, narrows it as the name is typed, and
+            // drives it with whatever the device is best at — the phone
+            // keyboard's own suggestion strip included.
+            list="s-center-options"
+            // The browser's memory of what was typed into other boxes named
+            // like this one has no business competing with the catalogue.
+            autoComplete="off"
+            placeholder={centerPlaceholder(centers)}
+            value={centerText}
             disabled={centers.status !== 'ready'}
-            onChange={(e) => chooseCenter(e.target.value)}
-          >
-            <option value="">{centerPlaceholder(centers, filteredCenters.length, centerQuery)}</option>
-            {filteredCenters.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.name}
-              </option>
+            onChange={(e) => typeCenter(e.target.value)}
+            onBlur={settleCenter}
+          />
+          <datalist id="s-center-options">
+            {all.map((option) => (
+              <option key={option.id} value={option.name} />
             ))}
-          </select>
+          </datalist>
+          {noCenterMatches && <p className="hint">No centres match “{centerText.trim()}”</p>}
         </div>
         <div className="field">
           <label htmlFor="s-class">
@@ -360,15 +426,13 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
   );
 }
 
-function centerPlaceholder(
-  centers: Remote<CenterOption[]>,
-  matchCount: number,
-  query: string,
-): string {
+function centerPlaceholder(centers: Remote<CenterOption[]>): string {
   if (centers.status === 'loading') return 'Loading centres…';
   if (centers.status === 'error') return 'Could not load centres';
-  if (matchCount === 0 && query.trim()) return `No centres match "${query.trim()}"`;
-  return 'Choose a centre';
+  // Says both halves of what the box does, because a text field that is also a
+  // picker looks like neither until it is used once. Kept short enough to
+  // survive the two-column layout, where this field is half a card wide.
+  return 'Type or pick one';
 }
 
 function classPlaceholder(center: string, classes: Remote<ClassOption[]> | null): string {
