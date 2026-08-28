@@ -292,14 +292,6 @@ otherwise for that specific task:
   improvise a polling approach: "all the checks I can see have passed" is not
   the same as green here, and PRs have been merged before CI ever ran because of
   it. The skill defines what green means on this repo and how to wait for it.
-- **A merged PR is not a finished task on an app the platform deploys.**
-  Merging only proves the commit landed in history; the platform's own deploy
-  of that merge commit (e.g. Vercel's git integration) runs afterward,
-  decoupled from CI, and is what actually puts the change in front of a user —
-  a migration or an env var can fail there even when CI was clean. Keep
-  watching, using the same `merge-on-green` skill (its post-merge step),
-  until that deploy reaches a successful terminal state, and treat a failed
-  one as a bug to fix, not a footnote.
 - **Always squash merge.** Use the host's squash-merge option (e.g. "Squash and
   merge" on GitHub) so each MR collapses to a single commit on `main` — never a
   regular merge commit or a fast-forward/rebase merge, even if a task's own
@@ -454,9 +446,6 @@ Open an MR from `<branch-name>` to `main` and wait for CI/CD to run.
 - Once all checks are green, merge automatically — see
   [PR & Merge Policy](#pr--merge-policy-default-auto). Do not wait to be asked,
   unless the user said not to merge this particular task.
-- Merging is not the finish line on an app the platform deploys — stay on the
-  same `merge-on-green` skill through its post-merge step and confirm the
-  deploy of the merge commit goes green too before removing the worktree.
 
 ### Delete worktree
 
