@@ -366,6 +366,33 @@ describe('editing the linked credentials', () => {
     expect(await repo.claimDue(0, nowMs + 30 * 86_400_000)).not.toHaveLength(0);
   });
 
+  it('keeps the link intact when Elixia cannot be reached to check the edit', async () => {
+    // An outage during an edit is a failure to *check*, not a rejection, and
+    // the credentials already on file are still perfectly good — so the link
+    // has to survive it untouched rather than being downgraded on the strength
+    // of a request that never got an answer.
+    const profile = await linkedProfile();
+    const offline: BookingBackend = Object.assign(new MockElixiaClient(), {
+      login: async (): Promise<StoredTokens> => {
+        throw new Error('fetch failed');
+      },
+    });
+
+    const err = await updateElixiaCredentials(
+      { ...config, backend: offline },
+      profile,
+      { email: 'moved@example.com' },
+      nowMs,
+    ).catch((e: unknown) => e as ServiceError);
+
+    expect((err as ServiceError).status).toBe(502);
+
+    const stored = await repo.getProfile(USER_ID);
+    expect(stored!.elixiaEmail).toBe('gym@example.com');
+    expect(stored!.elixiaStatus).toBe('ok');
+    expect((await openSecret(config, stored!)).password).toBe('correct-horse');
+  });
+
   it('refuses an address cleared to blank rather than silently keeping the old one', async () => {
     const profile = await linkedProfile();
 
