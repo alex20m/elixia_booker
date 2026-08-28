@@ -11,6 +11,7 @@ import {
   findClubIdByName,
   listClubOptions,
   performElixiaLogin,
+  ElixiaCredentialsRejected,
 } from '../lib/elixia';
 import { isRetryable } from '../lib/types';
 import type { StoredTokens, Subscription } from '../lib/types';
@@ -730,5 +731,79 @@ describe('classifyBookingResponse', () => {
   it('truncates a huge error body so it cannot flood the log or notification', () => {
     const outcome = classifyBookingResponse(500, 'x'.repeat(10_000));
     expect((outcome as { detail: string }).detail.length).toBeLessThan(400);
+  });
+});
+
+describe('performElixiaLogin — a session cookie that was never earned', () => {
+  /**
+   * The success signal is "a session cookie showed up", so anything that puts
+   * one in the jar *before* the password is submitted defeats it. A signed-out
+   * visit to www.elixia.fi does exactly that: the pre-login hops clear the
+   * cookie by re-setting it empty with `Max-Age=0`, which a jar that only asks
+   * "is the name present" cannot tell apart from a real session.
+   */
+  it('rejects a wrong password even when the pre-login hops cleared a session cookie', async () => {
+    const authAction = `${AUTH}/realms/sats/login-actions/authenticate?session_code=abc`;
+    const form = `<form class="form" action="${authAction}" method="post">login</form>`;
+
+    const fetchImpl = (async (url: string | URL) => {
+      const key = url.toString();
+      if (key === `${BASE}/kirjaudu-sisaan?onSuccess=%2Fomat-sivut`) {
+        const headers = new Headers({ 'content-type': 'text/html' });
+        // What a sign-out leaves behind: the cookie name, with nothing in it.
+        headers.append('set-cookie', '.SATS_GROUP_AUTH=; Max-Age=0; Path=/; Secure; HttpOnly');
+        return new Response(form, { status: 200, headers });
+      }
+      // Keycloak's rejection: HTTP 200, the same form again, no new cookies.
+      if (key === authAction) {
+        return new Response(form, { status: 200, headers: { 'content-type': 'text/html' } });
+      }
+      throw new Error(`unexpected fetch in test: ${key}`);
+    }) as typeof fetch;
+
+    await expect(
+      performElixiaLogin(fetchImpl, BASE, 'user@example.com', 'wrong', NOW),
+    ).rejects.toThrow(/rejected the email or password/);
+  });
+
+  it('rejects a wrong password when a stale session cookie was already set on the way in', async () => {
+    const authAction = `${AUTH}/realms/sats/login-actions/authenticate?session_code=abc`;
+    const form = `<form class="form" action="${authAction}" method="post">login</form>`;
+
+    const fetchImpl = (async (url: string | URL) => {
+      const key = url.toString();
+      if (key === `${BASE}/kirjaudu-sisaan?onSuccess=%2Fomat-sivut`) {
+        const headers = new Headers({ 'content-type': 'text/html' });
+        headers.append('set-cookie', '.SATS_GROUP_AUTH=stale; Path=/; Secure; HttpOnly');
+        return new Response(form, { status: 200, headers });
+      }
+      if (key === authAction) {
+        return new Response(form, { status: 200, headers: { 'content-type': 'text/html' } });
+      }
+      throw new Error(`unexpected fetch in test: ${key}`);
+    }) as typeof fetch;
+
+    await expect(
+      performElixiaLogin(fetchImpl, BASE, 'user@example.com', 'wrong', NOW),
+    ).rejects.toThrow(/rejected the email or password/);
+  });
+
+  it('names rejected credentials as their own error, so a lookup failure is not mistaken for one', async () => {
+    const authAction = `${AUTH}/realms/sats/login-actions/authenticate?session_code=abc`;
+    const form = `<form class="form" action="${authAction}" method="post">login</form>`;
+
+    const fetchImpl = (async () =>
+      new Response(form, { status: 200, headers: { 'content-type': 'text/html' } })) as typeof fetch;
+
+    await expect(
+      performElixiaLogin(fetchImpl, BASE, 'user@example.com', 'wrong', NOW),
+    ).rejects.toBeInstanceOf(ElixiaCredentialsRejected);
+
+    // The other two failures in this file are *not* rejections: the form being
+    // unrecognisable means the flow changed, and nobody's password is at fault.
+    const noForm = (async () => new Response('<html>not a login page</html>')) as typeof fetch;
+    await expect(
+      performElixiaLogin(noForm, BASE, 'user@example.com', 'pw', NOW),
+    ).rejects.not.toBeInstanceOf(ElixiaCredentialsRejected);
   });
 });

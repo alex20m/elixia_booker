@@ -12,7 +12,7 @@
  * mock marker, so it cannot be mistaken for a real one.
  */
 
-import { UnknownCenterError } from './types';
+import { ElixiaCredentialsRejected, UnknownCenterError } from './types';
 import type { BookingBackend } from './elixia';
 import type {
   AttemptOutcome,
@@ -57,9 +57,13 @@ const MOCK_TOKEN_TTL_MS = 10 * 60 * 1000;
 
 export class MockElixiaClient implements BookingBackend {
   async login(email: string, password: string, nowMs: number): Promise<StoredTokens> {
-    // Enough validation to exercise the failure path in the UI.
-    if (!email.includes('@')) throw new Error('That does not look like an email address');
-    if (password.length < 4) throw new Error('Incorrect email or password');
+    // Enough validation to exercise the failure path in the UI — and thrown as
+    // the same type the real client uses, so mock mode exercises the rejection
+    // branch rather than the "could not reach Elixia" one.
+    if (!email.includes('@')) {
+      throw new ElixiaCredentialsRejected('That does not look like an email address');
+    }
+    if (password.length < 4) throw new ElixiaCredentialsRejected('Incorrect email or password');
 
     return {
       accessToken: `mock-access-${nowMs}`,
