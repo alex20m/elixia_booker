@@ -228,7 +228,31 @@ review, nothing else will catch it.
 After pushing, **the clock and the evidence reset**: back to step 1 with the new
 head SHA, and wait out the pipeline again.
 
-### 6. Merge
+### 6. Check freshness against the default branch
+
+`mergeable_state: clean` proves the head commit's own checks passed — it does
+not prove nothing new has landed on the default branch since. GitHub only
+reports `behind` for that when the repo requires branches to be up to date
+before merging (a stricter branch-protection setting most repos do not turn
+on); without it, a PR can sit `clean` while `main` has moved ahead, and
+squash-merging it produces a merge nobody's CI ever ran against the code as it
+will actually land. So this is the last gate, checked explicitly rather than
+inferred from `mergeable_state`:
+
+```bash
+git fetch origin main
+git merge-base --is-ancestor origin/main HEAD && echo up-to-date || echo behind
+```
+
+- **Behind** → rebase onto `origin/main`, resolve any conflicts, push, and go
+  back to step 1 with the new head SHA. Never merge on the strength of the old
+  evidence — a rebase changes the commit, and only a fresh green run vetted
+  what you are actually about to land. Loop this as many times as it takes;
+  the check is cheap, and a `main` that moved once can move again while you
+  wait out the re-run.
+- **Up to date** → proceed to merge below.
+
+### 7. Merge
 
 Confirm the PR is still open, that the SHA you validated is still `head.sha`, and
 that the working tree is clean with nothing unpushed. Then merge with the method
@@ -275,6 +299,10 @@ Report the outcome plainly: merged, or what is blocking it.
   be taken back.
 - **Do not stop watching a PR you opened.** An unmerged PR left behind is an
   unfinished task, and no one else is coming to finish it.
+- **Do not skip the step 6 freshness check because `mergeable_state` said
+  `clean`.** `clean` means the head commit's own checks passed, not that
+  `main` has stood still — those are different questions unless the repo
+  requires branches to be up to date.
 
 ## How to delete the floor: require the checks
 
@@ -300,7 +328,10 @@ In a repo configured that way, two things change:
   `mergeMethod: "SQUASH"` hands the whole loop to GitHub, which merges exactly
   when the required checks pass. The warning against auto-merge above applies
   only to repos *without* required checks; with them it is the correct mechanism
-  and this skill reduces to arming it once.
+  and this skill reduces to arming it once. This still does not cover step 6's
+  freshness check unless the branch-protection rule also requires branches to
+  be up to date before merging — without that, GitHub's auto-merge will happily
+  merge a `clean` PR sitting behind a `main` that has since moved.
 
 Setting it up is a repository setting, not something the API tools here can do:
 Settings → Branches (or Rules → Rulesets) → protect the default branch → *Require
