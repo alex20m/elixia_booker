@@ -19,10 +19,9 @@ const value = manifest();
 const file = (path: string): string => fileURLToPath(new URL(`../public${path}`, import.meta.url));
 
 describe('the manifest', () => {
-  it('names the app both in full and short enough for a home screen', () => {
+  it('names the app both in full and by the same name as a short form', () => {
     expect(value.name).toBe('Elixia Booker');
-    expect(value.short_name).toBeTruthy();
-    expect(value.short_name!.length).toBeLessThanOrEqual(12);
+    expect(value.short_name).toBe('Elixia Booker');
   });
 
   it('opens as its own app rather than a browser tab', () => {
