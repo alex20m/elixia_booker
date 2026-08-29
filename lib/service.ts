@@ -25,6 +25,7 @@ import { releasesFor, releasesInRange } from './planner';
 import { executeBooking, describeReport } from './booking';
 import { Logger } from './logger';
 import { notifyUser } from './notify';
+import { qstashTargetFor, scheduleBookingTicks, createTickPublisher } from './qstash';
 import { isMembershipWindow } from './membership';
 import { isOfferedTimeZone } from './timezones';
 import {
@@ -1092,7 +1093,44 @@ export async function reindexProfile(
   }
 
   await config.repo.replaceDueEntries(profile.id, entries);
+
+  // Hand the same instants to QStash, where one is configured.
+  //
+  // Deliberately *after* the rows are written and deliberately non-fatal: those
+  // rows are the source of truth, and the GitHub Actions watcher still books
+  // from them. This is the path that removes the dependency on a scheduler
+  // GitHub itself documents as droppable under load (see lib/qstash.ts), and
+  // until it is proven it must not be able to fail a settings save.
+  await publishTicks(config, entries, nowMs);
+
   return entries.length;
+}
+
+/**
+ * Publish the tick schedule for a set of due entries.
+ *
+ * Swallowing the failure is the point: reporting it is useful, but a QStash
+ * outage degrades to "the existing watcher is still driving this", never to a
+ * failed request for the user who merely changed a setting.
+ */
+async function publishTicks(
+  config: AppConfig,
+  entries: readonly DueEntry[],
+  nowMs: number,
+): Promise<void> {
+  const target = qstashTargetFor(config);
+  if (!target || !config.qstashToken) return;
+
+  const outcome = await scheduleBookingTicks(
+    entries.map((entry) => entry.releaseEpochMs),
+    { ...target, nowMs, publisher: createTickPublisher(config.qstashToken) },
+  );
+
+  // A scheduler that stopped working without saying so is the exact failure
+  // this replaces, so its own failures are never silent.
+  if (outcome.error) {
+    console.warn('qstash.schedule.failed', outcome.error);
+  }
 }
 
 // --- the booking tick ------------------------------------------------------
