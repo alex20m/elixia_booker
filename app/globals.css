@@ -524,9 +524,9 @@ strong {
 /*
  * One list of sections, two presentations, one source (app/components/NavMenu).
  * Wide enough for them and they sit in the bar itself; narrower and the same
- * list moves into the menu behind the button, which is also where signing out
- * lives. Exactly one of the two is ever rendered — the other is `display:
- * none`, so it is out of the accessibility tree as well as off the screen.
+ * list moves into the menu behind the button. Exactly one of the two is ever
+ * rendered — the other is `display: none`, so it is out of the accessibility
+ * tree as well as off the screen.
  */
 
 /* The bar copy. Off by default: the phone layout is the one that has to be
@@ -565,14 +565,6 @@ strong {
   color: var(--bar-fg);
 }
 
-/* Sign out in the bar and the menu button are one control seen from two
-   widths, and exactly one of them is ever on screen. Both start in their phone
-   state — sign out inside the menu, so nothing here — and the query below
-   trades them. */
-.nav-signout {
-  display: none;
-}
-
 @media (min-width: 46rem) {
   .nav-inline {
     display: flex;
@@ -584,12 +576,8 @@ strong {
     margin-right: var(--space-xs);
   }
 
-  /* With the sections above now in the bar, sign out was all the menu had
-     left, so it comes out and the button that opened it goes. */
-  .nav-signout {
-    display: inline-flex;
-  }
-
+  /* The sections are in the bar at this width, so the menu behind this
+     button would hold nothing at all. */
   .menu-trigger {
     display: none;
   }
@@ -674,35 +662,22 @@ strong {
   color: var(--accent);
 }
 
-/* Sign out: present, findable, and not competing with the section you came
-   here to reach. */
-.menu-item-quiet {
-  color: var(--text-alt);
-  font-weight: 500;
-}
-
-.menu-rule {
-  height: 1px;
-  margin: var(--space-xxs) var(--space-xs);
-  background: var(--border);
-}
-
-/* The sections are in the bar at this width, so what is left behind the button
-   is the account actions alone. This block has to come after the rules it
-   overrides: same specificity, so source order is what decides it — written
-   above them, the sections stay in the menu and the app grows two copies of
-   its own navigation on every desktop. */
+/* The sections are in the bar at this width and the trigger that opens this
+   panel is hidden with it (see `.menu-trigger` above) — but the panel can
+   still be open if a visitor resizes past this width without closing it
+   first, so it still has to be told not to show a second copy of the
+   sections next to the bar's own. */
 @media (min-width: 46rem) {
-  .menu-nav,
-  .menu-rule {
+  .menu-nav {
     display: none;
   }
 
-  /* A dropdown rather than a sheet at this width, so it hangs off the button
-     that opened it instead of off the edge of the window. Absolute against the
-     action cluster is what ties the two together — the cluster ends where the
-     button does, so `right: 0` lines their right edges up at any window width
-     without measuring anything. */
+  /* Shared with the install button's own popup (`.install-popup`), which is
+     still reachable at this width: a dropdown hanging off the button that
+     opened it, rather than the phone's sheet pinned under the bar. Absolute
+     against the action cluster ties the two together — the cluster ends
+     where the button does, so `right: 0` lines their right edges up at any
+     window width without measuring anything. */
   .menu-panel {
     position: absolute;
     top: calc(100% + var(--space-xs));
@@ -1377,6 +1352,43 @@ button.link .spinner {
      name a colour inherits white — which the menu never notices, because every
      one of its items sets its own. Prose has to say so itself. */
   color: var(--text);
+  text-align: left;
+}
+
+/*
+ * The sign-out confirmation. Not built on `.menu-panel`: that one turns into a
+ * dropdown anchored to `.appbar-actions` past 46rem, which only works pinned
+ * to a positioned ancestor in the bar. This dialog's trigger lives wherever
+ * its caller puts it — Settings today — so it stays a centred, viewport-fixed
+ * modal at every width instead, and stays dimmed throughout rather than going
+ * transparent the way a small dropdown's backdrop does.
+ *
+ * Both carry an explicit z-index above the bar's own (20): `.appbar` is
+ * `position: sticky` with a z-index, which makes it a positive-stacked
+ * sibling rather than something later markup automatically paints over, and
+ * this dialog is meant to sit above every part of the page, the bar included.
+ */
+.signout-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: rgb(0 0 0 / 40%);
+}
+
+.signout-confirm {
+  position: fixed;
+  z-index: 30;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: calc(100% - 2 * var(--space-s));
+  max-width: 22rem;
+  padding: var(--space-m);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 32px rgb(13 33 52 / 18%);
+  animation: menu-in 0.14s ease-out;
   text-align: left;
 }
 
