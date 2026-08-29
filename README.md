@@ -23,16 +23,76 @@ is done.
 - A class doesn't appear on the schedule until its booking window opens, so
   its id is resolved right before booking if it wasn't available earlier.
 
-### The booking watcher
+### What wakes the booking up
 
-`.github/workflows/watch.yml` runs a long-lived job that sleeps until the
-exact release millisecond, then books with jittered retries inside a ~30s
-budget. GitHub Actions' own cron isn't punctual enough for this, so instead:
-a new watcher job starts every 3 hours and each one runs for ~5h50m, so one
-is always awake well before the previous deadline — timing comes from the
-runner's clock, not the scheduler. Releases are claimed atomically so two
-overlapping watchers can't double-book. `lib/schedule.ts` does the "N days
-before" math in the user's own timezone, DST included.
+Two schedulers can drive `/api/cron/tick`, which sleeps to the exact release
+millisecond and then books with jittered retries inside a ~30s budget.
+`lib/schedule.ts` does the "N days before" math in the user's own timezone,
+DST included, and releases are claimed atomically (`claimDue`) so any number of
+overlapping callers can't double-book. That idempotence is what lets both
+schedulers run at once.
+
+**QStash (Upstash) — the primary.** Every reindex hands each upcoming release
+instant to QStash as a delayed HTTP call (`lib/qstash.ts`), so the wake-up
+comes from a service whose whole product is delivering a request at a chosen
+time. Nothing has to already be running for a release to be noticed, and
+nothing has to be cancelled when a subscription changes: messages are keyed by
+instant, and a tick that finds nothing due returns.
+
+**GitHub Actions — the fallback.** `.github/workflows/watch.yml` runs a
+long-lived job that sleeps to the release on the runner's own clock; a new one
+starts every 3 hours and each runs ~5h50m, so one is always awake well before
+the previous deadline. This exists because GitHub's cron can *drop* a scheduled
+trigger outright under load rather than merely delay it — which is also why it
+is no longer the primary, and why `watchdog.yml` re-dispatches a watcher when
+none is active.
+
+### Scheduling that lives outside the repo
+
+Two things are configured in QStash rather than in this codebase, and neither
+is recreated by a deploy — if you move to a fresh QStash account you must run
+these again. Both need `QSTASH_TOKEN`, `CRON_SECRET` and your `APP_URL`.
+
+The nightly reindex, which reprojects every account's upcoming releases and is
+what feeds QStash new instants in the first place:
+
+```bash
+curl -X POST "https://qstash.upstash.io/v2/schedules/$APP_URL/api/cron/reindex" \
+  -H "Authorization: Bearer $QSTASH_TOKEN" \
+  -H "Upstash-Schedule-Id: nightly-reindex" \
+  -H "Upstash-Cron: 17 3 * * *" \
+  -H "Upstash-Method: POST" \
+  -H "Upstash-Forward-Authorization: Bearer $CRON_SECRET" \
+  -H "Upstash-Timeout: 60s" \
+  -H "Upstash-Retries: 3"
+```
+
+`Upstash-Schedule-Id` makes that command idempotent — re-running it updates the
+one schedule instead of adding another. **`Upstash-Forward-Authorization`, not
+`Authorization`**: the plain header authenticates you *to QStash* and is
+consumed there, so using it would leave the endpoint's own Bearer guard
+unsatisfied and every nightly run 401ing into the dead-letter queue.
+
+Check what is actually configured with:
+
+```bash
+curl -H "Authorization: Bearer $QSTASH_TOKEN" https://qstash.upstash.io/v2/schedules
+```
+
+#### Why the publish horizon is shorter than the reindex horizon
+
+`REINDEX_HORIZON_DAYS` projects 10 days ahead, but QStash refuses any delivery
+scheduled beyond its plan's maximum delay (7 days on the free tier) — and it
+validates a batch as a unit, so a single over-limit instant rejects *every*
+message in the same request, including tomorrow's. `lib/qstash.ts` therefore
+clamps what it enqueues to `MAX_TICK_DELAY_MS` and lets the nightly run publish
+the rest as they come into range. Nothing is lost, because the reindex repeats
+every night and the clamp leaves days of slack.
+
+If you upgrade the QStash plan, `QSTASH_MAX_DELAY_MS` is the number to raise.
+Confirm the new ceiling by publishing a deliberately over-limit probe message
+and reading the limit back out of the error, rather than trusting the pricing
+page — the row has been renamed before.
 
 ## Setup that can't be skipped
 
