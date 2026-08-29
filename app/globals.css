@@ -824,6 +824,82 @@ select:focus-visible {
   border-color: var(--accent-strong);
 }
 
+/* ------------------------------------------------------------- combobox --- */
+
+/* A text box that is also a picker. The list is ours rather than a native
+   `<datalist>` — that one takes no styling at all, so beside the selects here
+   it rendered as a raw browser popup, and browsers disagree on whether it opens
+   before anything is typed. See the note in AddClass.tsx.
+
+   The chevron's own rule is not here but down with the button variants: the
+   base `button` rule outranks a lone class, so it has to be written and placed
+   the way every other variant in this file is. */
+.combo {
+  position: relative;
+}
+
+/* Room for the chevron, matching what `select` reserves for its own. */
+.combo input {
+  padding-right: var(--space-xl);
+}
+
+/* Floats over what follows it, which on this card is the class picker. The
+   card establishes no stacking context of its own, so a z-index here is enough
+   to clear its siblings. Borrows the menu panel's shadow — the app is
+   otherwise flat, and a layer over the page is the case a border alone does
+   not carry. */
+.combo-list {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + var(--space-xxs));
+  right: 0;
+  left: 0;
+  /* Roughly eight rows: enough to browse, short enough that the class picker
+     underneath is not buried on a phone. */
+  max-height: 17rem;
+  overflow-y: auto;
+  /* Momentum scrolling inside a popup that a finger has to drag. */
+  -webkit-overflow-scrolling: touch;
+  margin: 0;
+  padding: var(--space-xxs);
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 32px rgb(13 33 52 / 18%);
+}
+
+.combo-option {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap);
+  padding: var(--space-xs) var(--space-s);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+/* Hover and the arrow keys light the same row, so the pointer and the keyboard
+   never disagree about what Enter would take. */
+.combo-option[data-active='true'] {
+  background: var(--surface-nested);
+}
+
+/* The centre already in force, so reopening the list says where you are as
+   well as what else there is. */
+.combo-option[aria-selected='true'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.combo-empty {
+  padding: var(--space-s);
+  color: var(--text-alt);
+  font-size: 12px;
+}
+
 input::placeholder {
   color: var(--text-disabled);
 }
@@ -952,6 +1028,34 @@ button.btn-icon {
 
 button.btn-icon:hover:not(:disabled) {
   background: rgb(255 255 255 / 12%);
+}
+
+/* The combobox's chevron. Written `button.` and placed here with the other
+   variants for one reason: the base rule above is `button:not([data-slot])`,
+   which outranks a lone class — a bare `.combo-toggle` loses to it and the
+   chevron paints as a solid navy block with an invisible icon on it. */
+button.combo-toggle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: var(--space-xl);
+  min-height: 100%;
+  padding: 0;
+  border: 0;
+  /* Square against the input's own right edge, rounded to match it outside. */
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: transparent;
+  color: var(--text-alt);
+}
+
+button.combo-toggle:hover:not(:disabled) {
+  background: transparent;
+  color: var(--text);
+}
+
+button.combo-toggle:disabled {
+  background: transparent;
+  color: var(--text-disabled);
 }
 
 /* Controls sitting on the navy bar borrow its foreground rather than the

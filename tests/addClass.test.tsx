@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import AddClass from '@/app/AddClass';
@@ -154,11 +156,20 @@ function centerBox(): HTMLInputElement {
   return element;
 }
 
-/** Every centre the box offers, which is the browser's to filter, not ours. */
+/** The rows the listbox is currently showing, which the form draws itself. */
 function centerList(): string[] {
-  return [...container.querySelectorAll<HTMLOptionElement>('#s-center-options option')].map(
-    (option) => option.value,
+  return [...container.querySelectorAll<HTMLElement>('#s-center-list [role="option"]')].map(
+    (option) => option.textContent ?? '',
   );
+}
+
+const centerListOpen = (): boolean => container.querySelector('#s-center-list') !== null;
+
+/** Focusing the box is what opens it, the way a dropdown opens when clicked. */
+async function openCenter(): Promise<void> {
+  await act(async () => {
+    centerBox().dispatchEvent(new Event('focusin', { bubbles: true }));
+  });
 }
 
 async function typeCenter(text: string): Promise<void> {
@@ -169,6 +180,23 @@ async function typeCenter(text: string): Promise<void> {
   });
 }
 
+/** Picking with the pointer, which must beat the blur that would revert it. */
+async function clickCenterOption(name: string): Promise<void> {
+  const option = [...container.querySelectorAll<HTMLElement>('#s-center-list [role="option"]')].find(
+    (row) => row.textContent === name,
+  );
+  if (!option) throw new Error(`no "${name}" on the centre list`);
+  await act(async () => {
+    option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+  });
+}
+
+async function pressCenter(key: string): Promise<void> {
+  await act(async () => {
+    centerBox().dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+  });
+}
+
 /** React listens for focusout, not the blur that does not bubble. */
 async function leaveCenter(): Promise<void> {
   await act(async () => {
@@ -176,10 +204,19 @@ async function leaveCenter(): Promise<void> {
   });
 }
 
-// Named by id because that is what the form works in, typed by name because
-// that is what a person puts in the box.
-const chooseCenter = (id: string): Promise<void> =>
-  typeCenter(CENTERS.find((option) => option.id === id)?.name ?? id);
+/** The row the keyboard would commit, which is what the box points at. */
+function activeCenterOption(): string | null {
+  const id = centerBox().getAttribute('aria-activedescendant');
+  return id ? (container.querySelector(`#${id}`)?.textContent ?? null) : null;
+}
+
+// Named by id because that is what the form works in, chosen off the list
+// because that is what a person actually does with a dropdown.
+const chooseCenter = async (id: string): Promise<void> => {
+  const name = CENTERS.find((option) => option.id === id)?.name ?? id;
+  await openCenter();
+  await clickCenterOption(name);
+};
 
 async function clickAdd(): Promise<void> {
   await act(async () => {
@@ -201,18 +238,113 @@ describe('finding a centre', () => {
     expect(container.querySelectorAll('#s-center, select[id^="s-center"]')).toHaveLength(1);
   });
 
-  it("offers Elixia's own centres through the box's list rather than free text", async () => {
-    // The box accepts typing, but what it resolves to is still one of Elixia's
-    // clubs — the list behind it is the whole catalogue, and the browser
-    // narrows it as the person types.
+  it('draws its own list instead of handing the catalogue to a native datalist', async () => {
+    // A datalist cannot be styled, so it renders as a raw browser popup beside
+    // two styled selects; browsers disagree on when it opens at all, and iOS
+    // Safari barely shows one. The list has to be ours to be usable.
     await render();
+    await openCenter();
+
+    expect(container.querySelector('datalist')).toBeNull();
+    expect(centerBox().getAttribute('list')).toBeNull();
+    expect(container.querySelector('#s-center-list')?.getAttribute('role')).toBe('listbox');
+  });
+
+  it('writes the chevron rule so the base button style cannot outrank it', () => {
+    // No rendering test can see this: jsdom applies no stylesheet, so the
+    // chevron passes every assertion here while painting as a solid navy block
+    // with an invisible icon on it in a real browser. The base rule is
+    // `button:not([data-slot])` — element plus a class-weight :not, so a lone
+    // `.combo-toggle` loses to it outright, and an equally specific
+    // `button.combo-toggle` only wins by coming later.
+    const css = readFileSync(resolve(process.cwd(), 'app/globals.css'), 'utf8');
+    const base = css.indexOf('button:not([data-slot]),');
+    const toggle = css.indexOf('button.combo-toggle {');
+
+    expect(base).toBeGreaterThan(-1);
+    expect(toggle).toBeGreaterThan(-1);
+    expect(toggle).toBeGreaterThan(base);
+    expect(css.slice(toggle, css.indexOf('}', toggle))).toMatch(/background:\s*transparent/);
+  });
+
+  it('shows every centre the moment the box is opened, before anything is typed', async () => {
+    // The whole point of keeping a dropdown: someone who cannot spell their
+    // club still has to be able to find it by looking. A picker that stays
+    // empty until it is typed into has no list at all.
+    await render();
+    expect(centerListOpen()).toBe(false);
+
+    await openCenter();
 
     expect(centerList()).toEqual(['Tapiola', 'Sello', 'Kamppi']);
-    expect(centerBox().getAttribute('list')).toBe('s-center-options');
+  });
+
+  it('keeps the whole list open when the box already holds the chosen centre', async () => {
+    // Reopening on a chosen centre must not filter down to that one centre —
+    // that is a dropdown that only ever offers what is already picked, and
+    // switching gyms becomes impossible without clearing the box first.
+    defaults = { center: '740' };
+    await render();
+    await openCenter();
+
+    expect(centerBox().value).toBe('Tapiola');
+    expect(centerList()).toEqual(['Tapiola', 'Sello', 'Kamppi']);
+  });
+
+  it('matches text anywhere in the name, not only at the start', async () => {
+    // "ell" is in the middle of Sello. Prefix-only matching is what the
+    // browser's own datalist did, and it hides the club unless the first
+    // letters are already right — which is the case someone searches in.
+    await render();
+    await openCenter();
+    await typeCenter('ell');
+
+    expect(centerList()).toEqual(['Sello']);
+  });
+
+  it('picks the centre from a single click on the list', async () => {
+    // Typing the club's full name to select it is not a dropdown.
+    await render();
+    await openCenter();
+    await clickCenterOption('Sello');
+
+    expect(centerBox().value).toBe('Sello');
+    expect(centerListOpen()).toBe(false);
+    expect(saved).toEqual([{ center: '741' }]);
+  });
+
+  it('picks the centre with the keyboard alone', async () => {
+    await render();
+    await openCenter();
+    await pressCenter('ArrowDown');
+    await pressCenter('ArrowDown');
+
+    expect(activeCenterOption()).toBe('Sello');
+
+    await pressCenter('Enter');
+
+    expect(centerBox().value).toBe('Sello');
+    expect(centerListOpen()).toBe(false);
+    expect(saved).toEqual([{ center: '741' }]);
+  });
+
+  it('closes on Escape without changing the centre', async () => {
+    await render();
+    await chooseCenter('740');
+    await openCenter();
+    await typeCenter('Sel');
+    await pressCenter('Escape');
+
+    expect(centerListOpen()).toBe(false);
+    // Escape abandons the search, so the box has to go back to saying what the
+    // form is still acting on rather than leaving "Sel" over Tapiola's classes.
+    expect(centerBox().value).toBe('Tapiola');
+    expect(saved).toEqual([{ center: '740' }]);
   });
 
   it('picks the centre whose name is typed in full', async () => {
     await render();
+    await openCenter();
     await typeCenter('Tapiola');
 
     expect(optionLabels('s-class').join('|')).toMatch(/Bodypump/);
@@ -494,6 +626,7 @@ describe('remembering where you train', () => {
     );
 
     await render();
+    await openCenter();
     expect(centerList()).toContain('Tapiola');
   });
 });
