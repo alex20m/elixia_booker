@@ -156,8 +156,76 @@ ordinary promise chains, but it is a heuristic. If a test starts depending on
 the exact count, that is a signal the code under test has real asynchrony the
 clock is not modelling, not a signal to raise the number.
 
+### When draining is not enough: wait for a known number of racers
+
+Draining bounds *promise chains*. It cannot bound genuinely asynchronous,
+off-thread work — `crypto.subtle`, a real filesystem read, anything on the
+threadpool. If preparing an item does any of that, then on a loaded machine one
+racer can still be inside it with nothing registered, however many turns you
+drain. The clock then computes the earliest wake-up from a partial set, jumps to
+T-0 for whoever *had* parked, jumps again past the straggler, and the straggler
+measures its offset against a clock already seconds beyond its deadline —
+reporting a queue that never happened.
+
+That failure is rare, load-dependent, and lands on the one test that would catch
+a real regression, so the standing response becomes "re-run it". Which is how
+the regression it exists to catch eventually goes through.
+
+No larger drain count fixes this, because the quantity being guessed at is
+unbounded. Replace the guess with a fact the test already knows — how many items
+are racing — and refuse to move time until that many have parked:
+
+```ts
+const instantClock = ({ racers = 1 } = {}) => {
+  let barrierCleared = false;
+  async function pump() {
+    while (waiters.length > 0) {
+      if (!barrierCleared) {
+        const startedAt = process.hrtime.bigint();          // real: Date is faked
+        while (waiters.length < racers && process.hrtime.bigint() - startedAt < GUARD_NS) {
+          await new Promise((r) => setImmediate(r));
+        }
+        barrierCleared = true;
+      }
+      // ...drain, then advance as before
+    }
+  }
+};
+```
+
+Two things about that shape are deliberate:
+
+- **One-shot.** Later phases — a retry loop, a slow dependency's own delay —
+  legitimately have different numbers in flight, so a standing barrier would
+  deadlock. By the time it clears, each item's first-attempt offset (the only
+  thing being measured) is already recorded.
+- **The timeout is a liveness guard, not the mechanism.** Without it, a genuine
+  regression — where the second item never reaches its sleep — hangs instead of
+  failing. **Set it below the runner's own test timeout.** Above it, the suite
+  reports an unexplained timeout instead of the assertion naming the lateness,
+  and the most useful failure the test can produce is the one you lose. Verify
+  this deliberately: break fairness for real and check the output says
+  `expected 10000 to be 0`, not `Test timed out`.
+
 Replacing the additive clock is usually a strict improvement for the tests that
 already exist: for genuinely sequential sleeps it advances identically.
+
+### Proving a flaky-clock fix
+
+You cannot show absence by running once. Reproduce first, then show it gone:
+
+1. **Get a reliable repro.** Saturate the CPU (`nproc * 2` spinners) and run the
+   test repeatedly until you have a failure rate to compare against — a rate,
+   not an anecdote.
+2. **Establish whose bug it is** before fixing anything, by running the same
+   loop on the base branch. A failure rate on `main` that your branch does not
+   raise is a pre-existing flake, not something your change caused.
+3. **After the fix, re-run the same loop under the same (or heavier) load** and
+   require zero failures across many runs.
+4. **Then mutate the production code back to broken and watch it go red** — once
+   per property, since serialising an inner loop and an outer loop are different
+   bugs and one test does not necessarily catch both. A fix that makes a flaky
+   test *unable to fail* looks exactly like a fix that worked.
 
 ## What to check before calling it fixed
 
