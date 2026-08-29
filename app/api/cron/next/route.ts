@@ -15,7 +15,7 @@ async function next(request: Request): Promise<Response> {
   return handle(async () => {
     // Authorise before touching config: an unauthenticated caller must get a
     // flat 401, not a 500 describing how this deployment is set up.
-    assertCronAuthorised(request);
+    await assertCronAuthorised(request);
     const config = loadCronConfig();
 
     const nowMs = Date.now();

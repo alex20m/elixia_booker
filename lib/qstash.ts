@@ -98,7 +98,6 @@ export const MAX_TICK_DELAY_MS = QSTASH_MAX_DELAY_MS - PUBLISH_MARGIN_MS;
 /** Where a scheduled tick should be delivered, once it is known to be reachable. */
 export interface QstashTarget {
   appUrl: string;
-  cronSecret: string;
 }
 
 /**
@@ -118,13 +117,23 @@ export function qstashTargetFor(config: {
 }): QstashTarget | null {
   const { qstashToken, appUrl, cronSecret } = config;
   if (!qstashToken || !appUrl || !cronSecret) return null;
-  return { appUrl, cronSecret };
+  return { appUrl };
 }
 
-/** One scheduled invocation of /api/cron/tick. */
+/**
+ * One scheduled invocation of /api/cron/tick.
+ *
+ * Deliberately carries no Authorization header. QStash's own dashboard and
+ * events API display a published message's headers in the clear to anyone
+ * with account access, so a forwarded secret sits there in plaintext for as
+ * long as the account's log retention keeps it — a second, wider copy of a
+ * credential that used to live only in the deployment's own environment. The
+ * endpoint verifies the message came from QStash by its signature instead
+ * (lib/http.ts assertCronAuthorised), which needs nothing in the message to
+ * leak.
+ */
 export interface TickMessage {
   url: string;
-  headers: Record<string, string>;
   /**
    * Unix timestamp in **seconds** — QStash's unit, not the milliseconds this
    * codebase carries everywhere else.
@@ -163,7 +172,6 @@ export function createTickPublisher(token: string): TickPublisher {
 export interface TickScheduleOptions {
   nowMs: number;
   appUrl: string;
-  cronSecret: string;
 }
 
 export interface ScheduleOutcome {
@@ -180,7 +188,7 @@ export interface ScheduleOutcome {
  */
 export function tickMessagesFor(
   releaseEpochMs: readonly number[],
-  { nowMs, appUrl, cronSecret }: TickScheduleOptions,
+  { nowMs, appUrl }: TickScheduleOptions,
 ): TickMessage[] {
   const bySecond = new Map<number, TickMessage>();
 
@@ -206,9 +214,6 @@ export function tickMessagesFor(
 
     bySecond.set(notBefore, {
       url: `${appUrl.replace(/\/+$/, '')}/api/cron/tick`,
-      // The endpoint is Bearer-guarded; a message without this is delivered,
-      // 401s, and retries its way into the dead-letter queue.
-      headers: { Authorization: `Bearer ${cronSecret}` },
       notBefore,
       // Keyed by the wake second alone, so the id is identical no matter which
       // profile's reindex produced it or how many times it is republished.
@@ -244,4 +249,60 @@ export async function scheduleBookingTicks(
   } catch (err) {
     return { scheduled: 0, dormant: false, error: (err as Error).message };
   }
+}
+
+// --- verifying an inbound request actually came from QStash ----------------
+
+/** The two signing keys QStash's Receiver needs to check a request. */
+export interface QstashSigningKeys {
+  currentSigningKey: string;
+  nextSigningKey: string;
+}
+
+/**
+ * Whether this deployment can verify a QStash signature at all.
+ *
+ * Both keys are required together, the same reasoning as `qstashTargetFor`:
+ * `Receiver` needs the next key to keep verifying through a key rotation, so
+ * a deployment carrying only the current one would start rejecting every
+ * delivery the moment the account rotates, silently, on a path nobody is
+ * watching until then.
+ */
+export function qstashSigningKeysFor(config: {
+  currentSigningKey?: string | undefined;
+  nextSigningKey?: string | undefined;
+}): QstashSigningKeys | null {
+  const { currentSigningKey, nextSigningKey } = config;
+  if (!currentSigningKey || !nextSigningKey) return null;
+  return { currentSigningKey, nextSigningKey };
+}
+
+/** The slice of `@upstash/qstash`'s Receiver that checking a request needs. */
+export interface SignatureVerifier {
+  verify(args: { signature: string; body: string }): Promise<boolean>;
+}
+
+/**
+ * The real verifier, backed by `@upstash/qstash`'s Receiver.
+ *
+ * Lazily imported for the same reason `createTickPublisher` is: a deployment
+ * without signing keys never loads the SDK for this path at all.
+ *
+ * `Receiver.verify` is documented to resolve `true` or throw `SignatureError`
+ * on a bad signature, never to resolve `false` — caught here so a forged or
+ * malformed signature reads as "not verified" to the caller rather than as an
+ * unhandled rejection surfacing a 500 to whoever is attacking the endpoint.
+ */
+export function createSignatureVerifier(keys: QstashSigningKeys): SignatureVerifier {
+  return {
+    async verify({ signature, body }): Promise<boolean> {
+      const { Receiver } = await import('@upstash/qstash');
+      const receiver = new Receiver(keys);
+      try {
+        return await receiver.verify({ signature, body });
+      } catch {
+        return false;
+      }
+    },
+  };
 }
