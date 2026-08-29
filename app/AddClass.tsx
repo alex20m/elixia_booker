@@ -118,6 +118,141 @@ const slotKey = (option: ClassOption): string => `${option.weekday}|${option.sta
 const scrollActiveIntoView = (row: HTMLLIElement | null): void =>
   row?.scrollIntoView?.({ block: 'nearest' });
 
+/**
+ * The class and day/time pickers, drawn the same way the centre's list is.
+ *
+ * The centre needs a text box because a search is the only way into 226
+ * clubs. Neither of these lists is ever that long — a centre's own timetable
+ * bounds them — so there is nothing worth typing into, and a button stands in
+ * for the input: it shows the chosen row (or a placeholder) as its own label,
+ * and opens the same kind of list on click, arrow key, Enter, or Escape.
+ * `role="combobox"` still applies to a button in this shape — the "select-only"
+ * combobox the ARIA authoring practices describe — since the accessible
+ * contract (announce the list, announce what is picked) does not need a
+ * text-editing widget to hold it.
+ */
+function Listbox({
+  id,
+  value,
+  options,
+  placeholder,
+  disabled,
+  onChange,
+}: {
+  id: string;
+  value: string;
+  options: { value: string; label: string }[];
+  placeholder: string;
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  const [openState, setOpen] = useState(false);
+  const [active, setActive] = useState(-1);
+  // A field can go from offering rows to offering none — the centre changing
+  // out from under an open class list, say — and a list that stays open over
+  // nothing looks like the picker broke rather than emptied. Read off
+  // `disabled` directly instead of syncing it into state: a disabled button
+  // fires no events to close it explicitly, so nothing else would.
+  const open = openState && !disabled;
+
+  const selectedIndex = options.findIndex((option) => option.value === value);
+
+  const openList = (): void => {
+    setOpen(true);
+    // Arrowing off the current choice lands on its neighbour, the same as
+    // reopening the centre list does.
+    setActive(selectedIndex);
+  };
+
+  const closeList = (): void => {
+    setOpen(false);
+    setActive(-1);
+  };
+
+  const commit = (index: number): void => {
+    const option = options[index];
+    if (!option) return;
+    onChange(option.value);
+    closeList();
+  };
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>): void => {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (!open) {
+        openList();
+        return;
+      }
+      const step = event.key === 'ArrowDown' ? 1 : -1;
+      const last = options.length - 1;
+      if (last < 0) return;
+      setActive((current) => Math.min(Math.max(current + step, 0), last));
+      return;
+    }
+    if (event.key === 'Enter' && open) {
+      event.preventDefault();
+      commit(active);
+      return;
+    }
+    if (event.key === 'Escape' && open) {
+      event.preventDefault();
+      closeList();
+    }
+  };
+
+  return (
+    <div className="combo">
+      <button
+        type="button"
+        id={id}
+        role="combobox"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={`${id}-list`}
+        aria-activedescendant={
+          open && options[active] ? `${id}-opt-${active}` : undefined
+        }
+        className="combo-select"
+        disabled={disabled}
+        onClick={() => (open ? closeList() : openList())}
+        onKeyDown={onKeyDown}
+        // Same reason as the centre: leaving the control has to close a list
+        // left open over it.
+        onBlur={closeList}
+      >
+        <span className={selectedIndex < 0 ? 'combo-placeholder' : undefined}>
+          {selectedIndex >= 0 ? options[selectedIndex]?.label : placeholder}
+        </span>
+        <ChevronIcon />
+      </button>
+      {open && (
+        <ul className="combo-list" id={`${id}-list`} role="listbox">
+          {options.map((option, index) => (
+            <li
+              key={option.value}
+              id={`${id}-opt-${index}`}
+              role="option"
+              aria-selected={option.value === value}
+              className="combo-option"
+              data-active={index === active}
+              ref={index === active ? scrollActiveIntoView : undefined}
+              // Same reason as the centre's rows: a plain click arrives after
+              // the blur that would have closed the list already.
+              onMouseDown={(event) => {
+                event.preventDefault();
+                commit(index);
+              }}
+              onMouseEnter={() => setActive(index)}
+            >
+              {option.label}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export default function AddClass({ refresh }: { refresh: () => Promise<void> }) {
   const [centers, setCenters] = useState<Remote<CenterOption[]>>({ status: 'loading' });
   /** Elixia's numeric club id: filtering by it skips a whole page fetch. */
@@ -499,40 +634,33 @@ export default function AddClass({ refresh }: { refresh: () => Promise<void> }) 
           <label htmlFor="s-class">
             Class {classes?.status === 'loading' && <Spinner label="Loading classes" />}
           </label>
-          <select
+          <Listbox
             id="s-class"
             value={className}
+            options={names.map((name) => ({ value: name, label: name }))}
+            placeholder={classPlaceholder(center, classes)}
             disabled={names.length === 0}
-            onChange={(e) => chooseClass(e.target.value)}
-          >
-            <option value="">{classPlaceholder(center, classes)}</option>
-            {names.map((name) => (
-              <option key={sameClass(name)} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
+            onChange={chooseClass}
+          />
         </div>
       </div>
 
       <div className="field mt-s">
         <label htmlFor="s-slot">Day and time</label>
-        <select
+        <Listbox
           id="s-slot"
           value={slot}
+          options={slots.map((option) => ({
+            value: slotKey(option),
+            label: `${titleCase(option.weekday)} ${option.startTime}`,
+          }))}
+          placeholder={slotPlaceholder(className, slots.length)}
           disabled={slots.length === 0}
-          onChange={(e) => {
-            setSlot(e.target.value);
+          onChange={(value) => {
+            setSlot(value);
             setError('');
           }}
-        >
-          <option value="">{slotPlaceholder(className, slots.length)}</option>
-          {slots.map((option) => (
-            <option key={slotKey(option)} value={slotKey(option)}>
-              {titleCase(option.weekday)} {option.startTime}
-            </option>
-          ))}
-        </select>
+        />
       </div>
 
       {centers.status === 'error' && (

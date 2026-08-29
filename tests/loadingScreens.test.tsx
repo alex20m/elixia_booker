@@ -147,12 +147,16 @@ const pickCenter = async (name: string): Promise<void> => {
   });
 };
 
-/** Set a <select> and let React see the change. */
-const pick = async (id: string, value: string): Promise<void> => {
-  const select = byId<HTMLSelectElement>(id)!;
+/** Open the class or slot picker's drawn list and click the row with this label. */
+const pick = async (id: string, label: string): Promise<void> => {
   await act(async () => {
-    select.value = value;
-    select.dispatchEvent(new Event('change', { bubbles: true }));
+    byId<HTMLButtonElement>(id)!.click();
+  });
+  const option = [...container.querySelectorAll<HTMLElement>(`#${id}-list [role="option"]`)].find(
+    (row) => row.textContent === label,
+  );
+  await act(async () => {
+    option!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
   });
 };
 
@@ -298,7 +302,7 @@ describe('adding a class', () => {
     // for before Add becomes pressable at all.
     await pickCenter('Tapiola');
     await pick('s-class', 'Bodypump');
-    await pick('s-slot', 'monday|09:00');
+    await pick('s-slot', 'Monday 09:00');
 
     hang.add('/api/subscriptions');
     await act(async () => {
