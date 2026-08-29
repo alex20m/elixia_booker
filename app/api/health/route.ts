@@ -1,5 +1,5 @@
 import { API_DISCOVERED } from '@/lib/elixia';
-import { encryptionConfigured } from '@/lib/appConfig';
+import { encryptionConfigured, qstashConfigured } from '@/lib/appConfig';
 import { authConfigured } from '@/lib/auth/neonAuth';
 import { databaseConfigured } from '@/lib/db/neon';
 import { handle, json } from '@/lib/http';
@@ -19,6 +19,9 @@ export async function GET(): Promise<Response> {
       authConfigured: authConfigured(),
       encryptionConfigured: encryptionConfigured(),
       cronConfigured: Boolean(process.env.CRON_SECRET),
+      // The booking mechanism itself. False means nothing is being scheduled,
+      // however green everything above looks.
+      qstashConfigured: qstashConfigured(),
     }),
   );
 }
