@@ -37,7 +37,11 @@ instant to QStash as a delayed HTTP call (`lib/qstash.ts`), so the wake-up
 comes from a service whose whole product is delivering a request at a chosen
 time. Nothing has to already be running for a release to be noticed, and
 nothing has to be cancelled when a subscription changes: messages are keyed by
-instant, and a tick that finds nothing due returns.
+instant, and a tick that finds nothing due returns. Published messages carry
+no secret — the cron endpoints authenticate a QStash delivery by verifying its
+signature (`QSTASH_CURRENT_SIGNING_KEY`/`QSTASH_NEXT_SIGNING_KEY`), not by a
+forwarded header, because QStash shows a message's headers in the clear in its
+own dashboard and events API to anyone with account access.
 
 **GitHub Actions — the fallback.** `.github/workflows/watch.yml` runs a
 long-lived job that sleeps to the release on the runner's own clock; a new one
@@ -51,7 +55,7 @@ none is active.
 
 Two things are configured in QStash rather than in this codebase, and neither
 is recreated by a deploy — if you move to a fresh QStash account you must run
-these again. Both need `QSTASH_TOKEN`, `CRON_SECRET` and your `APP_URL`.
+these again. Both need `QSTASH_TOKEN` and your `APP_URL`.
 
 The nightly reindex, which reprojects every account's upcoming releases and is
 what feeds QStash new instants in the first place:
@@ -62,16 +66,24 @@ curl -X POST "https://qstash.upstash.io/v2/schedules/$APP_URL/api/cron/reindex" 
   -H "Upstash-Schedule-Id: nightly-reindex" \
   -H "Upstash-Cron: 17 3 * * *" \
   -H "Upstash-Method: POST" \
-  -H "Upstash-Forward-Authorization: Bearer $CRON_SECRET" \
   -H "Upstash-Timeout: 60s" \
   -H "Upstash-Retries: 3"
 ```
 
 `Upstash-Schedule-Id` makes that command idempotent — re-running it updates the
-one schedule instead of adding another. **`Upstash-Forward-Authorization`, not
-`Authorization`**: the plain header authenticates you *to QStash* and is
-consumed there, so using it would leave the endpoint's own Bearer guard
-unsatisfied and every nightly run 401ing into the dead-letter queue.
+one schedule instead of adding another. **No `Upstash-Forward-Authorization`
+here on purpose**: an earlier version of this command forwarded `CRON_SECRET`
+as a Bearer header so the endpoint's guard would accept it, which meant the
+secret sat in plaintext in QStash's own dashboard and events API for as long
+as its retention window kept it. The endpoint now verifies the request's
+QStash signature instead (`lib/http.ts` `assertCronAuthorised`), which needs
+nothing in the schedule or the message to prove where it came from. The
+`Authorization` header above authenticates *you* to QStash's API when running
+this command — it is never sent on to the app.
+
+`CRON_SECRET` is still required (for the GitHub Actions fallback, which
+authenticates the old-fashioned way), just no longer part of what QStash
+itself has to carry.
 
 Check what is actually configured with:
 
