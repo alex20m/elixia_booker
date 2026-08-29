@@ -6,6 +6,7 @@ import {
   tickMessagesFor,
   scheduleBookingTicks,
   qstashTargetFor,
+  qstashSigningKeysFor,
   TICK_TIMEOUT_SECONDS,
   TICK_MAX_DURATION_SECONDS,
   type TickMessage,
@@ -27,7 +28,7 @@ const APP_URL = 'https://booker.example';
 const SECRET = 'sekret';
 
 function opts(nowMs: number) {
-  return { nowMs, appUrl: APP_URL, cronSecret: SECRET };
+  return { nowMs, appUrl: APP_URL };
 }
 
 /** Checked indexing, so a missing message fails as itself rather than as a TypeError. */
@@ -107,15 +108,18 @@ describe('choosing which ticks to schedule', () => {
     expect(tickMessagesFor([release], opts(nowMs))).toEqual([]);
   });
 
-  it('carries the cron secret so the tick endpoint authorises it', () => {
-    // /api/cron/tick is Bearer-guarded (lib/http.ts assertCronAuthorised).
-    // A message published without it is delivered, rejected 401, and retried
-    // until it lands in the dead-letter queue — the booking silently missed.
+  it('points at the tick endpoint and carries no forwarded secret', () => {
+    // /api/cron/tick authorises a QStash delivery by its signature, not by a
+    // secret in the message (lib/http.ts assertCronAuthorised). QStash's own
+    // dashboard and events API display a message's headers in the clear to
+    // anyone with account access, so a forwarded secret would sit there in
+    // plaintext for as long as the account's retention keeps it — the whole
+    // reason the message carries no `headers` field at all.
     const release = Date.parse('2026-09-01T10:00:00.000Z');
     const message = nth(tickMessagesFor([release], opts(release - 60_000)), 0);
 
-    expect(message.headers.Authorization).toBe(`Bearer ${SECRET}`);
     expect(message.url).toBe(`${APP_URL}/api/cron/tick`);
+    expect(message).not.toHaveProperty('headers');
   });
 });
 
@@ -181,7 +185,10 @@ describe('deciding whether QStash is live for this deployment', () => {
   const complete = { qstashToken: 'tok', appUrl: APP_URL, cronSecret: SECRET };
 
   it('is live only when the token, the origin and the cron secret are all present', () => {
-    expect(qstashTargetFor(complete)).toEqual({ appUrl: APP_URL, cronSecret: SECRET });
+    // The returned target carries no cronSecret: it is still a required input
+    // (a deployment with neither a secret nor signing keys must refuse every
+    // cron request), but nothing downstream puts it in a message anymore.
+    expect(qstashTargetFor(complete)).toEqual({ appUrl: APP_URL });
   });
 
   it.each([
@@ -207,7 +214,7 @@ describe('the message shape the client is handed', () => {
     const message = nth(tickMessagesFor([release], opts(release - 60_000)), 0);
 
     expect(Object.keys(message).sort()).toEqual(
-      ['deduplicationId', 'headers', 'notBefore', 'timeout', 'url'].sort(),
+      ['deduplicationId', 'notBefore', 'timeout', 'url'].sort(),
     );
   });
 });
@@ -320,5 +327,27 @@ describe("the route's own duration ceiling", () => {
 
     expect(declared).toBeDefined();
     expect(Number(declared)).toBe(TICK_MAX_DURATION_SECONDS);
+  });
+});
+
+
+describe('verifying that an inbound request actually came from QStash', () => {
+  it('is live only when both signing keys are present', () => {
+    // Receiver needs the next key to keep verifying through a rotation
+    // (@upstash/qstash's own doc comment on Receiver.verify): a deployment
+    // carrying only the current one starts silently rejecting every real
+    // delivery the moment the account rotates.
+    expect(qstashSigningKeysFor({ currentSigningKey: 'cur', nextSigningKey: 'next' })).toEqual({
+      currentSigningKey: 'cur',
+      nextSigningKey: 'next',
+    });
+  });
+
+  it.each([
+    ['current key', 'currentSigningKey'],
+    ['next key', 'nextSigningKey'],
+  ] as const)('stays unverifiable when the %s is missing', (_label, key) => {
+    const partial = { currentSigningKey: 'cur', nextSigningKey: 'next', [key]: undefined };
+    expect(qstashSigningKeysFor(partial)).toBeNull();
   });
 });

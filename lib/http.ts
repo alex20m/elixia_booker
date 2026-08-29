@@ -11,6 +11,11 @@ import { neonAuth } from './auth/neonAuth';
 import { neonSql } from './db/neon';
 import { createNeonRepo } from './db/neonRepo';
 import { getOrCreateProfile, requireConfigured, ServiceError } from './service';
+import {
+  qstashSigningKeysFor,
+  createSignatureVerifier,
+  type SignatureVerifier,
+} from './qstash';
 import type { ConfiguredProfile, Profile } from './types';
 
 export const json = (data: unknown, status = 200, headers: Record<string, string> = {}): Response =>
@@ -138,16 +143,54 @@ export function loadCronConfig(): AppConfig {
  * configuration instead of a flat 401 — work done, and internal state
  * disclosed, for a caller that was never authorised.
  */
-export function assertCronAuthorised(request: Request, secret = process.env.CRON_SECRET): void {
+function defaultQstashVerifier(): SignatureVerifier | null {
+  const keys = qstashSigningKeysFor({
+    currentSigningKey: process.env.QSTASH_CURRENT_SIGNING_KEY,
+    nextSigningKey: process.env.QSTASH_NEXT_SIGNING_KEY,
+  });
+  return keys ? createSignatureVerifier(keys) : null;
+}
+
+/**
+ * Two credentials are accepted, cheapest first:
+ *
+ *  - **The shared secret.** What GitHub Actions still sends, and the only
+ *    thing an operator has to hand without provisioning anything else.
+ *  - **A verified QStash signature.** What QStash's own deliveries carry
+ *    automatically. Deliberately not "the secret, forwarded" — QStash's
+ *    dashboard and events API display a published message's headers in the
+ *    clear to anyone with account access, so a forwarded secret would sit
+ *    there in plaintext for as long as the account's retention keeps it. A
+ *    verified signature needs nothing in the message to leak (see
+ *    lib/qstash.ts's TickMessage comment).
+ *
+ * A verified signature is accepted even when no secret is configured at all
+ * — it is not the "unguarded endpoint" the secret check exists to catch, and
+ * a deployment can run on signing keys alone. The secret is still required
+ * when *no* signature arrives: silently allowing the tick would be far worse
+ * than refusing it, and the fallback for a caller with neither is to read the
+ * environment directly, before anything else runs, so an unauthenticated
+ * caller gets a flat 401 rather than a 500 describing the configuration.
+ */
+export async function assertCronAuthorised(
+  request: Request,
+  secret = process.env.CRON_SECRET,
+  verifier: SignatureVerifier | null = defaultQstashVerifier(),
+): Promise<void> {
+  const header = request.headers.get('authorization') ?? '';
+  const provided = header.startsWith('Bearer ') ? header.slice(7) : '';
+  if (secret && timingSafeEqual(provided, secret)) return;
+
+  const signature = request.headers.get('upstash-signature');
+  if (verifier && signature) {
+    const body = await request.text();
+    if (await verifier.verify({ signature, body })) return;
+  }
+
   if (!secret) {
     throw new ServiceError('CRON_SECRET is not configured on this deployment', 500);
   }
-  const header = request.headers.get('authorization') ?? '';
-  const provided = header.startsWith('Bearer ') ? header.slice(7) : '';
-
-  if (!timingSafeEqual(provided, secret)) {
-    throw new ServiceError('Unauthorized', 401);
-  }
+  throw new ServiceError('Unauthorized', 401);
 }
 
 /**
