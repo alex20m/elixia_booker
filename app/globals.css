@@ -784,7 +784,8 @@ input[list]::-webkit-calendar-picker-indicator {
 }
 
 input:focus-visible,
-select:focus-visible {
+select:focus-visible,
+.combo-select:focus-visible {
   outline: 2px solid var(--accent-strong);
   outline-offset: 0;
   border-color: var(--accent-strong);
@@ -864,6 +865,50 @@ select:focus-visible {
   padding: var(--space-s);
   color: var(--text-alt);
   font-size: 12px;
+}
+
+/* The class and day/time pickers draw the same list as the centre, but there
+   is nothing to type into — the whole list is already short enough to browse.
+   A button stands in for the input, sized and coloured to match it, since the
+   base button rule two sections down would otherwise paint it as a filled
+   action rather than a field. */
+.combo-select {
+  width: 100%;
+  min-height: var(--tap);
+  padding: var(--space-s);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.combo-select:hover:not(:disabled) {
+  background: var(--surface);
+}
+
+.combo-select:disabled {
+  background: var(--surface);
+  color: var(--text-disabled);
+  cursor: not-allowed;
+}
+
+/* Takes the row's spare width so the chevron always sits at the right edge,
+   however short the chosen label is, and clips a class name too long for the
+   box instead of wrapping the button onto a second line. */
+.combo-select > span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.combo-placeholder {
+  color: var(--text-disabled);
 }
 
 input::placeholder {
