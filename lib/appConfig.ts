@@ -6,6 +6,7 @@
  */
 
 import { createMemoryRepo } from './db/memoryRepo';
+import { qstashTargetFor } from './qstash';
 import type { BookingBackend } from './elixia';
 import type { Repo } from './db/repo';
 
@@ -106,6 +107,28 @@ export interface LoadOptions {
  */
 export function encryptionConfigured(): boolean {
   return Boolean(process.env.ENCRYPTION_KEY);
+}
+
+/**
+ * Whether this deployment can actually schedule bookings through QStash.
+ *
+ * Deliberately delegates to `qstashTargetFor` rather than repeating the check,
+ * so what health reports and what the scheduler does cannot drift apart — a
+ * health endpoint that says "configured" about a rule it has reimplemented is
+ * worse than none.
+ *
+ * Reported for the same reason as `encryptionConfigured`: the path is
+ * all-or-nothing, so a deployment missing one of the three parts publishes
+ * nothing at all while looking entirely healthy from outside.
+ */
+export function qstashConfigured(): boolean {
+  return (
+    qstashTargetFor({
+      qstashToken: process.env.QSTASH_TOKEN,
+      appUrl: process.env.APP_URL,
+      cronSecret: process.env.CRON_SECRET,
+    }) !== null
+  );
 }
 
 export function loadAppConfig(options: LoadOptions = {}): AppConfig {
