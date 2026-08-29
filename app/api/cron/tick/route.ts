@@ -8,6 +8,14 @@ export const dynamic = 'force-dynamic';
  * Vercel's ceiling for this function. Hobby allows up to 60s; Pro up to 300s.
  * Raising it on Pro widens the usable retry window for a release landing late
  * in the minute — see the deadline handling below.
+ *
+ * Must stay equal to TICK_MAX_DURATION_SECONDS in lib/qstash.ts, which is what
+ * the timeout on every published message is sized against — shrink this
+ * without shrinking that and QStash goes on waiting for an invocation the
+ * platform has already killed. It cannot simply import the constant: Next.js
+ * requires route segment config to be a statically analysable literal and
+ * fails the build with "Invalid segment configuration export detected"
+ * otherwise, so a test asserts the two agree instead.
  */
 export const maxDuration = 60;
 

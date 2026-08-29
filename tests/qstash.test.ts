@@ -1,11 +1,16 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import {
   TICK_LEAD_MS,
   tickMessagesFor,
   scheduleBookingTicks,
   qstashTargetFor,
+  TICK_TIMEOUT_SECONDS,
+  TICK_MAX_DURATION_SECONDS,
   type TickMessage,
 } from '@/lib/qstash';
+import { DEFAULT_TIMINGS } from '@/lib/config';
 
 /**
  * QStash is the scheduling path that replaces depending on GitHub Actions' own
@@ -202,7 +207,118 @@ describe('the message shape the client is handed', () => {
     const message = nth(tickMessagesFor([release], opts(release - 60_000)), 0);
 
     expect(Object.keys(message).sort()).toEqual(
-      ['deduplicationId', 'headers', 'notBefore', 'url'].sort(),
+      ['deduplicationId', 'headers', 'notBefore', 'timeout', 'url'].sort(),
     );
+  });
+});
+
+describe("staying inside QStash's maximum scheduling delay", () => {
+  /**
+   * Verified against the live account on 2026-08-29 by publishing probe
+   * batches: QStash answers a message scheduled further out than the plan
+   * allows with `{"error":"quota maxDelay exceeded, current limit: 604800"}`,
+   * and 604800s is seven days.
+   */
+  const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+  const nowMs = Date.parse('2026-08-29T08:00:00.000Z');
+
+  /**
+   * A publisher that fails the way the real one does.
+   *
+   * The single most expensive detail: QStash validates the whole batch before
+   * accepting any of it, so one over-limit message rejects *every* message in
+   * the request — including the ones well inside the limit. A fake that
+   * dropped only the offending message would let the bug this describes ship.
+   */
+  function fakeQstash() {
+    const accepted: TickMessage[] = [];
+    const batchJSON = vi.fn(async (messages: TickMessage[]) => {
+      const tooFar = messages.filter((m) => m.notBefore * 1000 - nowMs > SEVEN_DAYS_MS);
+      if (tooFar.length > 0) {
+        throw new Error('quota maxDelay exceeded, current limit: 604800');
+      }
+      accepted.push(...messages);
+      return [];
+    });
+    return { batchJSON, accepted };
+  }
+
+  it('never asks QStash for a delivery beyond the delay its plan allows', () => {
+    // Ten days is what REINDEX_HORIZON_DAYS projects, and seven is all QStash
+    // will take. Asking anyway is not a partial success — it is a rejected
+    // request.
+    const messages = tickMessagesFor([nowMs + 8 * 24 * 60 * 60 * 1000], opts(nowMs));
+
+    expect(messages).toEqual([]);
+  });
+
+  it('still schedules the imminent releases when a later one is out of range', async () => {
+    // The bug this is the regression test for. The nightly reindex projects a
+    // ten-day horizon, so any weekly subscription puts an over-limit instant in
+    // the same batch as tomorrow's. QStash rejected the batch whole, the error
+    // was swallowed, and the booking due in 24 hours had no message at all
+    // while its row sat in the database looking perfectly healthy.
+    const tomorrow = nowMs + 1 * 24 * 60 * 60 * 1000;
+    const nextWeek = nowMs + 9 * 24 * 60 * 60 * 1000;
+    const qstash = fakeQstash();
+
+    const result = await scheduleBookingTicks([tomorrow, nextWeek], {
+      ...opts(nowMs),
+      publisher: qstash,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.scheduled).toBe(1);
+    expect(qstash.accepted.map((m) => m.notBefore * 1000)).toEqual([tomorrow - TICK_LEAD_MS]);
+  });
+
+  it('keeps a margin under the limit so publish latency cannot push a message over', () => {
+    // notBefore is fixed when the batch is built, but QStash measures the delay
+    // when it receives it. A release computed at exactly the ceiling arrives
+    // just past it, and takes the whole batch down with it.
+    const atTheLimit = nowMs + SEVEN_DAYS_MS;
+
+    expect(tickMessagesFor([atTheLimit], opts(nowMs))).toEqual([]);
+  });
+});
+
+describe('how long a published tick may hold its connection', () => {
+  it('tells QStash the timeout instead of inheriting the plan default', () => {
+    // An unset timeout means "whatever this plan happens to allow", which is a
+    // number nobody here chose and that changes with the plan. State it.
+    const release = Date.parse('2026-09-01T10:00:00.000Z');
+    const message = nth(tickMessagesFor([release], opts(release - 60_000)), 0);
+
+    expect(message.timeout).toBe(TICK_TIMEOUT_SECONDS);
+  });
+
+  it('leaves the tick room for its lead, its retries and writing the result', () => {
+    // The real ceiling is Vercel's maxDuration on /api/cron/tick, not QStash's.
+    // The handler wakes at T-minus-lead, sleeps to T-0, then retries for the
+    // whole budget. If those stop fitting under the ceiling the platform kills
+    // the invocation mid-attempt and nothing is ever written down.
+    const held = TICK_LEAD_MS + DEFAULT_TIMINGS.retryBudgetMs;
+
+    expect(held).toBeLessThan(TICK_TIMEOUT_SECONDS * 1000);
+    expect(TICK_TIMEOUT_SECONDS).toBeLessThanOrEqual(TICK_MAX_DURATION_SECONDS);
+  });
+});
+
+describe("the route's own duration ceiling", () => {
+  it('matches the ceiling the published timeout is sized against', () => {
+    // Next.js requires route segment config to be a statically analysable
+    // literal — importing the constant makes the build fail with "Invalid
+    // segment configuration export detected". So the number is written out in
+    // the route, and this is what stops the two copies drifting: shrink the
+    // route's budget without shrinking the timeout and QStash keeps waiting
+    // for an invocation the platform has already killed.
+    const route = readFileSync(
+      fileURLToPath(new URL('../app/api/cron/tick/route.ts', import.meta.url)),
+      'utf8',
+    );
+    const declared = /export const maxDuration = (\d+);/.exec(route)?.[1];
+
+    expect(declared).toBeDefined();
+    expect(Number(declared)).toBe(TICK_MAX_DURATION_SECONDS);
   });
 });
