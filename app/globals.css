@@ -523,11 +523,10 @@ strong {
 
 /*
  * One list of sections, two presentations, one source (app/components/NavMenu).
- * Wide enough for them and they sit in the bar itself, sign out beside them as
- * its own control; narrower and the same list moves into the menu behind the
- * button, sign out under a rule at the bottom of it. Exactly one of the two
- * copies of each is ever rendered — the other is `display: none`, so it is
- * out of the accessibility tree as well as off the screen.
+ * Wide enough for them and they sit in the bar itself; narrower and the same
+ * list moves into the menu behind the button, which is also where signing out
+ * lives. Exactly one of the two is ever rendered — the other is `display:
+ * none`, so it is out of the accessibility tree as well as off the screen.
  */
 
 /* The bar copy. Off by default: the phone layout is the one that has to be
@@ -566,10 +565,20 @@ strong {
   color: var(--bar-fg);
 }
 
-/* The bar's own sign-out control, off by default like `.nav-inline` — it only
-   exists once the sections move into the bar and leave the menu with nothing
-   else behind it. */
-.bar-signout {
+/* Sign out in the bar and the menu button are one control seen from two
+   widths, and exactly one of them is ever on screen. Both start in their phone
+   state — sign out inside the menu, so nothing here — and the query below
+   trades them.
+ *
+ * Both are doubled up with the class already on the element rather than
+ * written as the bare `.nav-signout` / `.menu-trigger` they look like they
+ * want to be. The base control rule below is `button:not([data-slot])`, and
+ * the `:not()` guard that keeps it off auth-ui's own controls also lifts it to
+ * (0,1,1) — a step above any single class. A lone `.nav-signout { display:
+ * none }` therefore loses to it silently at every width, which is a hidden
+ * element that is simply never hidden. Two classes is (0,2,0) and clears it
+ * outright, whatever the source order. */
+.nav-link.nav-signout {
   display: none;
 }
 
@@ -584,8 +593,14 @@ strong {
     margin-right: var(--space-xs);
   }
 
-  .bar-signout {
+  /* With the sections above now in the bar, sign out was all the menu had
+     left, so it comes out and the button that opened it goes. */
+  .nav-link.nav-signout {
     display: inline-flex;
+  }
+
+  .btn-icon.menu-trigger {
+    display: none;
   }
 }
 
@@ -681,19 +696,36 @@ strong {
   background: var(--border);
 }
 
-/* The sections are in the bar at this width, and sign out has moved there too
-   (`.bar-signout` above) — so there is nothing left behind the menu button,
-   and the button, its panel and its backdrop all go rather than opening on an
-   empty sheet. Targeted by the nav menu's own modifier classes rather than the
-   shared `.menu-panel`/`.menu-backdrop` — the install button's popup wears
-   those same base classes for its geometry and stays open at this width. This
-   has to come after the rules it overrides: same specificity, so source order
-   is what decides it. */
+/* The sections are in the bar at this width, so what is left behind the button
+   is the account actions alone. This block has to come after the rules it
+   overrides: same specificity, so source order is what decides it — written
+   above them, the sections stay in the menu and the app grows two copies of
+   its own navigation on every desktop. */
 @media (min-width: 46rem) {
-  .menu-trigger,
-  .nav-menu-panel,
-  .nav-menu-backdrop {
+  .menu-nav,
+  .menu-rule {
     display: none;
+  }
+
+  /* A dropdown rather than a sheet at this width, so it hangs off the button
+     that opened it instead of off the edge of the window. Absolute against the
+     action cluster is what ties the two together — the cluster ends where the
+     button does, so `right: 0` lines their right edges up at any window width
+     without measuring anything. */
+  .menu-panel {
+    position: absolute;
+    top: calc(100% + var(--space-xs));
+    right: 0;
+    left: auto;
+    min-width: 12rem;
+    max-width: 16rem;
+  }
+
+  /* The scrim earns its keep on a phone, where the sheet is most of the screen.
+     Behind a small dropdown it just dims the page for no reason — but the layer
+     stays, because it is also what catches the click-outside. */
+  .menu-backdrop {
+    background: transparent;
   }
 }
 
