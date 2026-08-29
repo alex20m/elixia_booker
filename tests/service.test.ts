@@ -57,6 +57,25 @@ function setNow(ms: number): void {
 }
 
 /**
+ * Liveness guard for the racer barrier below — deliberately not the mechanism
+ * that makes it correct.
+ *
+ * If a booking never parks at all, the barrier would wait for it forever. That
+ * is exactly what a genuine fairness regression looks like — serialise the
+ * races and the second booking does not reach its sleep until the first has
+ * finished — so this has to expire *before* the runner's own test timeout.
+ * Otherwise the suite reports an unexplained 5s timeout instead of the
+ * assertion that says what actually went wrong, and the most useful failure
+ * this file can produce is the one it would lose.
+ *
+ * Three seconds: comfortably longer than preparing a booking takes even on a
+ * loaded machine (an in-memory read and one AES decrypt), comfortably shorter
+ * than the 5s default that would otherwise swallow it. Real nanoseconds, since
+ * `Date` is faked in here.
+ */
+const BARRIER_TIMEOUT_NS = 3_000_000_000n;
+
+/**
  * A clock for the cron that advances instantly instead of really sleeping.
  *
  * Virtual, not additive: `sleep` registers a wake-up instant and the clock
@@ -64,15 +83,47 @@ function setNow(ms: number): void {
  * side both wake at +30s, where simply adding to the clock would push it to
  * +60s — making concurrent waits indistinguishable from consecutive ones,
  * which is the single distinction the fairness tests below are about.
+ *
+ * `racers` is how many bookings are expected to reach a sleep before time may
+ * move, and it is what stops this clock measuring the event loop instead of the
+ * code. Draining event-loop turns cannot establish "everyone is waiting now":
+ * preparing a booking decrypts stored credentials, `crypto.subtle` is genuinely
+ * asynchronous and off-thread, and no number of `setImmediate` turns bounds it.
+ * On a loaded machine one racer could still be inside that decrypt with nothing
+ * registered, so the clock would compute the earliest wake-up from a partial
+ * set, jump to T-0 for whoever *had* parked, and then jump again past the
+ * straggler — which then measured its own offset against a clock already
+ * seconds beyond its release and reported a queue that never happened. That is
+ * a real failure this suite saw on CI, and it is the shape of the very bug
+ * these tests exist to catch, which is the worst possible thing to be flaky
+ * about.
+ *
+ * Waiting for a known number of parked racers replaces that guess with a fact.
+ * It is one-shot: once they have all parked and time has moved, later phases
+ * (the retry loop, the mock gym's own delay) legitimately have different
+ * numbers in flight, and by then every booking's first-attempt offset — the
+ * only thing these tests measure — has already been recorded.
  */
-const instantClock = () => {
+const instantClock = ({ racers = 1 }: { racers?: number } = {}) => {
   const waiters: { at: number; wake: () => void }[] = [];
   let pumping = false;
+  let barrierCleared = false;
 
   async function pump(): Promise<void> {
     if (pumping) return;
     pumping = true;
     while (waiters.length > 0) {
+      if (!barrierCleared) {
+        const startedAt = process.hrtime.bigint();
+        while (
+          waiters.length < racers &&
+          process.hrtime.bigint() - startedAt < BARRIER_TIMEOUT_NS
+        ) {
+          await new Promise((r) => setImmediate(r));
+        }
+        barrierCleared = true;
+      }
+
       // Let everything that can make progress at the current instant do so, so
       // the clock only moves when the run is genuinely waiting on it.
       for (let i = 0; i < 20; i += 1) await new Promise((r) => setImmediate(r));
@@ -833,7 +884,9 @@ describe('a release with several users in it', () => {
     expect(firstRelease(bobSub)).toBe(release);
 
     setNow(release - 30_000);
-    const clock = instantClock();
+    // Two bookings race this instant, so time must not move until both are
+    // parked at it — see instantClock.
+    const clock = instantClock({ racers: 2 });
     config.backend = new SlowBookingBackend(clock.sleep, SLOW_BOOKING_MS);
 
     expect(await runDueBookings(config, nowMs, clock)).toBe(2);
@@ -853,7 +906,7 @@ describe('a release with several users in it', () => {
     expect(firstRelease(second)).toBe(firstRelease(first));
 
     setNow(firstRelease(first) - 30_000);
-    const clock = instantClock();
+    const clock = instantClock({ racers: 2 });
     config.backend = new SlowBookingBackend(clock.sleep, SLOW_BOOKING_MS);
 
     expect(await runDueBookings(config, nowMs, clock)).toBe(2);
@@ -915,7 +968,7 @@ describe('a release with several users in it', () => {
     });
 
     try {
-      expect(await runDueBookings(config, tickAt, instantClock())).toBe(2);
+      expect(await runDueBookings(config, tickAt, instantClock({ racers: 2 }))).toBe(2);
     } finally {
       spy.mockRestore();
     }
