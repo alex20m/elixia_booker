@@ -532,6 +532,54 @@ Verification is DNS-dependent, so it is the one step where "run it again in a
 few minutes" is a legitimate answer. `vercel domains verify` tells you which
 of the two it is: wrong record, or not propagated yet.
 
+## The GitHub "homepage" field silently tracks the Production domain
+
+Vercel's GitHub App writes the connected repo's About-section **Website**
+field (`homepage` in the GitHub API) to whatever the project's Production
+deployment currently resolves to, and it does this again on later production
+deploys — not just at project creation. If the project didn't have a verified
+custom domain configured as its **Production** domain at the time, that write
+is a throwaway `*.vercel.app` URL, and it keeps coming back:
+
+- **Editing the field by hand doesn't stick.** The next production
+  deploy/promote re-syncs it from the project, so a manually-cleared or
+  manually-corrected `homepage` is a symptom fix, not a real one — it reverts
+  on the next push to the production branch.
+- **Fix the domain, not the field.** Confirm the project actually has a
+  verified, non-redirect domain bound to the *Production* environment before
+  touching GitHub at all:
+  ```bash
+  curl -s -H "Authorization: Bearer $VERCEL_TOKEN" \
+    "https://api.vercel.com/v9/projects/<project>/domains" | jq .
+  # want: verified: true, redirect: null, gitBranch: null
+  ```
+  `redirect` non-null means it's an alias/redirect domain, not the real
+  target; `gitBranch` set means it's scoped to a branch deploy, not
+  Production. Either one means the GitHub sync will still pick up something
+  other than the real domain.
+- **Only after that**, set the GitHub field and it will hold:
+  ```bash
+  gh api repos/<owner>/<repo> -X PATCH -f homepage=https://<domain>
+  ```
+  Verify it holds by forcing a fresh production deploy (`vercel redeploy
+  <deployment-id-or-url> --target production` works without a new commit) and
+  re-reading `homepage` afterward — a sync that fires and writes the correct
+  domain confirms the fix; a sync that fires and reverts to `*.vercel.app`
+  means the domain still isn't attached to Production despite what the
+  dashboard implies.
+- **No separate per-project toggle for this was found.** Checked against
+  Vercel's `Git settings` and `Deploying GitHub Projects with Vercel` docs and
+  the full `GET /v9/projects/{id}` response (CLI `vercel@59.10.0`, August
+  2026) — no field resembling "sync homepage" or "update repository URL"
+  exists in either. The behavior reads as an inherent side effect of the
+  GitHub App's `Administration: Write` permission, not a switch. This wasn't
+  confirmed against the live dashboard UI itself (only docs + API), so a
+  dashboard-only checkbox that isn't documented or exposed via API can't be
+  fully ruled out — if one turns up, getting the Production domain right is
+  still the fix that has to happen first regardless, since an undocumented
+  toggle would only suppress the symptom the same way clearing the field by
+  hand does.
+
 ## Verify each step; do not infer success from exit 0
 
 Every step in SETUP.md should end with a command whose output proves the step
