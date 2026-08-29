@@ -90,15 +90,6 @@ export function SignOutButton({
             </h2>
             <p className="hint">You’ll need to sign in again to get back to your classes.</p>
             <div className="cluster mt-s">
-              <button
-                type="button"
-                id="signout-confirm-cancel-btn"
-                className="btn-secondary btn-grow"
-                disabled={signingOut}
-                onClick={close}
-              >
-                Cancel
-              </button>
               {/* The guarded press, so a slow connection can't turn a second
                   tap into a second sign-out request. The dialog stays open
                   while it works, and Cancel/Escape/the backdrop stop doing
@@ -121,6 +112,15 @@ export function SignOutButton({
               >
                 Sign out
               </ActionButton>
+              <button
+                type="button"
+                id="signout-confirm-cancel-btn"
+                className="btn-secondary btn-grow"
+                disabled={signingOut}
+                onClick={close}
+              >
+                Cancel
+              </button>
             </div>
           </div>
         </>
