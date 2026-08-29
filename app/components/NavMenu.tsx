@@ -1,8 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { SignOutButton } from './SignOutButton';
-import { CloseIcon, MenuIcon, SignOutIcon } from './icons';
+import { CloseIcon, MenuIcon } from './icons';
 
 export type NavSection<Id extends string = string> = {
   id: Id;
@@ -27,17 +26,10 @@ export type NavSection<Id extends string = string> = {
  * the copy that is off-screen at the width you happen to be developing at is
  * exactly the one that rots when there are two hand-written lists.
  *
- * Sign out lives at the bottom of the menu, under a rule, rather than sitting
- * in the bar: it was a permanent one-tap button next to the logo, which is a
- * lot of prominence for the one action nobody means to press. It is still
- * spelled out in full in Settings → Account, which is where a visitor goes
- * looking for it.
- *
- * Except at the width where the sections have already moved into the bar and
- * sign out is the only thing the menu still holds. A button that opens a menu
- * of one is a click in front of a click, so there the menu button goes and
- * sign out takes its place in the bar directly. The phone keeps the menu
- * exactly as it was.
+ * Sign out is not one of these sections and does not appear here at all: it
+ * lives in Settings → Account, spelled out in full behind its own
+ * confirmation, which is where a visitor goes looking for it rather than a
+ * single tap away in a menu or the bar.
  */
 export function NavMenu<Id extends string>({
   sections,
@@ -114,16 +106,6 @@ export function NavMenu<Id extends string>({
         ))}
       </nav>
 
-      {/* The bar's copy of sign out, on screen only where the menu button is
-          not. The same shared control as the menu's, so it carries the same
-          guarded press and "Signing out…" state, wearing the bar's own link
-          styling rather than the panel's. */}
-      <SignOutButton
-        id="nav-signout-btn"
-        className="nav-link nav-signout"
-        icon={<SignOutIcon />}
-      />
-
       <button
         ref={triggerRef}
         id="menu-btn"
@@ -158,19 +140,6 @@ export function NavMenu<Id extends string>({
                 </button>
               ))}
             </nav>
-
-            <div className="menu-rule" />
-
-            {/* The shared control, so the menu gets the same guarded press and
-                "Signing out…" state as the copy in Settings. It stays put while
-                it works rather than closing on the click: the panel showing the
-                request in flight is the only feedback there is, and the whole
-                dashboard unmounts the moment the session goes. */}
-            <SignOutButton
-              id="menu-signout-btn"
-              className="menu-item menu-item-quiet"
-              icon={<SignOutIcon />}
-            />
           </div>
         </>
       )}

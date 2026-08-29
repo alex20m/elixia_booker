@@ -74,11 +74,23 @@ describe('AccountCard', () => {
     expect(container.querySelectorAll('a').length).toBe(1);
   });
 
-  it('signs out through the auth client', async () => {
+  it('confirms before signing out, rather than signing out on the first press', async () => {
+    // SignOutButton owns the confirmation dialog itself — see
+    // tests/signOutButton.test.tsx for its full behaviour. This only checks
+    // that AccountCard is wired to it rather than to a bare sign-out call.
     render();
 
     await act(async () => {
       container.querySelector('button')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(signOut).not.toHaveBeenCalled();
+    expect(byId('signout-confirm-btn')).not.toBeNull();
+
+    await act(async () => {
+      byId<HTMLButtonElement>('signout-confirm-btn')!.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
     });
 
     expect(signOut).toHaveBeenCalledTimes(1);

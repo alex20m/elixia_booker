@@ -3,12 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
-const signOut = vi.fn();
-
-vi.mock('@/lib/auth/client', () => ({
-  authClient: { signOut: () => signOut() },
-}));
-
 const { NavMenu } = await import('@/app/components/NavMenu');
 
 /**
@@ -16,11 +10,14 @@ const { NavMenu } = await import('@/app/components/NavMenu');
  * for one, and a menu behind one button where there is not.
  *
  * The rules worth pinning are the ones a redesign quietly breaks — that both
- * copies drive the same callback, that the menu can be closed by every route a
- * visitor tries (Escape, the backdrop, picking something), and that signing
- * out is reachable from it. CSS decides which copy is on screen at a given
- * width; both are in the document at every width, so this file asserts on
- * behaviour rather than on which one is visible.
+ * copies drive the same callback, and that the menu can be closed by every
+ * route a visitor tries (Escape, the backdrop, picking something). CSS
+ * decides which copy is on screen at a given width; both are in the document
+ * at every width, so this file asserts on behaviour rather than on which one
+ * is visible.
+ *
+ * Sign out is deliberately not covered here — it does not appear in this
+ * component at all any more; see tests/signOutButton.test.tsx.
  */
 
 const SECTIONS = [
@@ -63,7 +60,6 @@ beforeEach(() => {
   document.body.append(container);
   root = createRoot(container);
   onSelect = vi.fn<(id: SectionId) => void>();
-  signOut.mockClear();
 });
 
 afterEach(() => {
@@ -80,7 +76,7 @@ describe('NavMenu', () => {
     expect(byId('menu-btn')!.getAttribute('aria-expanded')).toBe('false');
   });
 
-  it('opens a menu listing every section plus sign out', async () => {
+  it('opens a menu listing every section', async () => {
     render();
     await open();
 
@@ -88,7 +84,7 @@ describe('NavMenu', () => {
     const labels = [...container.querySelectorAll('#nav-menu .menu-item')].map((el) =>
       el.textContent?.trim(),
     );
-    expect(labels).toEqual(['Classes', 'Activity', 'Settings', 'Sign out']);
+    expect(labels).toEqual(['Classes', 'Activity', 'Settings']);
   });
 
   it('switches section and closes when a menu entry is picked', async () => {
@@ -132,24 +128,6 @@ describe('NavMenu', () => {
     await click(container.querySelector('.menu-backdrop'));
 
     expect(byId('nav-menu')).toBeNull();
-  });
-
-  it('signs out through the auth client', async () => {
-    render();
-    await open();
-    await click(byId('menu-signout-btn'));
-
-    expect(signOut).toHaveBeenCalledTimes(1);
-  });
-
-  /* The bar's own copy, for the width where there is no menu to open. Same
-     assertion as above rather than a rendering one, because which of the two
-     is on screen is CSS's business and this file has no layout. */
-  it('signs out from the bar, where there is no menu to open', async () => {
-    render();
-    await click(byId('nav-signout-btn'));
-
-    expect(signOut).toHaveBeenCalledTimes(1);
   });
 
   it('moves focus into the menu so it can be driven from the keyboard', async () => {
