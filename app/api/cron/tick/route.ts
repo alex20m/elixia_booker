@@ -1,5 +1,4 @@
 import { runDueBookings } from '@/lib/service';
-import { TICK_MAX_DURATION_SECONDS } from '@/lib/qstash';
 import { assertCronAuthorised, handle, json, loadCronConfig } from '@/lib/http';
 
 export const runtime = 'nodejs';
@@ -10,11 +9,15 @@ export const dynamic = 'force-dynamic';
  * Raising it on Pro widens the usable retry window for a release landing late
  * in the minute — see the deadline handling below.
  *
- * Taken from lib/qstash.ts rather than written here, because the timeout the
- * scheduler puts on every published message is sized against this number. Two
- * copies would let the route shrink its own budget without anything noticing.
+ * Must stay equal to TICK_MAX_DURATION_SECONDS in lib/qstash.ts, which is what
+ * the timeout on every published message is sized against — shrink this
+ * without shrinking that and QStash goes on waiting for an invocation the
+ * platform has already killed. It cannot simply import the constant: Next.js
+ * requires route segment config to be a statically analysable literal and
+ * fails the build with "Invalid segment configuration export detected"
+ * otherwise, so a test asserts the two agree instead.
  */
-export const maxDuration = TICK_MAX_DURATION_SECONDS;
+export const maxDuration = 60;
 
 /** Leave room to write history and return before the platform pulls the plug. */
 const SAFETY_MARGIN_MS = 5_000;

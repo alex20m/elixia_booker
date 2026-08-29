@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import {
   TICK_LEAD_MS,
@@ -299,5 +301,24 @@ describe('how long a published tick may hold its connection', () => {
 
     expect(held).toBeLessThan(TICK_TIMEOUT_SECONDS * 1000);
     expect(TICK_TIMEOUT_SECONDS).toBeLessThanOrEqual(TICK_MAX_DURATION_SECONDS);
+  });
+});
+
+describe("the route's own duration ceiling", () => {
+  it('matches the ceiling the published timeout is sized against', () => {
+    // Next.js requires route segment config to be a statically analysable
+    // literal — importing the constant makes the build fail with "Invalid
+    // segment configuration export detected". So the number is written out in
+    // the route, and this is what stops the two copies drifting: shrink the
+    // route's budget without shrinking the timeout and QStash keeps waiting
+    // for an invocation the platform has already killed.
+    const route = readFileSync(
+      fileURLToPath(new URL('../app/api/cron/tick/route.ts', import.meta.url)),
+      'utf8',
+    );
+    const declared = /export const maxDuration = (\d+);/.exec(route)?.[1];
+
+    expect(declared).toBeDefined();
+    expect(Number(declared)).toBe(TICK_MAX_DURATION_SECONDS);
   });
 });
