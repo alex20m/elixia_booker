@@ -250,20 +250,24 @@ describe('finding a centre', () => {
     expect(container.querySelector('#s-center-list')?.getAttribute('role')).toBe('listbox');
   });
 
-  it('writes the chevron rule so the base button style cannot outrank it', () => {
+  it('keeps the chevron transparent rather than letting the base button style fill it', () => {
     // No rendering test can see this: jsdom applies no stylesheet, so the
     // chevron passes every assertion here while painting as a solid navy block
-    // with an invisible icon on it in a real browser. The base rule is
-    // `button:not([data-slot])` — element plus a class-weight :not, so a lone
-    // `.combo-toggle` loses to it outright, and an equally specific
-    // `button.combo-toggle` only wins by coming later.
+    // with an invisible icon on it in a real browser.
+    //
+    // This used to assert source order too. The base rule was
+    // `button:not([data-slot])`, whose :not() carried a class's worth of
+    // specificity, so a lone `.combo-toggle` lost to it and the chevron had to
+    // be written `button.combo-toggle` *and* placed after it to win. That
+    // guard is `:where()`-wrapped now and costs nothing, so one class is
+    // enough and the ordering trick is gone — the property that replaced it is
+    // asserted in tests/signedOut.test.tsx. What is left here is the chevron's
+    // own half of the bargain: it has to declare the transparent background it
+    // relies on.
     const css = readFileSync(resolve(process.cwd(), 'app/globals.css'), 'utf8');
-    const base = css.indexOf('button:not([data-slot]),');
-    const toggle = css.indexOf('button.combo-toggle {');
+    const toggle = css.indexOf('.combo-toggle {');
 
-    expect(base).toBeGreaterThan(-1);
     expect(toggle).toBeGreaterThan(-1);
-    expect(toggle).toBeGreaterThan(base);
     expect(css.slice(toggle, css.indexOf('}', toggle))).toMatch(/background:\s*transparent/);
   });
 

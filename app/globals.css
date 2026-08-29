@@ -1031,11 +1031,14 @@ button.btn-icon:hover:not(:disabled) {
   background: rgb(255 255 255 / 12%);
 }
 
-/* The combobox's chevron. Written `button.` and placed here with the other
-   variants for one reason: the base rule above is `button:not([data-slot])`,
-   which outranks a lone class — a bare `.combo-toggle` loses to it and the
-   chevron paints as a solid navy block with an invisible icon on it. */
-button.combo-toggle {
+/* The combobox's chevron. This was once written `button.combo-toggle` and
+   pinned below the base rule by a test, because that rule was
+   `button:not([data-slot])` and outranked a lone class — a bare
+   `.combo-toggle` lost to it and the chevron painted as a solid navy block
+   with an invisible icon on it. The guard is `:where()`-wrapped now and costs
+   no specificity, so one class carries this on its own again and neither the
+   element qualifier nor the placement is load-bearing. */
+.combo-toggle {
   position: absolute;
   top: 0;
   right: 0;
@@ -1049,12 +1052,12 @@ button.combo-toggle {
   color: var(--text-alt);
 }
 
-button.combo-toggle:hover:not(:disabled) {
+.combo-toggle:hover:not(:disabled) {
   background: transparent;
   color: var(--text);
 }
 
-button.combo-toggle:disabled {
+.combo-toggle:disabled {
   background: transparent;
   color: var(--text-disabled);
 }
