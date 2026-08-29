@@ -132,4 +132,30 @@ describe('the base button styles', () => {
 
     expect(unguarded).toEqual([]);
   });
+
+  /**
+   * And the guard has to be free, not merely present.
+   *
+   * `:not([data-slot])` carries its argument's specificity, so bolting it onto
+   * `button` lifted this rule from (0,0,1) to (0,1,1) — one step above a lone
+   * class. Every control that opts out of the filled look does so with exactly
+   * one: `.nav-link` in the bar, `.menu-item` in the menu. All of them lost,
+   * and the bar's section links and the menu's rows started rendering as
+   * filled primary buttons — invisible navy-on-navy in light, white slabs in
+   * dark. `:where()` matches precisely the same elements and contributes
+   * nothing, which is what keeps the opt-outs working.
+   */
+  it('cost nothing in specificity, so one class still opts out of the filled look', () => {
+    const css = readFileSync(resolve(process.cwd(), 'app/globals.css'), 'utf8').replace(
+      /\/\*[\s\S]*?\*\//g,
+      '',
+    );
+
+    const guards = css.match(/:not\(\[data-slot\]\)/g) ?? [];
+    const free = css.match(/:where\(:not\(\[data-slot\]\)\)/g) ?? [];
+
+    // Without this the assertion below passes by having no guards at all.
+    expect(guards.length).toBeGreaterThan(0);
+    expect(free.length).toBe(guards.length);
+  });
 });
