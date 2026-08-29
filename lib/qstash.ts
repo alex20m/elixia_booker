@@ -45,6 +45,56 @@
  */
 export const TICK_LEAD_MS = 20_000;
 
+/**
+ * Vercel's ceiling for /api/cron/tick, in seconds.
+ *
+ * Exported here rather than only in the route so the two cannot drift: the
+ * whole timing budget below is checked against this number, and a route that
+ * quietly lowered its own `maxDuration` would invalidate that check without
+ * failing anything.
+ */
+export const TICK_MAX_DURATION_SECONDS = 60;
+
+/**
+ * How long QStash is told to wait for the tick to answer, in seconds.
+ *
+ * Left unset, QStash uses "the maximum your plan allows" — a number nobody
+ * here chose, that differs per plan and can change under you. The tick
+ * deliberately holds its connection open (it wakes at T-minus-lead, sleeps to
+ * the exact release millisecond, then retries), so the duration it may hold is
+ * a property worth stating outright rather than inheriting.
+ *
+ * Sized to Vercel's ceiling, because that is the limit that actually bites
+ * first: the platform kills the invocation at `TICK_MAX_DURATION_SECONDS`
+ * whatever QStash is willing to wait for.
+ */
+export const TICK_TIMEOUT_SECONDS = TICK_MAX_DURATION_SECONDS;
+
+/**
+ * The furthest ahead QStash will accept a delivery, in ms.
+ *
+ * Not a guess: publishing a probe batch beyond it answers
+ * `{"error":"quota maxDelay exceeded, current limit: 604800"}`, and 604800s is
+ * seven days — the Free plan's ceiling, verified against the live account on
+ * 2026-08-29. Paid plans allow more, so this is deliberately the *smallest*
+ * documented ceiling rather than the one this account happens to have.
+ */
+export const QSTASH_MAX_DELAY_MS = 604_800_000;
+
+/**
+ * Headroom kept under that ceiling.
+ *
+ * `notBefore` is fixed when the batch is built, but QStash measures the delay
+ * when it *receives* the request. A message computed at exactly the limit
+ * arrives a moment past it — and because QStash validates the whole batch
+ * before accepting any of it, that lands as a rejection of every message in
+ * the request, not just the late one.
+ */
+export const PUBLISH_MARGIN_MS = 300_000;
+
+/** The furthest ahead this module will schedule anything. */
+export const MAX_TICK_DELAY_MS = QSTASH_MAX_DELAY_MS - PUBLISH_MARGIN_MS;
+
 /** Where a scheduled tick should be delivered, once it is known to be reachable. */
 export interface QstashTarget {
   appUrl: string;
@@ -81,6 +131,12 @@ export interface TickMessage {
    */
   notBefore: number;
   deduplicationId: string;
+  /**
+   * Seconds QStash will wait for a response before giving up. Always set —
+   * see TICK_TIMEOUT_SECONDS for why inheriting the plan default is not good
+   * enough.
+   */
+  timeout: number;
 }
 
 /** The slice of `@upstash/qstash`'s Client this module needs. */
@@ -135,6 +191,14 @@ export function tickMessagesFor(
     // delivers immediately — duplicating the current invocation's own work.
     if (wakeMs <= nowMs) continue;
 
+    // Too far out for QStash to accept. Dropping it here rather than letting
+    // QStash refuse it is the whole point: the refusal is not per-message, it
+    // rejects the entire batch, so one instant ten days away silently took
+    // tomorrow's booking down with it. The reindex horizon is deliberately
+    // longer than this window, and the nightly run republishes, so an instant
+    // skipped today is picked up on a later night with days to spare.
+    if (wakeMs - nowMs > MAX_TICK_DELAY_MS) continue;
+
     // Seconds, not milliseconds. Publishing ms here would push every booking
     // tens of thousands of years out, and nothing downstream would notice.
     const notBefore = Math.floor(wakeMs / 1000);
@@ -149,6 +213,7 @@ export function tickMessagesFor(
       // Keyed by the wake second alone, so the id is identical no matter which
       // profile's reindex produced it or how many times it is republished.
       deduplicationId: `booking-tick-${notBefore}`,
+      timeout: TICK_TIMEOUT_SECONDS,
     });
   }
 
