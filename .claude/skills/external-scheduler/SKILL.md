@@ -120,6 +120,34 @@ horizon, or repeats stop being free.
   message rather than adding signature verification as a second mechanism —
   fewer ways to be misconfigured. (Signature verification is the better choice
   when the endpoint has no guard yet.)
+- **A per-message quota can reject the whole batch.** Publishing the horizon in
+  one batched request is right, but a batch is usually validated as a *unit*:
+  one message the provider refuses takes every other message in the request
+  down with it, including the imminent ones. The commonest refusal is a
+  delivery scheduled further out than the plan's maximum delay, so the horizon
+  you *compute* must never exceed the horizon you can *enqueue* — clamp the
+  publish window to the provider's ceiling and let the periodic republish pick
+  up the rest as it comes into range. Keep a margin under the ceiling: the
+  delay is fixed when you build the batch but measured when the provider
+  receives it, so a message computed at exactly the limit arrives just past it.
+  The symptom is the dangerous part — not a partial schedule but an empty one,
+  reported as a quota error that names the quota rather than the message, on a
+  publish path whose failure you have probably made non-fatal.
+- **Verify a plan limit by probing, not by remembering.** These limits are
+  per-plan, get renamed between doc revisions, and are the sort of thing a
+  previous incident leaves you with a confident wrong memory of. Publishing a
+  deliberately over-limit probe message returns the real ceiling in the error
+  text, in one call, against the account that actually matters — and a
+  companion in-range message in the same batch tells you whether refusals are
+  per-message or per-batch. Delete the probes afterwards.
+- **An implicit timeout is the provider's number, not yours.** Left unset, the
+  connection timeout is "the maximum this plan allows" — nobody chose it and it
+  moves when the plan does. Set it explicitly, sized to whichever ceiling bites
+  *first*. For a handler that deliberately holds its connection open, that is
+  usually the serverless platform's own max duration, which is typically far
+  below the scheduler's: check both before assuming the scheduler is the one
+  cutting you off, because an unexplained mid-flight death looks identical
+  either way.
 - **Scheduling lead is not booking lead.** Waking the handler *at* the instant
   leaves its preparation — refreshing a session, resolving an id — happening
   after the moment has passed. Wake it early enough to prepare, and let it do
