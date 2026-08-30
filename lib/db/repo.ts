@@ -55,6 +55,13 @@ export class DuplicateSubscriptionError extends Error {
 
 export interface Repo {
   getProfile(userId: string): Promise<Profile | null>;
+  /**
+   * The profile owning a calendar feed token, or null if it names none.
+   *
+   * The one lookup the public ICS route needs, since it has no session to
+   * resolve a user from — the token in the URL *is* the credential.
+   */
+  getProfileByCalendarToken(token: string): Promise<Profile | null>;
   upsertProfile(profile: Profile): Promise<void>;
   /** Every profile with a usable Elixia link. Used by the nightly reindex. */
   listLinkedProfiles(): Promise<Profile[]>;

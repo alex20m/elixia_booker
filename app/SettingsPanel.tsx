@@ -7,6 +7,7 @@ import { TIME_ZONE_GROUPS } from '@/lib/timezones';
 import type { DashboardView } from '@/lib/service';
 import { ActionButton } from './components/ActionButton';
 import { TelegramConnect } from './components/TelegramConnect';
+import { CalendarSync } from './components/CalendarSync';
 
 /**
  * Booking settings and where alerts go — the two groups of answers the setup
@@ -35,8 +36,11 @@ export function SettingsPanel({
   const [channel, setChannel] = useState(view.account.notifyChannel);
   const [email, setEmail] = useState(view.account.notifyEmail);
   const [chatId, setChatId] = useState(view.account.telegramChatId);
+  const [calendarEnabled, setCalendarEnabled] = useState(view.account.calendarSyncEnabled);
+  const [calendarToken, setCalendarToken] = useState(view.account.calendarFeedToken);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
+  const [calendarError, setCalendarError] = useState('');
 
   /**
    * Change a field, and withdraw the "Saved" acknowledgement while doing it.
@@ -229,6 +233,32 @@ export function SettingsPanel({
         >
           {saved ? 'Saved' : 'Save settings'}
         </ActionButton>
+      </section>
+
+      <section className="card">
+        <div className="card-head">
+          <div>
+            <h2 className="card-title">Calendar</h2>
+            <p className="card-sub">Put booked classes on a calendar you already use.</p>
+          </div>
+        </div>
+
+        <CalendarSync
+          enabled={calendarEnabled}
+          token={calendarToken}
+          onChange={(next) => {
+            setCalendarError('');
+            setCalendarEnabled(next.enabled);
+            if (next.token) setCalendarToken(next.token);
+          }}
+          onError={setCalendarError}
+        />
+
+        {calendarError && (
+          <div className="banner banner-err mt-s">
+            <span>{calendarError}</span>
+          </div>
+        )}
       </section>
     </>
   );

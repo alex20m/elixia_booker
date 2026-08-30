@@ -35,7 +35,7 @@ import type {
 const PROFILE_COLUMNS = `
   id, booking_window_days, time_zone, notify_channel, notify_email, telegram_chat_id,
   elixia_email, elixia_secret, elixia_status, elixia_checked_at, default_center,
-  configured_at
+  configured_at, calendar_sync_enabled, calendar_feed_token
 `;
 
 const SUBSCRIPTION_COLUMNS = `
@@ -66,6 +66,11 @@ const toProfile = (row: SqlRow): Profile => ({
   ...(row.elixia_checked_at ? { elixiaCheckedAtMs: toMs(row.elixia_checked_at) } : {}),
   ...(row.default_center ? { defaultCenter: str(row.default_center) } : {}),
   ...(row.configured_at ? { configuredAtMs: toMs(row.configured_at) } : {}),
+  // Omitted rather than written as `false`, the same as every other column
+  // here: an untouched profile round-trips as one with nothing set, not one
+  // that has actively chosen sync off.
+  ...(row.calendar_sync_enabled ? { calendarSyncEnabled: true } : {}),
+  ...(row.calendar_feed_token ? { calendarFeedToken: str(row.calendar_feed_token) } : {}),
 });
 
 const toSubscription = (row: SqlRow): Subscription => ({
@@ -109,6 +114,7 @@ const toHistoryEntry = (row: SqlRow): BookingHistoryEntry => ({
   firstAttemptOffsetMs:
     row.first_attempt_offset_ms === null ? null : num(row.first_attempt_offset_ms),
   dryRun: Boolean(row.dry_run),
+  ...(row.center ? { center: str(row.center) } : {}),
 });
 
 const iso = (epochMs: number): string => new Date(epochMs).toISOString();
@@ -148,9 +154,9 @@ export function createNeonRepo(sql: Sql): Repo {
         `insert into public.profiles (
            id, booking_window_days, time_zone, notify_channel, notify_email, telegram_chat_id,
            elixia_email, elixia_secret, elixia_status, elixia_checked_at, default_center,
-           configured_at
+           configured_at, calendar_sync_enabled, calendar_feed_token
          )
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::timestamptz, $11, $12::timestamptz)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::timestamptz, $11, $12::timestamptz, $13, $14)
          on conflict (id) do update set
            booking_window_days = excluded.booking_window_days,
            time_zone = excluded.time_zone,
@@ -162,7 +168,9 @@ export function createNeonRepo(sql: Sql): Repo {
            elixia_status = excluded.elixia_status,
            elixia_checked_at = excluded.elixia_checked_at,
            default_center = excluded.default_center,
-           configured_at = excluded.configured_at`,
+           configured_at = excluded.configured_at,
+           calendar_sync_enabled = excluded.calendar_sync_enabled,
+           calendar_feed_token = excluded.calendar_feed_token`,
         [
           profile.id,
           // Null where the user has not chosen yet — the columns lost their
@@ -179,8 +187,18 @@ export function createNeonRepo(sql: Sql): Repo {
           profile.elixiaCheckedAtMs ? iso(profile.elixiaCheckedAtMs) : null,
           profile.defaultCenter ?? null,
           profile.configuredAtMs ? iso(profile.configuredAtMs) : null,
+          profile.calendarSyncEnabled ?? false,
+          profile.calendarFeedToken ?? null,
         ],
       );
+    },
+
+    async getProfileByCalendarToken(token) {
+      const rows = await sql.query(
+        `select ${PROFILE_COLUMNS} from public.profiles where calendar_feed_token = $1`,
+        [token],
+      );
+      return rows[0] ? toProfile(rows[0]) : null;
     },
 
     async listLinkedProfiles() {
@@ -402,9 +420,9 @@ export function createNeonRepo(sql: Sql): Repo {
       await sql.query(
         `insert into public.booking_history (
            user_id, subscription_id, class_name, class_date, start_time,
-           outcome, detail, attempts, first_attempt_offset_ms, dry_run, created_at
+           outcome, detail, attempts, first_attempt_offset_ms, dry_run, created_at, center
          )
-         values ($1, $2::uuid, $3, $4::date, $5, $6, $7, $8, $9, $10, $11::timestamptz)`,
+         values ($1, $2::uuid, $3, $4::date, $5, $6, $7, $8, $9, $10, $11::timestamptz, $12)`,
         [
           userId,
           entry.subscriptionId,
@@ -417,6 +435,7 @@ export function createNeonRepo(sql: Sql): Repo {
           entry.firstAttemptOffsetMs,
           entry.dryRun,
           iso(entry.atMs),
+          entry.center ?? null,
         ],
       );
     },
@@ -424,7 +443,8 @@ export function createNeonRepo(sql: Sql): Repo {
     async listHistory(userId, limit = 50) {
       const rows = await sql.query(
         `select subscription_id, class_name, to_char(class_date, 'YYYY-MM-DD') as class_date,
-                start_time, outcome, detail, attempts, first_attempt_offset_ms, dry_run, created_at
+                start_time, outcome, detail, attempts, first_attempt_offset_ms, dry_run, created_at,
+                center
          from public.booking_history
          where user_id = $1
          order by created_at desc

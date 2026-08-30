@@ -132,6 +132,17 @@ export function loadCronConfig(): AppConfig {
 }
 
 /**
+ * Config for the calendar feed.
+ *
+ * Also a route with no session — a calendar app fetches it directly, with the
+ * feed token in the URL standing in for one — and the same reasoning as the
+ * cron's applies: an in-memory repo would answer with a feed that looks
+ * healthy and holds nothing, since the token it needs to look up was minted
+ * against a store no request shares with any other.
+ */
+export const loadCalendarFeedConfig = loadCronConfig;
+
+/**
  * Guard the cron endpoints.
  *
  * Without this the booking tick would be publicly triggerable, letting anyone

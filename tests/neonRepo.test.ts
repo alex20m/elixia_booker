@@ -194,6 +194,41 @@ describe('profiles', () => {
     expect(await repo.getProfile('user_nobody')).toBeNull();
   });
 
+  it('round-trips calendar sync being on, with its token', async () => {
+    await repo.upsertProfile(
+      profile(ALICE, { calendarSyncEnabled: true, calendarFeedToken: 'a'.repeat(64) }),
+    );
+
+    const stored = await repo.getProfile(ALICE);
+    expect(stored?.calendarSyncEnabled).toBe(true);
+    expect(stored?.calendarFeedToken).toBe('a'.repeat(64));
+  });
+
+  it('leaves calendar sync out of a profile that never turned it on', async () => {
+    await repo.upsertProfile(profile(ALICE));
+
+    const stored = await repo.getProfile(ALICE);
+    expect(stored?.calendarSyncEnabled).toBeUndefined();
+    expect(stored?.calendarFeedToken).toBeUndefined();
+  });
+
+  it('finds a profile by its calendar feed token', async () => {
+    await repo.upsertProfile(
+      profile(ALICE, { calendarSyncEnabled: true, calendarFeedToken: 'b'.repeat(64) }),
+    );
+    await repo.upsertProfile(profile(BOB));
+
+    expect((await repo.getProfileByCalendarToken('b'.repeat(64)))?.id).toBe(ALICE);
+    expect(await repo.getProfileByCalendarToken('c'.repeat(64))).toBeNull();
+  });
+
+  it('lets two profiles both have no calendar feed token at once', async () => {
+    // The unique index is partial (`where calendar_feed_token is not null`)
+    // precisely so that two rows both storing null does not collide.
+    await repo.upsertProfile(profile(ALICE));
+    await expect(repo.upsertProfile(profile(BOB))).resolves.not.toThrow();
+  });
+
   it('lists only profiles with a usable Elixia link', async () => {
     await repo.upsertProfile(profile(ALICE, { elixiaStatus: 'ok' }));
     await repo.upsertProfile(profile(BOB, { elixiaStatus: 'expired' }));
@@ -619,6 +654,23 @@ describe('booking history', () => {
         dryRun: true,
       },
     ]);
+  });
+
+  it('round-trips the centre a class was booked at, for the calendar feed', async () => {
+    const alices = await addClass(ALICE, 'Bodypump');
+    await repo.appendHistory(ALICE, {
+      ...attempt(Date.UTC(2026, 3, 1, 5, 0), alices.id),
+      center: 'Tapiola',
+    });
+
+    expect((await repo.listHistory(ALICE))[0]?.center).toBe('Tapiola');
+  });
+
+  it('leaves the centre out of a row written before the column existed', async () => {
+    const alices = await addClass(ALICE, 'Bodypump');
+    await repo.appendHistory(ALICE, attempt(Date.UTC(2026, 3, 1, 5, 0), alices.id));
+
+    expect((await repo.listHistory(ALICE))[0]?.center).toBeUndefined();
   });
 
   it('honours the limit', async () => {

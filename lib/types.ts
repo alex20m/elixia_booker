@@ -324,6 +324,24 @@ export interface Profile {
    * setup existed are full of. Those get asked once, and keep their answers.
    */
   configuredAtMs?: number;
+  /**
+   * Whether booked classes are published to the calendar feed.
+   *
+   * Kept apart from `calendarFeedToken` being present: turning sync off must
+   * stop the feed from serving anything without throwing away the token, so a
+   * user who turns it back on later gets the same subscription URL back
+   * rather than having to re-add a new one in their calendar app.
+   */
+  calendarSyncEnabled?: boolean;
+  /**
+   * The secret that names this user's calendar feed (`/api/calendar/<token>`).
+   *
+   * Minted once, on first enabling sync, and kept from then on — including
+   * across a later disable/re-enable — so the URL a user pasted into their
+   * calendar app keeps working. Rotate it (a fresh token) only when the old
+   * one may have leaked; there is no other reason to change it.
+   */
+  calendarFeedToken?: string;
 }
 
 /**
@@ -432,4 +450,9 @@ export interface BookingHistoryEntry {
   attempts: number;
   firstAttemptOffsetMs: number | null;
   dryRun: boolean;
+  /**
+   * The centre this class was at, for the calendar feed's event location.
+   * Absent on rows written before this field existed.
+   */
+  center?: string;
 }
