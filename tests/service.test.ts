@@ -15,7 +15,9 @@ import {
   centerDefaults,
   reindexProfile,
   runDueBookings,
+  refreshInstructors,
   reviewListedClasses,
+  runInstructorSync,
   runReindex,
   saveCenterDefaults,
   ServiceError,
@@ -1277,5 +1279,140 @@ describe('classes that Elixia withdraws', () => {
 
     await reviewListedClasses(config, profile, nowMs);
     expect(centers).toEqual(['Tapiola']);
+  });
+});
+
+describe('instructor names', () => {
+  /**
+   * Who is running a class changes week to week, so it is refreshed by its own
+   * nightly job (`runInstructorSync`) rather than folded into the reindex or
+   * `reviewListedClasses` — see `refreshInstructors` in lib/service.ts for why
+   * that isolation matters. These tests pin the isolation itself, not just the
+   * refresh: `runReindex` must never touch an instructor name, and a night
+   * Elixia cannot be read must never blank one out.
+   */
+
+  function gym(overrides: Partial<BookingBackend> = {}): BookingBackend {
+    const mock = new MockElixiaClient();
+    return {
+      login: (email, password, at) => mock.login(email, password, at),
+      refresh: (tokens, at) => mock.refresh(tokens, at),
+      listCenters: (tokens) => mock.listCenters(tokens),
+      listClasses: (tokens, center) => mock.listClasses(tokens, center),
+      resolveClassId: (tokens, sub, date) => mock.resolveClassId(tokens, sub, date),
+      book: (tokens, id) => mock.book(tokens, id),
+      ...overrides,
+    };
+  }
+
+  /** The mock gym, with one class's instructor swapped — or removed, for undefined. */
+  function gymWithInstructor(className: string, instructorName: string | undefined): void {
+    const mock = new MockElixiaClient();
+    config.backend = gym({
+      listClasses: async (tokens, center) =>
+        (await mock.listClasses(tokens, center)).map((c) =>
+          c.className === className
+            ? { className: c.className, weekday: c.weekday, startTime: c.startTime, ...(instructorName ? { instructorName } : {}) }
+            : c,
+        ),
+    });
+  }
+
+  const only = async (userId = USER_ID): Promise<Subscription> =>
+    (await repo.listSubscriptions(userId))[0]!;
+
+  it('records who the schedule says is running the class', async () => {
+    const profile = await linkedProfile();
+    await addSubscription(config, profile, BODYPUMP, nowMs);
+    expect((await only()).instructorName).toBeUndefined();
+
+    gymWithInstructor('Bodypump', 'Maija Meikäläinen');
+    await refreshInstructors(config, profile, nowMs);
+
+    expect((await only()).instructorName).toBe('Maija Meikäläinen');
+  });
+
+  it('updates the name when the schedule shows a different instructor', async () => {
+    const profile = await linkedProfile();
+    await addSubscription(config, profile, BODYPUMP, nowMs);
+
+    gymWithInstructor('Bodypump', 'First Instructor');
+    await refreshInstructors(config, profile, nowMs);
+    expect((await only()).instructorName).toBe('First Instructor');
+
+    gymWithInstructor('Bodypump', 'Second Instructor');
+    await refreshInstructors(config, profile, nowMs);
+    expect((await only()).instructorName).toBe('Second Instructor');
+  });
+
+  it('clears a stored name once the schedule no longer names anyone for it', async () => {
+    const profile = await linkedProfile();
+    await addSubscription(config, profile, BODYPUMP, nowMs);
+
+    gymWithInstructor('Bodypump', 'Maija Meikäläinen');
+    await refreshInstructors(config, profile, nowMs);
+    expect((await only()).instructorName).toBe('Maija Meikäläinen');
+
+    gymWithInstructor('Bodypump', undefined);
+    await refreshInstructors(config, profile, nowMs);
+    expect((await only()).instructorName).toBeUndefined();
+  });
+
+  it('leaves the last known name alone when the class is off the schedule entirely', async () => {
+    // A withdrawn class is `reviewListedClasses`'s warning to raise, not a
+    // reason for this job to erase a name that was true yesterday.
+    const profile = await linkedProfile();
+    await addSubscription(config, profile, BODYPUMP, nowMs);
+
+    gymWithInstructor('Bodypump', 'Maija Meikäläinen');
+    await refreshInstructors(config, profile, nowMs);
+
+    const mock = new MockElixiaClient();
+    config.backend = gym({
+      listClasses: async (tokens, center) =>
+        (await mock.listClasses(tokens, center)).filter((c) => c.className !== 'Bodypump'),
+    });
+    await refreshInstructors(config, profile, nowMs);
+
+    expect((await only()).instructorName).toBe('Maija Meikäläinen');
+  });
+
+  it('leaves every name alone when Elixia cannot be read', async () => {
+    const profile = await linkedProfile();
+    await addSubscription(config, profile, BODYPUMP, nowMs);
+    gymWithInstructor('Bodypump', 'Maija Meikäläinen');
+    await refreshInstructors(config, profile, nowMs);
+
+    config.backend = gym({
+      listClasses: async () => {
+        throw new Error('elixia is down');
+      },
+    });
+
+    await expect(refreshInstructors(config, profile, nowMs)).resolves.toBeUndefined();
+    expect((await only()).instructorName).toBe('Maija Meikäläinen');
+  });
+
+  it('is refreshed by its own nightly job, not by the reindex', async () => {
+    const profile = await linkedProfile();
+    await addSubscription(config, profile, BODYPUMP, nowMs);
+    gymWithInstructor('Bodypump', 'Maija Meikäläinen');
+
+    await runReindex(config, nowMs);
+    expect((await only()).instructorName).toBeUndefined();
+
+    await runInstructorSync(config, nowMs);
+    expect((await only()).instructorName).toBe('Maija Meikäläinen');
+  });
+
+  it('gives up when out of time, leaving later profiles for tomorrow night', async () => {
+    const profile = await linkedProfile();
+    await addSubscription(config, profile, BODYPUMP, nowMs);
+    gymWithInstructor('Bodypump', 'Maija Meikäläinen');
+
+    const refreshed = await runInstructorSync(config, nowMs, { deadlineMs: nowMs - 1 });
+
+    expect(refreshed).toBe(0);
+    expect((await only()).instructorName).toBeUndefined();
   });
 });
