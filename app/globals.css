@@ -1227,6 +1227,35 @@ button.link .spinner {
   margin-left: auto;
 }
 
+.row-actions .btn-icon svg {
+  display: none;
+}
+
+/* Below this, Pause/Remove's full labels don't leave room for the row's own
+   content without wrapping onto a line of their own. Icon-only, stacked to
+   the side, keeps both actions on the row they belong to. */
+@media (max-width: 34rem) {
+  .row-actions {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .row-actions .btn-icon {
+    width: 32px;
+    height: 32px;
+    min-height: 0;
+    padding: 0;
+  }
+
+  .row-actions .btn-icon svg {
+    display: block;
+  }
+
+  .row-actions .btn-label {
+    display: none;
+  }
+}
+
 .is-paused {
   opacity: 0.55;
 }
