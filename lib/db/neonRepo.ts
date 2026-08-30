@@ -40,7 +40,7 @@ const PROFILE_COLUMNS = `
 
 const SUBSCRIPTION_COLUMNS = `
   id, user_id, class_name, center, weekday, start_time,
-  priority, enabled, booking_window_days, unlisted_since, created_at
+  priority, enabled, booking_window_days, unlisted_since, instructor_name, created_at
 `;
 
 const str = (value: unknown): string => String(value);
@@ -80,6 +80,7 @@ const toSubscription = (row: SqlRow): Subscription => ({
     ? { bookingWindowDays: num(row.booking_window_days) }
     : {}),
   ...(row.unlisted_since ? { unlistedSinceMs: toMs(row.unlisted_since) } : {}),
+  ...(row.instructor_name ? { instructorName: str(row.instructor_name) } : {}),
   createdAtMs: toMs(row.created_at),
 });
 
@@ -259,6 +260,18 @@ export function createNeonRepo(sql: Sql): Repo {
            where user_id = $1 and id = $2::uuid
            returning id`,
           [userId, id, atMs === null ? null : new Date(atMs).toISOString()],
+        ),
+      );
+      return rows.length > 0;
+    },
+
+    async setSubscriptionInstructor(userId, id, name) {
+      const rows = await rowsOrNoneForBadId(() =>
+        sql.query(
+          `update public.subscriptions set instructor_name = $3
+           where user_id = $1 and id = $2::uuid
+           returning id`,
+          [userId, id, name],
         ),
       );
       return rows.length > 0;

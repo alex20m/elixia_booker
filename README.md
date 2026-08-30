@@ -22,6 +22,9 @@ is done.
   and both count as success.
 - A class doesn't appear on the schedule until its booking window opens, so
   its id is resolved right before booking if it wasn't available earlier.
+- Each class shows who's currently down to run it, refreshed nightly by its
+  own job (`/api/cron/instructors`) — kept apart from booking and reindexing
+  so a change to how instructor names are read can't affect either.
 
 ### What wakes the booking up
 
@@ -75,6 +78,20 @@ endpoint verifies the request's QStash signature instead (`lib/http.ts`
 `assertCronAuthorised`), which needs nothing in the schedule or the message to
 prove where it came from. The `Authorization` header above authenticates *you*
 to QStash's API when running this command — it is never sent on to the app.
+
+The nightly instructor sync, which refreshes who the schedule currently says
+is running each class — its own schedule, not folded into the reindex above,
+for the same isolation reason `lib/service.ts`'s `refreshInstructors` gives:
+
+```bash
+curl -X POST "https://qstash.upstash.io/v2/schedules/$APP_URL/api/cron/instructors" \
+  -H "Authorization: Bearer $QSTASH_TOKEN" \
+  -H "Upstash-Schedule-Id: nightly-instructors" \
+  -H "Upstash-Cron: 43 3 * * *" \
+  -H "Upstash-Method: POST" \
+  -H "Upstash-Timeout: 60s" \
+  -H "Upstash-Retries: 3"
+```
 
 Check what is actually configured with:
 

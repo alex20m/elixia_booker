@@ -30,8 +30,18 @@ const MOCK_CENTERS: CenterOption[] = [
   { id: '742', name: 'Kamppi' },
 ];
 
-function slots(className: string, startTime: string, days: Weekday[]): ClassOption[] {
-  return days.map((weekday) => ({ className, weekday, startTime }));
+function slots(
+  className: string,
+  startTime: string,
+  days: Weekday[],
+  instructorName?: string,
+): ClassOption[] {
+  return days.map((weekday) => ({
+    className,
+    weekday,
+    startTime,
+    ...(instructorName ? { instructorName } : {}),
+  }));
 }
 
 /**
@@ -47,7 +57,7 @@ function slots(className: string, startTime: string, days: Weekday[]): ClassOpti
 const MOCK_TIMETABLE: ClassOption[] = [
   ...slots('Bodypump', '09:00', ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']),
   ...slots('Bodypump', '18:00', ['tuesday', 'thursday']),
-  ...slots('Yoga', '17:00', ['monday', 'wednesday']),
+  ...slots('Yoga', '17:00', ['monday', 'wednesday'], 'Maija Meikäläinen'),
   ...slots('Full House Spin', '09:00', ['tuesday', 'saturday']),
   ...slots('Busy Bootcamp', '07:00', ['monday', 'wednesday', 'friday']),
 ];

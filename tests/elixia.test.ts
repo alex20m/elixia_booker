@@ -10,6 +10,7 @@ import {
   findClassId,
   findClubIdByName,
   listClubOptions,
+  parseInstructorName,
   performElixiaLogin,
   ElixiaCredentialsRejected,
 } from '../lib/elixia';
@@ -150,18 +151,35 @@ function unfilteredFixture() {
   return { filters: filtersFixture(), schedule: { query: { clubIds: '' } } };
 }
 
-function event(name: string, time: string) {
+function event(name: string, time: string, instructor?: string) {
   return {
     id: `741p${name.length}${time.replace(':', '')}`,
     isBooked: false,
     hasWaitingList: false,
     waitingListCount: 0,
-    metadata: { name, clubName: 'Circus', startsAt: `2026-08-24T${time}:00+03:00`, time, duration: 60 },
+    metadata: {
+      name,
+      clubName: 'Circus',
+      startsAt: `2026-08-24T${time}:00+03:00`,
+      time,
+      duration: 60,
+      ...(instructor ? { instructor } : {}),
+    },
   };
 }
 
-function oneClassFixture({ date, name, time }: { date: string; name: string; time: string }) {
-  return { schedule: { events: [{ date, events: [event(name, time)] }] } };
+function oneClassFixture({
+  date,
+  name,
+  time,
+  instructor,
+}: {
+  date: string;
+  name: string;
+  time: string;
+  instructor?: string;
+}) {
+  return { schedule: { events: [{ date, events: [event(name, time, instructor)] }] } };
 }
 
 /** The same two weekly classes as the listing publishes them: once per week. */
@@ -327,6 +345,66 @@ describe('collectClassOptions', () => {
 
   it('is empty for a page with no schedule, which is what an unfiltered page is', () => {
     expect(collectClassOptions(extractDataProps(pageHtml(unfilteredFixture())))).toEqual([]);
+  });
+
+  it('carries who is running the class, parsed off the listing\'s own field', () => {
+    const props = oneClassFixture({
+      date: '2026-08-24',
+      name: 'Yoga',
+      time: '09:00',
+      instructor: 'w/ Maija Meikäläinen',
+    });
+
+    expect(collectClassOptions(props)).toEqual([
+      { className: 'Yoga', weekday: 'monday', startTime: '09:00', instructorName: 'Maija Meikäläinen' },
+    ]);
+  });
+
+  it('carries no instructor field at all when the listing names none', () => {
+    // Not an empty string: a caller checking `if (option.instructorName)`
+    // must not be able to tell "no instructor" from "empty name" apart from
+    // how this omits the key entirely.
+    const props = oneClassFixture({ date: '2026-08-24', name: 'Yoga', time: '09:00' });
+    expect(Object.keys(collectClassOptions(props)[0]!)).not.toContain('instructorName');
+  });
+
+  it('takes the instructor from the soonest published occurrence, not a later one', () => {
+    // The same class two weeks running, with different instructors — which is
+    // exactly why this cannot be a fact stored on the slot itself.
+    const props = {
+      schedule: {
+        events: [
+          { date: '2026-08-24', events: [event('Bodypump', '09:00', 'w/ First Week')] }, // Monday
+          { date: '2026-08-31', events: [event('Bodypump', '09:00', 'w/ Second Week')] }, // Monday again
+        ],
+      },
+    };
+
+    expect(collectClassOptions(props)).toEqual([
+      { className: 'Bodypump', weekday: 'monday', startTime: '09:00', instructorName: 'First Week' },
+    ]);
+  });
+});
+
+describe('parseInstructorName', () => {
+  it('strips the listing\'s own "w/ " prefix', () => {
+    expect(parseInstructorName('w/ Maija Meikäläinen')).toBe('Maija Meikäläinen');
+  });
+
+  it('is case-insensitive on the prefix and tolerates extra space', () => {
+    expect(parseInstructorName('W/   Jane Doe')).toBe('Jane Doe');
+  });
+
+  it('trims surrounding space even without a prefix', () => {
+    expect(parseInstructorName('  Jane Doe  ')).toBe('Jane Doe');
+  });
+
+  it('is undefined for an absent value, not an empty string', () => {
+    expect(parseInstructorName(undefined)).toBeUndefined();
+  });
+
+  it('is undefined for a prefix with nothing after it', () => {
+    expect(parseInstructorName('w/ ')).toBeUndefined();
   });
 });
 

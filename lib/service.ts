@@ -1055,6 +1055,61 @@ export async function reviewListedClasses(
   }
 }
 
+/**
+ * Check each of a profile's classes against the published timetable, and
+ * record who the listing currently says is running it.
+ *
+ * Its own function, called by its own nightly job (`runInstructorSync`)
+ * rather than folded into `reviewListedClasses` or the reindex, because it
+ * reads and writes something the booking engine never touches: a wrong
+ * instructor name shown in the UI is a cosmetic bug, and it must not be able
+ * to share a failure mode with the code that decides whether a class gets
+ * booked. Isolating it also means a future change to how instructors are
+ * parsed — Elixia has already changed this page's shape once — cannot
+ * regress booking or the unlisted-class warning.
+ *
+ * Mirrors `reviewListedClasses`'s carefulness: one read per centre, and a
+ * centre that cannot be read leaves every subscription's instructor exactly
+ * as it was, rather than blanking out a name that was true yesterday.
+ */
+export async function refreshInstructors(
+  config: AppConfig,
+  profile: Profile,
+  nowMs: number,
+): Promise<void> {
+  if (profile.elixiaStatus !== 'ok') return;
+
+  const subscriptions = (await config.repo.listSubscriptions(profile.id)).filter((s) => s.enabled);
+  const centers = [...new Set(subscriptions.map((s) => s.center))];
+  const logger = new Logger();
+
+  for (const center of centers) {
+    let offered: ClassOption[];
+    try {
+      offered = await listClasses(config, profile, center, nowMs);
+    } catch (err) {
+      logger.log('instructor.check.failed', {
+        userId: profile.id,
+        center,
+        error: (err as Error).message,
+      });
+      continue;
+    }
+
+    for (const subscription of subscriptions.filter((s) => s.center === center)) {
+      const match = offered.find((option) => isSameClass(option, subscription));
+      // Not listed tonight — leave the last known name alone. A withdrawn
+      // class is `reviewListedClasses`'s concern, not this one's.
+      if (!match) continue;
+
+      const instructorName = match.instructorName ?? null;
+      if (instructorName === (subscription.instructorName ?? null)) continue;
+
+      await config.repo.setSubscriptionInstructor(profile.id, subscription.id, instructorName);
+    }
+  }
+}
+
 export async function reindexProfile(
   config: AppConfig,
   profile: Profile,
@@ -1425,4 +1480,38 @@ export async function runReindex(
     reviewSkipped: profiles.length - reviewed,
   });
   return indexed;
+}
+
+/**
+ * Nightly: refresh every linked profile's known instructor names.
+ *
+ * Deliberately its own top-level job rather than a third pass inside
+ * `runReindex` — see `refreshInstructors` for why the isolation matters. It
+ * takes the same `deadlineMs` shape as reindexing for the same reason: reading
+ * a ~1.5MB schedule page per centre per profile can outgrow a single
+ * invocation's budget long before every profile is covered, and it is better
+ * to leave the rest for tomorrow night than to let one slow run be killed
+ * mid-write.
+ */
+export async function runInstructorSync(
+  config: AppConfig,
+  nowMs: number = Date.now(),
+  options: ReindexOptions = {},
+): Promise<number> {
+  const logger = new Logger();
+  const profiles = await config.repo.listLinkedProfiles();
+
+  let refreshed = 0;
+  for (const profile of profiles) {
+    if (options.deadlineMs !== undefined && Date.now() >= options.deadlineMs) break;
+    await refreshInstructors(config, profile, nowMs);
+    refreshed += 1;
+  }
+
+  logger.log('cron.instructors', {
+    profiles: profiles.length,
+    refreshed,
+    refreshSkipped: profiles.length - refreshed,
+  });
+  return refreshed;
 }
