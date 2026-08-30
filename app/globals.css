@@ -662,6 +662,13 @@ strong {
   color: var(--accent);
 }
 
+/* Applied only to the item the menu focuses on open (see NavMenu.tsx), and
+   removed the moment that item blurs — so the ring a keyboard visitor relies
+   on is untouched, and only this one non-interactive focus is silent. */
+.menu-item--opened-focus:focus-visible {
+  outline: none;
+}
+
 /* The sections are in the bar at this width and the trigger that opens this
    panel is hidden with it (see `.menu-trigger` above) — but the panel can
    still be open if a visitor resizes past this width without closing it

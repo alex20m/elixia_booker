@@ -73,7 +73,19 @@ export function NavMenu<Id extends string>({
     const items = panelRef.current?.querySelectorAll<HTMLElement>('.menu-item') ?? [];
     for (const item of Array.from(items)) {
       item.focus();
-      if (document.activeElement === item) break;
+      if (document.activeElement === item) {
+        // This focus() is us moving focus into the menu, not the visitor
+        // tabbing to it — so it should not draw the focus ring that a real
+        // keyboard visitor relies on. Whichever section happens to be first
+        // (today, Classes) would otherwise show a stray ring every time the
+        // menu opens, including on a touch tap. A genuine Tab back to this
+        // item clears the class via blur, so the ring still appears then.
+        item.classList.add('menu-item--opened-focus');
+        item.addEventListener('blur', () => item.classList.remove('menu-item--opened-focus'), {
+          once: true,
+        });
+        break;
+      }
     }
 
     return () => document.removeEventListener('keydown', onKeyDown);

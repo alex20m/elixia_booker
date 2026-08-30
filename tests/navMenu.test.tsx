@@ -136,4 +136,24 @@ describe('NavMenu', () => {
 
     expect(document.activeElement).toBe(byId('menu-classes'));
   });
+
+  it('does not mark the item it auto-focused on open for a visible focus ring', async () => {
+    render();
+    await open();
+
+    expect(byId('menu-classes')!.classList.contains('menu-item--opened-focus')).toBe(true);
+  });
+
+  it('lets a real Tab back to the auto-focused item show its focus ring again', async () => {
+    render();
+    await open();
+    const classesItem = byId('menu-classes')!;
+    expect(classesItem.classList.contains('menu-item--opened-focus')).toBe(true);
+
+    await act(async () => {
+      classesItem.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+    });
+
+    expect(classesItem.classList.contains('menu-item--opened-focus')).toBe(false);
+  });
 });
