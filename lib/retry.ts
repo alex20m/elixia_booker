@@ -80,6 +80,19 @@ function retryAfterOf(outcome: AttemptOutcome): number | undefined {
 }
 
 /**
+ * Returned by `runBounded` when its own timer, not the attempt, won the race.
+ *
+ * Kept distinct from any `AttemptOutcome`: the attempt was cut off with nothing
+ * to report, which is a different event from the attempt *returning* an error.
+ * Conflating them is the bug this symbol exists to prevent — a class that never
+ * lists spends the whole budget on `too-early` probes, and if the final probe
+ * is still in flight when the timer fires, the run must still be reported as
+ * "never appeared", not as a raw `error` carrying an internal "attempt aborted"
+ * string that reads to the user as a hard failure.
+ */
+const BUDGET_SPENT = Symbol('budget-spent');
+
+/**
  * Run one attempt, aborting it if the deadline passes mid-flight.
  *
  * The signal is passed through so the caller can cancel the underlying fetch
@@ -90,17 +103,14 @@ async function runBounded(
   attempt: (signal: AbortSignal) => Promise<AttemptOutcome>,
   remainingMs: number,
   setTimer: (fn: () => void, ms: number) => () => void,
-): Promise<AttemptOutcome> {
+): Promise<AttemptOutcome | typeof BUDGET_SPENT> {
   const controller = new AbortController();
   let cancelTimer: (() => void) | undefined;
 
-  const timeout = new Promise<AttemptOutcome>((resolve) => {
+  const timeout = new Promise<typeof BUDGET_SPENT>((resolve) => {
     cancelTimer = setTimer(() => {
       controller.abort();
-      resolve({
-        kind: 'error',
-        detail: `attempt aborted: exceeded the remaining ${remainingMs}ms budget`,
-      });
+      resolve(BUDGET_SPENT);
     }, remainingMs);
   });
 
@@ -130,28 +140,49 @@ export async function retryWithBackoff(
 
   const deadline = now() + options.budgetMs;
   let attempts = 0;
-  let last: AttemptOutcome = { kind: 'error', detail: 'no attempt was made' };
+  // The last outcome an attempt actually *produced*. Stays null until one does,
+  // so a budget that expires before any attempt completes is reported as its
+  // own thing rather than as a stale placeholder.
+  let last: AttemptOutcome | null = null;
 
   for (;;) {
     const remaining = deadline - now();
     if (remaining <= 0) {
-      return { outcome: last, attempts, exhausted: true };
+      return { outcome: last ?? noResponse(options.budgetMs), attempts, exhausted: true };
     }
 
     attempts += 1;
-    last = await runBounded(attempt, remaining, setTimer);
-    options.onAttempt?.(attempts, last);
+    const outcome = await runBounded(attempt, remaining, setTimer);
 
-    if (!isRetryable(last)) {
-      return { outcome: last, attempts, exhausted: false };
+    if (outcome === BUDGET_SPENT) {
+      // Our own timer cut the attempt short — the deadline has effectively
+      // arrived. Report the last real outcome (usually `too-early`), not the
+      // abort, but still log the attempt so a cut-off run is visible.
+      options.onAttempt?.(attempts, {
+        kind: 'error',
+        detail: `attempt aborted: exceeded the remaining ${remaining}ms budget`,
+      });
+      return { outcome: last ?? noResponse(options.budgetMs), attempts, exhausted: true };
     }
 
-    const delay = backoffDelayMs(attempts, options, retryAfterOf(last), random);
+    last = outcome;
+    options.onAttempt?.(attempts, outcome);
+
+    if (!isRetryable(outcome)) {
+      return { outcome, attempts, exhausted: false };
+    }
+
+    const delay = backoffDelayMs(attempts, options, retryAfterOf(outcome), random);
     if (now() + delay >= deadline) {
-      return { outcome: last, attempts, exhausted: true };
+      return { outcome, attempts, exhausted: true };
     }
 
     options.onWait?.(attempts, delay);
     await sleep(delay);
   }
+}
+
+/** The outcome when the budget ran out before a single attempt came back. */
+function noResponse(budgetMs: number): AttemptOutcome {
+  return { kind: 'error', detail: `no response from Elixia within the ${budgetMs}ms budget` };
 }
