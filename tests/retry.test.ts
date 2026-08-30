@@ -152,7 +152,7 @@ describe('retryWithBackoff', () => {
     expect(result.exhausted).toBe(true);
   });
 
-  it('aborts an attempt that hangs past the budget', async () => {
+  it('aborts an attempt that hangs past the budget, and never comes back for more', async () => {
     // The failure this guards: a request that never resolves would otherwise
     // hold the run open indefinitely, long past any hope of winning the slot.
     const clock = fakeClock();
@@ -165,7 +165,9 @@ describe('retryWithBackoff', () => {
     };
 
     let sawAbort = false;
+    let calls = 0;
     const attempt = (signal: AbortSignal): Promise<AttemptOutcome> => {
+      calls += 1;
       signal.addEventListener('abort', () => {
         sawAbort = true;
       });
@@ -183,8 +185,51 @@ describe('retryWithBackoff', () => {
     });
 
     expect(sawAbort).toBe(true);
+    expect(result.exhausted).toBe(true);
+    // A budget spent before any attempt returned is its own outcome — not the
+    // internal "attempt aborted" string, which used to leak into the user's
+    // notification. And the loop stops: a hung attempt that keeps being retried
+    // just hangs again.
     expect(result.outcome.kind).toBe('error');
-    expect((result.outcome as { detail: string }).detail).toContain('aborted');
+    expect((result.outcome as { detail: string }).detail).toMatch(/no response from Elixia/);
+    expect(calls).toBe(1);
+  });
+
+  it('reports the last real outcome, not the abort, when the budget expires mid-attempt', async () => {
+    // The production miss this fixes: a class that never lists is probed with
+    // `too-early` for the whole budget, and the final probe is still in flight
+    // when the timer fires. That must still read as "never appeared"
+    // (`too-early`, exhausted) — not as a hard `error` whose detail is an
+    // internal budget string.
+    const clock = fakeClock();
+    let fired: (() => void) | null = null;
+    const setTimer = (fn: () => void): (() => void) => {
+      fired = fn;
+      return () => {
+        fired = null;
+      };
+    };
+
+    let calls = 0;
+    const attempt = (): Promise<AttemptOutcome> => {
+      calls += 1;
+      if (calls <= 2) return Promise.resolve({ kind: 'too-early' });
+      // The third probe never comes back; only the budget timer ends it.
+      queueMicrotask(() => fired?.());
+      return new Promise<AttemptOutcome>(() => {});
+    };
+
+    const result = await retryWithBackoff(attempt, {
+      ...opts,
+      now: clock.now,
+      sleep: clock.sleep,
+      random: () => 1,
+      setTimer,
+    });
+
+    expect(result.outcome).toEqual({ kind: 'too-early' });
+    expect(result.exhausted).toBe(true);
+    expect(result.attempts).toBe(3);
   });
 
   it('does not sleep past the deadline just to make one more attempt', async () => {
