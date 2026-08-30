@@ -14,9 +14,9 @@ import {
 import { DEFAULT_TIMINGS } from '@/lib/config';
 
 /**
- * QStash is the scheduling path that replaces depending on GitHub Actions' own
- * cron to be punctual (see .github/workflows/watch.yml for the failure that
- * motivated it: a schedule trigger dropped outright, silently, for hours).
+ * QStash is the scheduling path. It replaced depending on GitHub Actions' own
+ * cron to be punctual, after a schedule trigger was dropped outright,
+ * silently, for hours (see lib/qstash.ts's header for that incident).
  *
  * The tick endpoint claims a window and is idempotent, so the design leans on
  * that: every reindex re-publishes every upcoming instant, and QStash's own
@@ -25,7 +25,6 @@ import { DEFAULT_TIMINGS } from '@/lib/config';
  */
 
 const APP_URL = 'https://booker.example';
-const SECRET = 'sekret';
 
 function opts(nowMs: number) {
   return { nowMs, appUrl: APP_URL };
@@ -128,8 +127,8 @@ describe('publishing the ticks', () => {
   const nowMs = release - 60 * 60_000;
 
   it('does nothing at all when QStash is not configured', async () => {
-    // The GitHub Actions watcher is still the live mechanism. Until a token
-    // exists this path must be inert rather than half-working.
+    // Until a token exists this path must be inert rather than half-working —
+    // a half-configured publish fails at delivery time, hours later, invisibly.
     const publisher = { batchJSON: vi.fn() };
     const result = await scheduleBookingTicks([release], {
       ...opts(nowMs),
@@ -167,9 +166,9 @@ describe('publishing the ticks', () => {
 
   it('reports a publish failure instead of throwing it', async () => {
     // Scheduling runs after the due rows are already written, and those rows
-    // are what the existing watcher books from. A QStash outage must not
+    // are the source of truth the tick books from. A QStash outage must not
     // propagate out of reindex and fail the settings save that triggered it —
-    // that would turn a degraded scheduler into a broken app.
+    // the next reindex republishes everything upcoming anyway.
     const batchJSON = vi.fn().mockRejectedValue(new Error('qstash unreachable'));
     const result = await scheduleBookingTicks([release], {
       ...opts(nowMs),
@@ -181,25 +180,20 @@ describe('publishing the ticks', () => {
   });
 });
 
-describe('deciding whether QStash is live for this deployment', () => {
-  const complete = { qstashToken: 'tok', appUrl: APP_URL, cronSecret: SECRET };
+describe('deciding whether the publish path is live for this deployment', () => {
+  const complete = { qstashToken: 'tok', appUrl: APP_URL };
 
-  it('is live only when the token, the origin and the cron secret are all present', () => {
-    // The returned target carries no cronSecret: it is still a required input
-    // (a deployment with neither a secret nor signing keys must refuse every
-    // cron request), but nothing downstream puts it in a message anymore.
+  it('is live only when both the token and the origin are present', () => {
     expect(qstashTargetFor(complete)).toEqual({ appUrl: APP_URL });
   });
 
   it.each([
     ['token', 'qstashToken'],
     ['origin', 'appUrl'],
-    ['cron secret', 'cronSecret'],
   ] as const)('stays dormant when the %s is missing', (_label, key) => {
-    // Partial configuration is the dangerous state: a message published without
-    // a secret 401s forever, and one pointed at no origin cannot be delivered
-    // at all. Both fail at delivery time, hours later, invisibly — so refuse to
-    // be half-configured here instead.
+    // Partial configuration is the dangerous state: a message pointed at no
+    // origin cannot be delivered at all, and it fails at delivery time, hours
+    // later, invisibly — so refuse to be half-configured here instead.
     const partial = { ...complete, [key]: undefined };
     expect(qstashTargetFor(partial)).toBeNull();
   });

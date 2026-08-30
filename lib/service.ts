@@ -1094,13 +1094,12 @@ export async function reindexProfile(
 
   await config.repo.replaceDueEntries(profile.id, entries);
 
-  // Hand the same instants to QStash, where one is configured.
+  // Hand the same instants to QStash, where it is configured.
   //
-  // Deliberately *after* the rows are written and deliberately non-fatal: those
-  // rows are the source of truth, and the GitHub Actions watcher still books
-  // from them. This is the path that removes the dependency on a scheduler
-  // GitHub itself documents as droppable under load (see lib/qstash.ts), and
-  // until it is proven it must not be able to fail a settings save.
+  // Deliberately *after* the rows are written and deliberately non-fatal: the
+  // rows are the source of truth the tick books from, and a QStash outage must
+  // not fail the settings save that triggered this — the next reindex, nightly
+  // or on the next change, republishes everything upcoming (see lib/qstash.ts).
   await publishTicks(config, entries, nowMs);
 
   return entries.length;
@@ -1110,8 +1109,9 @@ export async function reindexProfile(
  * Publish the tick schedule for a set of due entries.
  *
  * Swallowing the failure is the point: reporting it is useful, but a QStash
- * outage degrades to "the existing watcher is still driving this", never to a
- * failed request for the user who merely changed a setting.
+ * outage degrades to "nothing new was enqueued this run", never to a failed
+ * request for the user who merely changed a setting. The nightly reindex
+ * republishes, so a transient outage costs nothing.
  */
 async function publishTicks(
   config: AppConfig,

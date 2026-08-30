@@ -14,7 +14,13 @@ const SAFETY_MARGIN_MS = 5_000;
 
 /**
  * Nightly: reproject every linked account's classes and drop releases long
- * past, so the booking watcher's lookups stay a single indexed range scan.
+ * past, and hand every upcoming release instant to QStash as a delayed tick
+ * (lib/service.ts `runReindex` → `publishTicks`). This is what feeds the
+ * booking mechanism — without it, nothing is ever scheduled.
+ *
+ * Driven by a QStash schedule that lives in the QStash account, not in this
+ * repo; a deploy does not recreate it. See README "Scheduling that lives
+ * outside the repo".
  */
 async function reindex(request: Request): Promise<Response> {
   return handle(async () => {

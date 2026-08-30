@@ -3,8 +3,8 @@
 Books your group fitness classes at [Elixia](https://www.elixia.fi) (SATS Group)
 the moment booking opens.
 
-**TypeScript · Next.js · Neon (Postgres + Auth) · Vercel · GitHub Actions** — all
-on free tiers.
+**TypeScript · Next.js · Neon (Postgres + Auth) · Vercel · QStash** — all on
+free tiers. (GitHub Actions runs the CI checks and nothing else.)
 
 Deploy it once. After that, anyone you share the URL with creates an account,
 answers three setup questions, links their gym login, picks their classes, and
@@ -25,40 +25,36 @@ is done.
 
 ### What wakes the booking up
 
-Two schedulers can drive `/api/cron/tick`, which sleeps to the exact release
+QStash (Upstash) drives `/api/cron/tick`, which sleeps to the exact release
 millisecond and then books with jittered retries inside a ~30s budget.
 `lib/schedule.ts` does the "N days before" math in the user's own timezone,
-DST included, and releases are claimed atomically (`claimDue`) so any number of
-overlapping callers can't double-book. That idempotence is what lets both
-schedulers run at once.
+DST included, and releases are claimed atomically (`claimDue`) so a retried or
+duplicated delivery can't double-book.
 
-**QStash (Upstash) — the primary.** Every reindex hands each upcoming release
-instant to QStash as a delayed HTTP call (`lib/qstash.ts`), so the wake-up
-comes from a service whose whole product is delivering a request at a chosen
-time. Nothing has to already be running for a release to be noticed, and
-nothing has to be cancelled when a subscription changes: messages are keyed by
-instant, and a tick that finds nothing due returns. Published messages carry
-no secret — the cron endpoints authenticate a QStash delivery by verifying its
-signature (`QSTASH_CURRENT_SIGNING_KEY`/`QSTASH_NEXT_SIGNING_KEY`), not by a
-forwarded header, because QStash shows a message's headers in the clear in its
-own dashboard and events API to anyone with account access.
+Every reindex hands each upcoming release instant to QStash as a delayed HTTP
+call (`lib/qstash.ts`), so the wake-up comes from a service whose whole product
+is delivering a request at a chosen time. Nothing has to already be running for
+a release to be noticed, and nothing has to be cancelled when a subscription
+changes: messages are keyed by instant, and a tick that finds nothing due
+returns. Published messages carry no secret — the cron endpoints authenticate a
+QStash delivery **only** by verifying its signature
+(`QSTASH_CURRENT_SIGNING_KEY`/`QSTASH_NEXT_SIGNING_KEY`), not by any forwarded
+header, because QStash shows a message's headers in the clear in its own
+dashboard and events API to anyone with account access. A deployment with no
+signing keys set refuses every cron request.
 
-**GitHub Actions — the fallback.** `.github/workflows/watch.yml` runs a
-long-lived job that sleeps to the release on the runner's own clock; a new one
-starts every 3 hours and each runs ~5h50m, so one is always awake well before
-the previous deadline. This exists because GitHub's cron can *drop* a scheduled
-trigger outright under load rather than merely delay it — which is also why it
-is no longer the primary, and why `watchdog.yml` re-dispatches a watcher when
-none is active.
+This replaced a long-lived GitHub Actions job that slept to the release on the
+runner's own clock, backed by a watchdog that re-dispatched it. GitHub's cron
+can *drop* a scheduled trigger outright under load rather than merely delay it,
+and starting that job still depended on it — which is why it is gone.
 
 ### Scheduling that lives outside the repo
 
-Two things are configured in QStash rather than in this codebase, and neither
-is recreated by a deploy — if you move to a fresh QStash account you must run
-these again. Both need `QSTASH_TOKEN` and your `APP_URL`.
-
-The nightly reindex, which reprojects every account's upcoming releases and is
-what feeds QStash new instants in the first place:
+The nightly reindex is configured as a QStash schedule, not in this codebase,
+and a deploy does not recreate it — if you move to a fresh QStash account you
+must run this again. It needs `QSTASH_TOKEN` and your `APP_URL`. The reindex is
+what reprojects every account's upcoming releases and feeds QStash new instants
+in the first place, so without it nothing is ever booked:
 
 ```bash
 curl -X POST "https://qstash.upstash.io/v2/schedules/$APP_URL/api/cron/reindex" \
@@ -72,18 +68,13 @@ curl -X POST "https://qstash.upstash.io/v2/schedules/$APP_URL/api/cron/reindex" 
 
 `Upstash-Schedule-Id` makes that command idempotent — re-running it updates the
 one schedule instead of adding another. **No `Upstash-Forward-Authorization`
-here on purpose**: an earlier version of this command forwarded `CRON_SECRET`
-as a Bearer header so the endpoint's guard would accept it, which meant the
-secret sat in plaintext in QStash's own dashboard and events API for as long
-as its retention window kept it. The endpoint now verifies the request's
-QStash signature instead (`lib/http.ts` `assertCronAuthorised`), which needs
-nothing in the schedule or the message to prove where it came from. The
-`Authorization` header above authenticates *you* to QStash's API when running
-this command — it is never sent on to the app.
-
-`CRON_SECRET` is still required (for the GitHub Actions fallback, which
-authenticates the old-fashioned way), just no longer part of what QStash
-itself has to carry.
+here on purpose**: forwarding a shared secret as a Bearer header so the
+endpoint's guard accepts it would leave that secret in plaintext in QStash's
+own dashboard and events API for as long as its retention window keeps it. The
+endpoint verifies the request's QStash signature instead (`lib/http.ts`
+`assertCronAuthorised`), which needs nothing in the schedule or the message to
+prove where it came from. The `Authorization` header above authenticates *you*
+to QStash's API when running this command — it is never sent on to the app.
 
 Check what is actually configured with:
 
@@ -133,7 +124,7 @@ app/          Next.js App Router — pages, dashboard, setup, API routes
 lib/          booking logic, Elixia adapter, scheduling, crypto, db repo
 db/           migrations (node-pg-migrate)
 public/       service worker, icons, fonts
-.github/      CI workflows and the booking watcher
+.github/      CI workflows (checks only — no deploy, no cron)
 ```
 
 The `Repo` interface (`lib/db/`) is why the storage backend has changed

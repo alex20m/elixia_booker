@@ -118,7 +118,7 @@ export async function handle(fn: () => Promise<Response>): Promise<Response> {
  * Config for the cron.
  *
  * The cron has no session — it legitimately acts for every user at once, which
- * is precisely why the endpoint is secret-guarded rather than merely
+ * is precisely why the endpoint is signature-guarded rather than merely
  * unauthenticated. Unlike `requireUser`, it insists on a real database: a tick
  * that silently booked nothing out of an empty in-memory store would look
  * healthy in the logs while every class went unbooked.
@@ -137,8 +137,8 @@ export function loadCronConfig(): AppConfig {
  * Without this the booking tick would be publicly triggerable, letting anyone
  * fire other people's booking attempts at will.
  *
- * Reads the secret from the environment directly, rather than from an
- * AppConfig, so it can be called *before* anything else. Loading config first
+ * Builds the verifier straight from the environment, rather than from an
+ * AppConfig, so the guard can run *before* anything else. Loading config first
  * would mean an anonymous request gets a 500 describing the deployment's
  * configuration instead of a flat 401 — work done, and internal state
  * disclosed, for a caller that was never authorised.
@@ -152,43 +152,33 @@ function defaultQstashVerifier(): SignatureVerifier | null {
 }
 
 /**
- * Two credentials are accepted, cheapest first:
+ * The one credential accepted: a verified QStash signature.
  *
- *  - **The shared secret.** What GitHub Actions still sends, and the only
- *    thing an operator has to hand without provisioning anything else.
- *  - **A verified QStash signature.** What QStash's own deliveries carry
- *    automatically. Deliberately not "the secret, forwarded" — QStash's
- *    dashboard and events API display a published message's headers in the
- *    clear to anyone with account access, so a forwarded secret would sit
- *    there in plaintext for as long as the account's retention keeps it. A
- *    verified signature needs nothing in the message to leak (see
- *    lib/qstash.ts's TickMessage comment).
+ * QStash attaches it to every delivery automatically, and it is deliberately
+ * not "a shared secret, forwarded" — QStash's dashboard and events API display
+ * a message's headers in the clear to anyone with account access, so a
+ * forwarded secret would sit there in plaintext for as long as the account's
+ * retention keeps it. A verified signature needs nothing in the message to
+ * leak (see lib/qstash.ts's TickMessage comment).
  *
- * A verified signature is accepted even when no secret is configured at all
- * — it is not the "unguarded endpoint" the secret check exists to catch, and
- * a deployment can run on signing keys alone. The secret is still required
- * when *no* signature arrives: silently allowing the tick would be far worse
- * than refusing it, and the fallback for a caller with neither is to read the
- * environment directly, before anything else runs, so an unauthenticated
- * caller gets a flat 401 rather than a 500 describing the configuration.
+ * A deployment with no signing keys configured cannot verify anything, so it
+ * refuses every cron request rather than falling open — reported as a 500,
+ * because that is the operator's problem, not the caller's. A request that
+ * carries no signature at all gets a flat 401, learning nothing about the
+ * deployment.
  */
 export async function assertCronAuthorised(
   request: Request,
-  secret = process.env.CRON_SECRET,
   verifier: SignatureVerifier | null = defaultQstashVerifier(),
 ): Promise<void> {
-  const header = request.headers.get('authorization') ?? '';
-  const provided = header.startsWith('Bearer ') ? header.slice(7) : '';
-  if (secret && timingSafeEqual(provided, secret)) return;
-
   const signature = request.headers.get('upstash-signature');
   if (verifier && signature) {
     const body = await request.text();
     if (await verifier.verify({ signature, body })) return;
   }
 
-  if (!secret) {
-    throw new ServiceError('CRON_SECRET is not configured on this deployment', 500);
+  if (!verifier) {
+    throw new ServiceError('QStash signing keys are not configured on this deployment', 500);
   }
   throw new ServiceError('Unauthorized', 401);
 }

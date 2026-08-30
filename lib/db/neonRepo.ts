@@ -327,18 +327,6 @@ export function createNeonRepo(sql: Sql): Repo {
       return rows.map(toDueEntry).sort((a, b) => a.releaseEpochMs - b.releaseEpochMs);
     },
 
-    async peekNextRelease(afterMs, nowMs = Date.now()) {
-      const rows = await sql.query(
-        `select release_at from public.due_entries
-         where (claimed_at is null or claimed_at < $2::timestamptz)
-           and release_at >= $1::timestamptz
-         order by release_at asc
-         limit 1`,
-        [iso(afterMs), iso(nowMs - CLAIM_LEASE_MS)],
-      );
-      return rows[0] ? toMs(rows[0].release_at) : null;
-    },
-
     async pruneDueEntries(beforeMs) {
       const rows = await sql.query(
         `delete from public.due_entries where release_at < $1::timestamptz returning id`,

@@ -8,7 +8,7 @@
  *
  * The operations are shaped around what the app actually does. In particular
  * `claimDue` takes a time window rather than "give me everything", because the
- * watcher's tick must stay one index scan no matter how many users exist.
+ * booking tick must stay one index scan no matter how many users exist.
  */
 
 import type {
@@ -22,12 +22,11 @@ import type {
  * How long a claim holds before it is treated as abandoned and becomes
  * reclaimable.
  *
- * The watcher (watch.yml) can plausibly ask "what's due right now" twice in
- * quick succession around the same release: it fires the tick, and by the
- * time that request returns and the loop asks again, the release it just
- * booked can still fall inside the next ±60s claim window. Without a claim,
- * that second ask would find the same row and fire it again. `claimDue` hands
- * a release to only the first caller — but if that caller then crashes or is
+ * QStash guarantees at-least-once delivery, so two ticks can plausibly run for
+ * the same release: a delivery is retried, or one instant produces a duplicate
+ * message, and both land inside the same ±60s claim window. Without a claim,
+ * the second would find the same row and fire it again. `claimDue` hands a
+ * release to only the first caller — but if that caller then crashes or is
  * killed mid-attempt (a serverless invocation hitting its own `maxDuration`,
  * at most 300s on Vercel Pro), the release must not stay claimed forever with
  * nobody ever retrying it. Comfortably above that ceiling so a claim is never
@@ -82,12 +81,6 @@ export interface Repo {
    * handed to exactly one caller — see `CLAIM_LEASE_MS`. One index scan.
    */
   claimDue(fromMs: number, toMs: number, nowMs?: number): Promise<DueEntry[]>;
-  /**
-   * The earliest unclaimed release at or after `afterMs`, or null if nothing
-   * is scheduled that far out. A read, not a claim — for the watcher to sleep
-   * to the exact instant using its own clock, without taking the release.
-   */
-  peekNextRelease(afterMs: number, nowMs?: number): Promise<number | null>;
   /** Housekeeping: drop entries whose release is long past. */
   pruneDueEntries(beforeMs: number): Promise<number>;
 

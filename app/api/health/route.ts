@@ -18,9 +18,11 @@ export async function GET(): Promise<Response> {
       databaseConfigured: databaseConfigured(),
       authConfigured: authConfigured(),
       encryptionConfigured: encryptionConfigured(),
-      cronConfigured: Boolean(process.env.CRON_SECRET),
-      // The booking mechanism itself. False means nothing is being scheduled,
-      // however green everything above looks.
+      // The booking mechanism itself, both halves of it: publishing the
+      // schedule (QSTASH_TOKEN + APP_URL) and authenticating the deliveries it
+      // triggers (QSTASH_CURRENT_SIGNING_KEY + QSTASH_NEXT_SIGNING_KEY). False
+      // means classes are not being booked, however green everything above
+      // looks.
       qstashConfigured: qstashConfigured(),
     }),
   );
