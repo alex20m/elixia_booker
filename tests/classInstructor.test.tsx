@@ -122,8 +122,6 @@ describe('who is running the class', () => {
     });
 
     const row = container.querySelector('#subs-list .row')!;
-    expect([...row.querySelectorAll('.row-meta')].some((el) => /^with /.test(el.textContent ?? ''))).toBe(
-      false,
-    );
+    expect(row.querySelector('.class-instructor')).toBeNull();
   });
 });

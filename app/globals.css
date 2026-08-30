@@ -1151,6 +1151,75 @@ button.link .spinner {
   overflow-wrap: anywhere;
 }
 
+/* The class list's own row content — kept separate from .row-title/.row-meta
+   above, which the activity/history list also uses, so restyling one booking
+   card never reaches into the other list. */
+
+.class-day {
+  color: var(--text-alt);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: var(--space-xxs);
+}
+
+.class-body-row {
+  display: flex;
+  gap: var(--space-s);
+}
+
+/* Mirrors the source Elixia app's own accent bar, in this app's own accent
+   colour rather than Elixia's brand pink — see the picked mockup's own note
+   on why. Muted whenever the row has nothing to look forward to (paused, not
+   on the schedule, or no computed release), so colour tracks the one fact
+   worth a glance: is this class about to open. */
+.class-bar {
+  flex: none;
+  width: 3px;
+  border-radius: var(--radius-xs);
+  background: var(--accent-strong);
+  align-self: stretch;
+}
+
+.class-bar.is-muted {
+  background: var(--border-strong);
+}
+
+.class-time {
+  flex: none;
+  width: 48px;
+  font-weight: 700;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.class-details {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.class-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.class-instructor,
+.class-location,
+.class-status {
+  color: var(--text-alt);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.class-status.is-open {
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
 .row-actions {
   display: flex;
   gap: var(--space-xs);
