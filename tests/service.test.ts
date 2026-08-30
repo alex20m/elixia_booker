@@ -1584,6 +1584,23 @@ describe('instructor names', () => {
   const only = async (userId = USER_ID): Promise<Subscription> =>
     (await repo.listSubscriptions(userId))[0]!;
 
+  it('records the instructor immediately when adding a class the schedule already names', async () => {
+    // Waiting for tonight's `refreshInstructors` run would show "no instructor
+    // yet" in the UI for up to a day after a class the schedule already names
+    // someone for was added — the listing that validated the class already had
+    // the answer, so this should not depend on the nightly job at all.
+    const profile = await linkedProfile();
+    const sub = await addSubscription(
+      config,
+      profile,
+      { ...BODYPUMP, className: 'Yoga', weekday: 'monday', startTime: '17:00' },
+      nowMs,
+    );
+
+    expect(sub.instructorName).toBe('Maija Meikäläinen');
+    expect((await only()).instructorName).toBe('Maija Meikäläinen');
+  });
+
   it('records who the schedule says is running the class', async () => {
     const profile = await linkedProfile();
     await addSubscription(config, profile, BODYPUMP, nowMs);
