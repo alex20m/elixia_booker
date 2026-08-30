@@ -1227,7 +1227,7 @@ button.link .spinner {
   margin-left: auto;
 }
 
-.row-actions .btn-icon svg {
+.row-action-btn svg {
   display: none;
 }
 
@@ -1240,18 +1240,18 @@ button.link .spinner {
     gap: 6px;
   }
 
-  .row-actions .btn-icon {
-    width: 32px;
-    height: 32px;
+  .row-action-btn {
+    width: 36px;
+    height: 36px;
     min-height: 0;
     padding: 0;
   }
 
-  .row-actions .btn-icon svg {
+  .row-action-btn svg {
     display: block;
   }
 
-  .row-actions .btn-label {
+  .row-action-btn .btn-label {
     display: none;
   }
 }
