@@ -103,3 +103,22 @@ export const SignOutIcon = ({ size = 20 }: IconProps) => (
     <path d="M15 4h3.5A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5H15M10 8l-4 4 4 4M6 12h11" />
   </svg>
 );
+
+export const PauseIcon = ({ size = 20 }: IconProps) => (
+  <svg {...base(size)}>
+    <rect x="6" y="5" width="4" height="14" rx="1" />
+    <rect x="14" y="5" width="4" height="14" rx="1" />
+  </svg>
+);
+
+export const PlayIcon = ({ size = 20 }: IconProps) => (
+  <svg {...base(size)}>
+    <path d="M8 5v14l11-7-11-7Z" />
+  </svg>
+);
+
+export const TrashIcon = ({ size = 20 }: IconProps) => (
+  <svg {...base(size)}>
+    <path d="M4 7h16M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13M10 11v6M14 11v6" />
+  </svg>
+);

@@ -12,7 +12,6 @@ import {
   formatClassDate,
   loadDashboard,
   tabFromSearch,
-  titleCase,
   type DashboardLoad,
   type TabId,
 } from '@/lib/dashboardState';
@@ -28,7 +27,7 @@ import { BusyBar, LoadingScreen, SkeletonCard, SkeletonList } from './components
 import { NavMenu, type NavSection } from './components/NavMenu';
 import { Shell } from './components/Shell';
 import { SignOutButton } from './components/SignOutButton';
-import { CalendarIcon, PulseIcon, SlidersIcon } from './components/icons';
+import { CalendarIcon, PauseIcon, PlayIcon, PulseIcon, SlidersIcon, TrashIcon } from './components/icons';
 import { ThemeChoiceControl } from './components/theme';
 
 const OUTCOME_LABELS: Record<string, [string, string]> = {
@@ -387,9 +386,7 @@ function ClassList({ view, refresh }: { view: DashboardView; refresh: () => Prom
                 <div className="class-details">
                   <div className="class-name">{s.className}</div>
                   {s.instructorName && <div className="class-instructor">with {s.instructorName}</div>}
-                  <div className="class-location">
-                    {s.center} · {titleCase(s.weekday)}
-                  </div>
+                  <div className="class-location">{s.center}</div>
                   <div className={status.emphasize ? 'class-status is-open' : 'class-status'}>
                     {status.text}
                   </div>
@@ -409,25 +406,29 @@ function ClassList({ view, refresh }: { view: DashboardView; refresh: () => Prom
             <div className="row-actions">
               <ActionButton
                 id={`pause-${s.id}`}
-                className="btn-quiet btn-sm"
+                className="btn-quiet btn-sm btn-icon"
                 pendingLabel="…"
+                aria-label={s.enabled ? 'Pause' : 'Resume'}
                 onClick={async () => {
                   await api(`/api/subscriptions/${encodeURIComponent(s.id)}`, { method: 'PATCH' });
                   await refresh();
                 }}
               >
-                {s.enabled ? 'Pause' : 'Resume'}
+                {s.enabled ? <PauseIcon size={16} /> : <PlayIcon size={16} />}
+                <span className="btn-label">{s.enabled ? 'Pause' : 'Resume'}</span>
               </ActionButton>
               <ActionButton
                 id={`remove-${s.id}`}
-                className="btn-danger btn-sm"
+                className="btn-danger btn-sm btn-icon"
                 pendingLabel="…"
+                aria-label="Remove"
                 onClick={async () => {
                   await api(`/api/subscriptions/${encodeURIComponent(s.id)}`, { method: 'DELETE' });
                   await refresh();
                 }}
               >
-                Remove
+                <TrashIcon size={16} />
+                <span className="btn-label">Remove</span>
               </ActionButton>
             </div>
           </div>
