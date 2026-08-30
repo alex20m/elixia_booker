@@ -316,26 +316,26 @@ describe('Settings save button', () => {
 });
 
 describe('Settings calendar', () => {
-  it('offers to turn sync on when it is off', () => {
+  it('offers a single button to turn sync on when it is off', () => {
     render(view());
 
     expect(byId('calendar-enable')).not.toBeNull();
-    expect(byId('calendar-url')).toBeNull();
+    expect(byId('calendar-webcal')).toBeNull();
   });
 
-  it('turns sync on and shows the subscribe link', async () => {
+  it('turns sync on in one tap and hands off to the calendar app', async () => {
     render(view());
 
     await click('calendar-enable');
 
     expect(requests).toContainEqual({ url: '/api/calendar', method: 'POST', body: {} });
-    expect(byId<HTMLInputElement>('calendar-url')!.value).toContain('cal-tok');
+    expect(byId<HTMLAnchorElement>('calendar-webcal')!.href).toContain('cal-tok');
   });
 
   it('shows the existing link, and can turn sync back off', async () => {
     render(view({ calendarSyncEnabled: true, calendarFeedToken: 'existing-tok' }));
 
-    expect(byId<HTMLInputElement>('calendar-url')!.value).toContain('existing-tok');
+    expect(byId<HTMLAnchorElement>('calendar-webcal')!.href).toContain('existing-tok');
 
     await click('calendar-disable');
 
@@ -353,6 +353,17 @@ describe('Settings calendar', () => {
       method: 'POST',
       body: { regenerate: true },
     });
-    expect(byId<HTMLInputElement>('calendar-url')!.value).toContain('cal-tok');
+    expect(byId<HTMLAnchorElement>('calendar-webcal')!.href).toContain('cal-tok');
+  });
+
+  it('copies the link to the clipboard without ever showing the raw token on screen', async () => {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+
+    render(view({ calendarSyncEnabled: true, calendarFeedToken: 'existing-tok' }));
+    await click('calendar-copy');
+
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('existing-tok'));
+    expect(byId('calendar-url')).toBeNull();
   });
 });

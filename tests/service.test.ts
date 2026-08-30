@@ -16,6 +16,7 @@ import {
   reindexProfile,
   runDueBookings,
   refreshInstructors,
+  reviewBookedOccurrences,
   reviewListedClasses,
   reviewNextOccurrences,
   runInstructorSync,
@@ -683,6 +684,7 @@ describe('managing classes', () => {
       listClasses: (tokens, center) => mock.listClasses(tokens, center),
       resolveClassId: (tokens, sub, date) => mock.resolveClassId(tokens, sub, date),
       checkAvailability: async (tokens, center, checks) => checks.map(() => 'unavailable'),
+      checkBookedStatus: (tokens, center, checks) => mock.checkBookedStatus(tokens, center, checks),
       book: (tokens, id) => mock.book(tokens, id),
     };
 
@@ -705,6 +707,7 @@ describe('managing classes', () => {
       checkAvailability: async () => {
         throw new Error('elixia is down');
       },
+      checkBookedStatus: (tokens, center, checks) => mock.checkBookedStatus(tokens, center, checks),
       book: (tokens, id) => mock.book(tokens, id),
     };
 
@@ -806,6 +809,7 @@ describe('the booking tick', () => {
         return mock.resolveClassId(tokens, s, date);
       },
       checkAvailability: (tokens, center, checks) => mock.checkAvailability(tokens, center, checks),
+      checkBookedStatus: (tokens, center, checks) => mock.checkBookedStatus(tokens, center, checks),
       book: (tokens, id) => mock.book(tokens, id),
     };
 
@@ -1224,6 +1228,7 @@ describe('classes that Elixia withdraws', () => {
       listClasses: (tokens, center) => mock.listClasses(tokens, center),
       resolveClassId: (tokens, sub, date) => mock.resolveClassId(tokens, sub, date),
       checkAvailability: (tokens, center, checks) => mock.checkAvailability(tokens, center, checks),
+      checkBookedStatus: (tokens, center, checks) => mock.checkBookedStatus(tokens, center, checks),
       book: (tokens, id) => mock.book(tokens, id),
       ...overrides,
     };
@@ -1404,6 +1409,7 @@ describe('one-off occurrences', () => {
       listClasses: (tokens, center) => mock.listClasses(tokens, center),
       resolveClassId: (tokens, sub, date) => mock.resolveClassId(tokens, sub, date),
       checkAvailability: (tokens, center, checks) => mock.checkAvailability(tokens, center, checks),
+      checkBookedStatus: (tokens, center, checks) => mock.checkBookedStatus(tokens, center, checks),
       book: (tokens, id) => mock.book(tokens, id),
       ...overrides,
     };
@@ -1544,6 +1550,232 @@ describe('one-off occurrences', () => {
   });
 });
 
+describe('cancelled bookings', () => {
+  /**
+   * This app never cancels a booking itself, so the only way a class it
+   * booked can stop being held is the user cancelling through Elixia's own
+   * app or site. Nothing else in this codebase ever revisits a
+   * `booked`/`waitlisted` history row once it is written — this is the one
+   * check that does, so a cancelled class does not sit on the calendar feed
+   * forever.
+   */
+
+  function gym(overrides: Partial<BookingBackend> = {}): BookingBackend {
+    const mock = new MockElixiaClient();
+    return {
+      login: (email, password, at) => mock.login(email, password, at),
+      refresh: (tokens, at) => mock.refresh(tokens, at),
+      listCenters: (tokens) => mock.listCenters(tokens),
+      listClasses: (tokens, center) => mock.listClasses(tokens, center),
+      resolveClassId: (tokens, sub, date) => mock.resolveClassId(tokens, sub, date),
+      checkAvailability: (tokens, center, checks) => mock.checkAvailability(tokens, center, checks),
+      checkBookedStatus: (tokens, center, checks) => mock.checkBookedStatus(tokens, center, checks),
+      book: (tokens, id) => mock.book(tokens, id),
+      ...overrides,
+    };
+  }
+
+  /** A "booked" history row for a class that has not happened yet. */
+  async function bookUpcoming(
+    profile: { id: string },
+    sub: Subscription,
+    overrides: Partial<Parameters<MemoryRepo['appendHistory']>[1]> = {},
+  ): Promise<void> {
+    await repo.appendHistory(profile.id, {
+      atMs: nowMs,
+      subscriptionId: sub.id,
+      className: sub.className,
+      classDate: firstClassDate(sub),
+      startTime: sub.startTime,
+      outcome: 'booked',
+      attempts: 1,
+      firstAttemptOffsetMs: 0,
+      dryRun: false,
+      center: sub.center,
+      ...overrides,
+    });
+  }
+
+  const onlyHistory = async (userId = USER_ID) => (await repo.listHistory(userId))[0]!;
+
+  it('marks a booking cancelled once Elixia no longer shows it as booked', async () => {
+    const profile = await linkedProfile();
+    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+    await bookUpcoming(profile, sub);
+
+    config.backend = gym({
+      checkBookedStatus: async (tokens, center, checks) => checks.map(() => 'not-booked'),
+    });
+    await reviewBookedOccurrences(config, profile, nowMs);
+
+    expect((await onlyHistory()).cancelledAtMs).toBe(nowMs);
+  });
+
+  it('leaves a booking alone that Elixia still shows as booked', async () => {
+    const profile = await linkedProfile();
+    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+    await bookUpcoming(profile, sub);
+
+    config.backend = gym({
+      checkBookedStatus: async (tokens, center, checks) => checks.map(() => 'booked'),
+    });
+    await reviewBookedOccurrences(config, profile, nowMs);
+
+    expect((await onlyHistory()).cancelledAtMs).toBeUndefined();
+  });
+
+  it('does not read a class Elixia no longer publishes as cancelled', async () => {
+    // "unknown" covers a withdrawn or renamed class too — that says nothing
+    // about whether the booking made while it still existed was cancelled.
+    const profile = await linkedProfile();
+    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+    await bookUpcoming(profile, sub);
+
+    config.backend = gym({
+      checkBookedStatus: async (tokens, center, checks) => checks.map(() => 'unknown'),
+    });
+    await reviewBookedOccurrences(config, profile, nowMs);
+
+    expect((await onlyHistory()).cancelledAtMs).toBeUndefined();
+  });
+
+  it('leaves every booking untouched when Elixia cannot be read', async () => {
+    const profile = await linkedProfile();
+    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+    await bookUpcoming(profile, sub);
+
+    config.backend = gym({
+      checkBookedStatus: async () => {
+        throw new Error('elixia is down');
+      },
+    });
+
+    await expect(reviewBookedOccurrences(config, profile, nowMs)).resolves.toBeUndefined();
+    expect((await onlyHistory()).cancelledAtMs).toBeUndefined();
+  });
+
+  it('never checks a class that has already happened', async () => {
+    const profile = await linkedProfile();
+    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+    // A class dated well before "now" — already over, so cancellation no
+    // longer changes anything a calendar needs to show.
+    await bookUpcoming(profile, sub, { classDate: '2026-01-01' });
+
+    let called = false;
+    config.backend = gym({
+      checkBookedStatus: async (tokens, center, checks) => {
+        called = true;
+        return checks.map(() => 'not-booked');
+      },
+    });
+    await reviewBookedOccurrences(config, profile, nowMs);
+
+    expect(called).toBe(false);
+    expect((await onlyHistory()).cancelledAtMs).toBeUndefined();
+  });
+
+  it('never checks a dry run', async () => {
+    const profile = await linkedProfile();
+    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+    await bookUpcoming(profile, sub, { dryRun: true });
+
+    let called = false;
+    config.backend = gym({
+      checkBookedStatus: async (tokens, center, checks) => {
+        called = true;
+        return checks.map(() => 'not-booked');
+      },
+    });
+    await reviewBookedOccurrences(config, profile, nowMs);
+
+    expect(called).toBe(false);
+  });
+
+  it('skips a row written before this check existed, for lack of a centre to ask', async () => {
+    const profile = await linkedProfile();
+    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+    await bookUpcoming(profile, sub, { center: undefined });
+
+    let called = false;
+    config.backend = gym({
+      checkBookedStatus: async (tokens, center, checks) => {
+        called = true;
+        return checks.map(() => 'not-booked');
+      },
+    });
+    await reviewBookedOccurrences(config, profile, nowMs);
+
+    expect(called).toBe(false);
+    expect((await onlyHistory()).cancelledAtMs).toBeUndefined();
+  });
+
+  it('tells the owner once a cancellation is found', async () => {
+    const linked = await linkedProfile();
+    await repo.upsertProfile({ ...linked, telegramChatId: '4242', notifyChannel: 'telegram' });
+    const withChat = (await repo.getProfile(USER_ID))!;
+    const sub = await addSubscription(config, withChat, BODYPUMP, nowMs);
+    await bookUpcoming(withChat, sub);
+
+    const sent: string[] = [];
+    const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      sent.push(String(JSON.parse(String(init?.body)).text));
+      return new Response('{}', { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    config.telegramBotToken = 'bot-token';
+
+    try {
+      config.backend = gym({
+        checkBookedStatus: async (tokens, center, checks) => checks.map(() => 'not-booked'),
+      });
+      await reviewBookedOccurrences(config, withChat, nowMs);
+
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toMatch(/Bodypump/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('reads each centre once however many bookings are pending there', async () => {
+    const profile = await linkedProfile();
+    const sub1 = await addSubscription(config, profile, BODYPUMP, nowMs);
+    const sub2 = await addSubscription(
+      config,
+      profile,
+      { ...BODYPUMP, className: 'Yoga', weekday: 'monday', startTime: '17:00' },
+      nowMs,
+    );
+    await bookUpcoming(profile, sub1);
+    await bookUpcoming(profile, sub2);
+
+    const mock = new MockElixiaClient();
+    const centers: string[] = [];
+    config.backend = gym({
+      checkBookedStatus: async (tokens, center, checks) => {
+        centers.push(center);
+        return mock.checkBookedStatus(tokens, center, checks);
+      },
+    });
+
+    await reviewBookedOccurrences(config, profile, nowMs);
+    expect(centers).toEqual(['Tapiola']);
+  });
+
+  it('is run for every linked profile by the nightly job', async () => {
+    const profile = await linkedProfile();
+    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+    await bookUpcoming(profile, sub);
+
+    config.backend = gym({
+      checkBookedStatus: async (tokens, center, checks) => checks.map(() => 'not-booked'),
+    });
+    await runReindex(config, nowMs);
+
+    expect((await onlyHistory()).cancelledAtMs).toBe(nowMs);
+  });
+});
+
 describe('instructor names', () => {
   /**
    * Who is running a class changes week to week, so it is refreshed by its own
@@ -1563,6 +1795,7 @@ describe('instructor names', () => {
       listClasses: (tokens, center) => mock.listClasses(tokens, center),
       resolveClassId: (tokens, sub, date) => mock.resolveClassId(tokens, sub, date),
       checkAvailability: (tokens, center, checks) => mock.checkAvailability(tokens, center, checks),
+      checkBookedStatus: (tokens, center, checks) => mock.checkBookedStatus(tokens, center, checks),
       book: (tokens, id) => mock.book(tokens, id),
       ...overrides,
     };

@@ -11,13 +11,20 @@ import { ActionButton } from './ActionButton';
  *
  * Unlike Telegram, there is nothing to wait for here. Turning sync on is a
  * single request that comes back with the token straight away, so this has
- * none of `TelegramConnect`'s polling — the URL is either shown or it is not.
+ * none of `TelegramConnect`'s polling — the URL is either ready or it is not.
  *
  * Building the subscribe URL is deliberately the browser's job, not the
  * server's: the server never learns this deployment's own public origin
  * except through `APP_URL` (needed only for QStash), and the address someone
  * is looking at *right now* is always the one their calendar app needs to
  * reach, with no extra environment variable required to make that true.
+ *
+ * The off-state button does two things in one tap — turns sync on *and*
+ * hands off to whatever the device registers for `webcal:` — because asking
+ * for two taps ("turn on", then "add to calendar") to get one outcome is the
+ * kind of friction someone abandons a skippable step over. Everything past
+ * that first tap (copying the link by hand, rotating it, turning it back
+ * off) is real fallback, not the common path, so it stays small.
  */
 export function CalendarSync({
   enabled,
@@ -36,13 +43,19 @@ export function CalendarSync({
 
   const feedUrl = (t: string): string =>
     typeof window === 'undefined' ? '' : `${window.location.origin}/api/calendar/${t}.ics`;
+  const webcalUrl = (t: string): string => feedUrl(t).replace(/^https?:/, 'webcal:');
 
-  const turnOn = async (): Promise<void> => {
+  /** One tap: turn sync on, then hand straight off to the calendar app. */
+  const enableAndOpen = async (): Promise<void> => {
     const result = await api<{ enabled: boolean; token: string }>('/api/calendar', {
       method: 'POST',
       body: JSON.stringify({}),
     });
     onChange(result);
+    // A plain navigation, not a popup: unlike `window.open`, this is allowed
+    // to run after the `await` above, so the OS still treats it as the tap
+    // that opened the calendar app rather than silently blocking it.
+    window.location.href = webcalUrl(result.token);
   };
 
   const regenerate = async (): Promise<void> => {
@@ -71,45 +84,34 @@ export function CalendarSync({
   if (!enabled) {
     return (
       <div>
-        <p className="hint">
-          Add your booked classes to a calendar app automatically — the same way booking through
-          the SATS app does. A class appears once it is actually booked, not before.
-        </p>
+        <p className="hint">Classes you book will appear on your calendar automatically.</p>
         <ActionButton
           id="calendar-enable"
           className="btn-secondary mt-s"
-          pendingLabel="Turning on…"
+          pendingLabel="Adding…"
           onError={(err) => onError(err.message)}
-          onClick={turnOn}
+          onClick={enableAndOpen}
         >
-          Turn on calendar sync
+          Add to calendar
         </ActionButton>
       </div>
     );
   }
 
-  const url = feedUrl(token);
-
   return (
     <div>
       <p className="hint" id="calendar-status" role="status">
-        Calendar sync is on. Add this address in your calendar app as a new subscribed calendar
-        (in Google Calendar: Other calendars → From URL; in Apple Calendar: File → New Calendar
-        Subscription).
+        Calendar sync is on.
       </p>
-      <div className="field mt-s">
-        <label htmlFor="calendar-url">Subscribe URL</label>
-        <input id="calendar-url" readOnly value={url} onFocus={(e) => e.currentTarget.select()} />
-      </div>
       <div className="cluster mt-s">
+        <a id="calendar-webcal" className="btn btn-secondary" href={webcalUrl(token)}>
+          Open in calendar app
+        </a>
         <button type="button" id="calendar-copy" className="btn-secondary" onClick={() => void copy()}>
           {copied ? 'Copied' : 'Copy link'}
         </button>
-        <a id="calendar-webcal" className="btn btn-secondary" href={url.replace(/^https?:/, 'webcal:')}>
-          Add to calendar app
-        </a>
       </div>
-      <div className="cluster mt-s">
+      <p className="hint mt-xs">
         <ActionButton
           id="calendar-regenerate"
           className="link"
@@ -118,7 +120,8 @@ export function CalendarSync({
           onClick={regenerate}
         >
           Get a new link
-        </ActionButton>
+        </ActionButton>{' '}
+        ·{' '}
         <ActionButton
           id="calendar-disable"
           className="link"
@@ -128,7 +131,7 @@ export function CalendarSync({
         >
           Turn off
         </ActionButton>
-      </div>
+      </p>
     </div>
   );
 }

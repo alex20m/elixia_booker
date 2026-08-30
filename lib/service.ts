@@ -19,7 +19,13 @@ import {
   type BookingBackend,
 } from './elixia';
 import { MockElixiaClient } from './mock';
-import { buildCalendarFeed, newCalendarFeedToken, CALENDAR_TOKEN_PATTERN } from './calendarFeed';
+import {
+  buildCalendarFeed,
+  newCalendarFeedToken,
+  parseClassStart,
+  CALENDAR_TOKEN_PATTERN,
+} from './calendarFeed';
+import { zonedWallClockToInstant } from './schedule';
 import { importEncryptionKey, decryptJson, encryptJson, DecryptionError } from './auth/crypto';
 import { DuplicateSubscriptionError } from './db/repo';
 import { releasesFor, releasesInRange } from './planner';
@@ -47,6 +53,7 @@ import type {
   BookingHistoryEntry,
   CenterOption,
   ClassAvailabilityStatus,
+  ClassBookedStatus,
   ClassOption,
   ConfiguredProfile,
   DueEntry,
@@ -1297,6 +1304,116 @@ export async function reviewNextOccurrences(
 }
 
 /**
+ * Check every recent successful booking that has not happened yet against
+ * Elixia's own record of who is booked, and record the ones cancelled
+ * through Elixia's own app or site — this app never cancels one itself (see
+ * `BookingBackend.checkBookedStatus`).
+ *
+ * This is the only thing that ever revisits a `booked`/`waitlisted` history
+ * row once it is written, and it exists for one reason: without it, a class
+ * cancelled after this app booked it stays on the calendar feed
+ * (lib/calendarFeed.ts) forever, since nothing else ever looks at that row
+ * again.
+ *
+ * Scoped tightly on purpose. Only a booking's own most recent success can
+ * plausibly still be upcoming — anything earlier has already happened — so
+ * this is normally zero or one occurrence per subscription, not one query per
+ * history row. Rows written before `center` existed are skipped outright
+ * (nothing to ask Elixia about without a centre to ask it at), which only
+ * affects bookings made before this check shipped.
+ *
+ * Mirrors `reviewNextOccurrences`'s carefulness otherwise: one read per
+ * centre, batched, and an unreadable centre leaves every booking's status
+ * exactly as it was rather than being read as a mass cancellation.
+ */
+export async function reviewBookedOccurrences(
+  config: AppConfig,
+  profile: Profile,
+  nowMs: number,
+): Promise<void> {
+  if (profile.elixiaStatus !== 'ok' || !isConfigured(profile)) return;
+
+  const logger = new Logger();
+
+  const pending = (await config.repo.listHistory(profile.id))
+    .filter(
+      (entry): entry is BookingHistoryEntry & { subscriptionId: string; center: string } =>
+        entry.subscriptionId !== null &&
+        entry.center !== undefined &&
+        !entry.dryRun &&
+        entry.cancelledAtMs === undefined &&
+        (entry.outcome === 'booked' || entry.outcome === 'waitlisted'),
+    )
+    .map((entry) => {
+      const startWall = parseClassStart(entry.classDate, entry.startTime);
+      const { epochMs: classEpochMs } = zonedWallClockToInstant(startWall, profile.timeZone);
+      return { entry, classEpochMs };
+    })
+    // Already happened: whether it was cancelled in the meantime no longer
+    // changes anything a calendar needs to show.
+    .filter((x) => x.classEpochMs > nowMs);
+
+  if (pending.length === 0) return;
+
+  const centers = [...new Set(pending.map((x) => x.entry.center))];
+
+  for (const center of centers) {
+    const inCenter = pending.filter((x) => x.entry.center === center);
+
+    let statuses: ClassBookedStatus[];
+    try {
+      statuses = await browsingSchedule(config, profile, nowMs, (backend, tokens) =>
+        backend.checkBookedStatus(
+          tokens,
+          center,
+          inCenter.map((x) => ({
+            className: x.entry.className,
+            startTime: x.entry.startTime,
+            classDate: x.entry.classDate,
+          })),
+        ),
+      );
+    } catch (err) {
+      // Deliberately not read as cancellation: "we could not look" is not
+      // "it is gone", the same reasoning `reviewNextOccurrences` gives.
+      logger.log('booked.check.failed', {
+        userId: profile.id,
+        center,
+        error: (err as Error).message,
+      });
+      continue;
+    }
+
+    for (let i = 0; i < inCenter.length; i++) {
+      const { entry } = inCenter[i]!;
+      if (statuses[i] !== 'not-booked') continue;
+
+      const marked = await config.repo.markHistoryCancelled(
+        profile.id,
+        entry.subscriptionId,
+        entry.classDate,
+        nowMs,
+      );
+      if (!marked) continue;
+
+      logger.log('booking.cancelled', {
+        userId: profile.id,
+        subscriptionId: entry.subscriptionId,
+        className: entry.className,
+        classDate: entry.classDate,
+      });
+      await announce(
+        config,
+        profile,
+        logger,
+        `ℹ️ ${entry.className} · ${entry.classDate} at ${entry.center} was cancelled through ` +
+          `Elixia, so it has been taken off your synced calendar.`,
+      );
+    }
+  }
+}
+
+/**
  * Check each of a profile's classes against the published timetable, and
  * record who the listing currently says is running it.
  *
@@ -1737,6 +1854,16 @@ export async function runReindex(
     occurrencesReviewed += 1;
   }
 
+  // Fourth and last, and last on purpose: purely cosmetic (it only ever
+  // trims the calendar feed), so it is the first thing sacrificed when the
+  // clock is short, never the booking-affecting passes above it.
+  let bookedReviewed = 0;
+  for (const profile of profiles) {
+    if (options.deadlineMs !== undefined && Date.now() >= options.deadlineMs) break;
+    await reviewBookedOccurrences(config, profile, nowMs);
+    bookedReviewed += 1;
+  }
+
   const pruned = await config.repo.pruneDueEntries(nowMs - 24 * 60 * 60 * 1000);
   logger.log('cron.reindex', {
     profiles: profiles.length,
@@ -1748,6 +1875,8 @@ export async function runReindex(
     reviewSkipped: profiles.length - reviewed,
     occurrencesReviewed,
     occurrencesReviewSkipped: profiles.length - occurrencesReviewed,
+    bookedReviewed,
+    bookedReviewSkipped: profiles.length - bookedReviewed,
   });
   return indexed;
 }

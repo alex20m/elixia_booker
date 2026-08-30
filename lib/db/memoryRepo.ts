@@ -206,6 +206,22 @@ export function createMemoryRepo(): MemoryRepo {
       return (history.get(userId) ?? []).slice(0, limit);
     },
 
+    async markHistoryCancelled(userId, subscriptionId, classDate, nowMs) {
+      const entries = history.get(userId) ?? [];
+      // Newest first, matching the neonRepo statement's `order by created_at
+      // desc limit 1` — only one row is ever touched.
+      const entry = entries.find(
+        (e) =>
+          e.subscriptionId === subscriptionId &&
+          e.classDate === classDate &&
+          (e.outcome === 'booked' || e.outcome === 'waitlisted') &&
+          e.cancelledAtMs === undefined,
+      );
+      if (!entry) return false;
+      entry.cancelledAtMs = nowMs;
+      return true;
+    },
+
     dump() {
       return JSON.stringify({
         profiles: [...profiles.values()],

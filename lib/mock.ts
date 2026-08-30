@@ -19,6 +19,7 @@ import type {
   AttemptOutcome,
   CenterOption,
   ClassAvailabilityStatus,
+  ClassBookedStatus,
   ClassOption,
   StoredTokens,
   Subscription,
@@ -62,6 +63,7 @@ const MOCK_TIMETABLE: ClassOption[] = [
   ...slots('Yoga', '17:00', ['monday', 'wednesday'], 'Maija Meikäläinen'),
   ...slots('Full House Spin', '09:00', ['tuesday', 'saturday']),
   ...slots('Busy Bootcamp', '07:00', ['monday', 'wednesday', 'friday']),
+  ...slots('Cancelled Spin', '19:00', ['wednesday']),
 ];
 
 /** Access tokens are short-lived so the refresh path actually gets exercised. */
@@ -146,6 +148,39 @@ export class MockElixiaClient implements BookingBackend {
           slot.startTime === normalizeTime(check.startTime),
       );
       return listed ? 'available' : 'unavailable';
+    });
+  }
+
+  /**
+   * The mock has no notion of who booked what, so booked status is driven by
+   * the class name the same way `book` below drives its outcome: anything
+   * containing "cancel" simulates a class the user was booked into and later
+   * cancelled through Elixia's own app, so the calendar-cleanup path has
+   * something deterministic to exercise. Everything else on the timetable
+   * reads as still booked.
+   */
+  async checkBookedStatus(
+    _tokens: StoredTokens,
+    center: string,
+    checks: Array<{ className: string; startTime: string; classDate: string }>,
+  ): Promise<ClassBookedStatus[]> {
+    const wanted = center.trim().toLowerCase();
+    const known = MOCK_CENTERS.some((c) => c.name.toLowerCase() === wanted || c.id === wanted);
+    if (!known) throw new UnknownCenterError(center);
+
+    return checks.map((check): ClassBookedStatus => {
+      const weekday = weekdayOfIsoDate(check.classDate);
+      if (!weekday) return 'unknown';
+
+      const listed = MOCK_TIMETABLE.some(
+        (slot) =>
+          slot.className.toLowerCase() === check.className.trim().toLowerCase() &&
+          slot.weekday === weekday &&
+          slot.startTime === normalizeTime(check.startTime),
+      );
+      if (!listed) return 'unknown';
+
+      return check.className.toLowerCase().includes('cancel') ? 'not-booked' : 'booked';
     });
   }
 

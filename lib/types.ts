@@ -180,6 +180,23 @@ export class UnknownCenterError extends Error {
 export type ClassAvailabilityStatus = 'available' | 'unavailable' | 'not-published';
 
 /**
+ * Whether the signed-in user still holds a specific class occurrence, read
+ * from the same per-user flag the schedule page carries (`ScheduleEvent.isBooked`).
+ *
+ * - `booked`     — still held. The common case for anything this app booked.
+ * - `not-booked` — the occurrence is listed, and the user is not on it. The
+ *                   class was cancelled through Elixia's own app or site —
+ *                   this app never calls its own unbook endpoint — so a
+ *                   calendar entry for it should stop being served.
+ * - `unknown`    — the date could not be read at all (not published, or the
+ *                   centre could not be reached). Never treated as
+ *                   `not-booked`: a page that could not be read says nothing
+ *                   about whether a booking still holds, and reading that as
+ *                   a cancellation would drop calendar entries on an outage.
+ */
+export type ClassBookedStatus = 'booked' | 'not-booked' | 'unknown';
+
+/**
  * Outcome of a single booking attempt.
  *
  * There is deliberately no `full`: Elixia never rejects a booking for being
@@ -455,4 +472,11 @@ export interface BookingHistoryEntry {
    * Absent on rows written before this field existed.
    */
   center?: string;
+  /**
+   * When this booking was found no longer held — cancelled through Elixia's
+   * own app or site, since this app never cancels one itself. Set by the
+   * nightly `reviewBookedOccurrences` sweep, and the reason the calendar feed
+   * stops serving an event for it: see `lib/calendarFeed.ts`.
+   */
+  cancelledAtMs?: number;
 }

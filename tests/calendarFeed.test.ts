@@ -58,11 +58,15 @@ describe('buildCalendarFeed', () => {
     expect(ics).toContain('DTEND;TZID=Europe/Helsinki:20260908T100000');
   });
 
-  it('includes a waitlisted class too, and says so', () => {
+  it('includes a waitlisted class too, with the same description as a booked one', () => {
+    // Deliberately not distinguished: a waitlist position can change after
+    // this is written (Elixia moves people up on its own), and a synced
+    // calendar event has no way to be revised once a client has it — so the
+    // description must never assert something that can go stale.
     const ics = buildCalendarFeed(profile, [entry({ outcome: 'waitlisted' })], NOW);
 
     expect(ics).toContain('BEGIN:VEVENT');
-    expect(ics).toMatch(/DESCRIPTION:.*waiting list/i);
+    expect(ics).toContain('DESCRIPTION:Booked via Elixia Booker.');
   });
 
   it('leaves out attempts that never won a place', () => {
@@ -77,6 +81,12 @@ describe('buildCalendarFeed', () => {
 
   it('leaves out dry runs, so a test deployment cannot leak fake bookings onto a real calendar', () => {
     const ics = buildCalendarFeed(profile, [entry({ dryRun: true })], NOW);
+
+    expect(ics).not.toContain('BEGIN:VEVENT');
+  });
+
+  it('drops a booking found cancelled through Elixia, so it disappears on the next sync', () => {
+    const ics = buildCalendarFeed(profile, [entry({ cancelledAtMs: NOW })], NOW);
 
     expect(ics).not.toContain('BEGIN:VEVENT');
   });

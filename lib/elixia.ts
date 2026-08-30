@@ -32,6 +32,7 @@ import type {
   AttemptOutcome,
   CenterOption,
   ClassAvailabilityStatus,
+  ClassBookedStatus,
   ClassOption,
   StoredTokens,
   Subscription,
@@ -79,6 +80,22 @@ export interface BookingBackend {
     center: string,
     checks: Array<{ className: string; startTime: string; classDate: string }>,
   ): Promise<ClassAvailabilityStatus[]>;
+  /**
+   * Whether the signed-in user still holds specific class occurrences —
+   * one schedule read for the whole batch, same shape as `checkAvailability`
+   * and for the same reason. Results come back in the same order as `checks`.
+   *
+   * This app never cancels a booking itself (docs/api.md §5 notes an `/api/unbook`
+   * endpoint exists but nothing here calls it), so a `not-booked` result means
+   * the user cancelled through Elixia's own app or site. Used only to stop
+   * serving a calendar event for a booking that no longer holds — never by the
+   * booking engine itself.
+   */
+  checkBookedStatus(
+    tokens: StoredTokens,
+    center: string,
+    checks: Array<{ className: string; startTime: string; classDate: string }>,
+  ): Promise<ClassBookedStatus[]>;
   book(tokens: StoredTokens, classId: string, signal?: AbortSignal): Promise<AttemptOutcome>;
 }
 
@@ -657,6 +674,43 @@ export function matchClassAvailability(
   return match ? 'available' : 'unavailable';
 }
 
+/**
+ * Whether the signed-in user still holds a specific class occurrence.
+ *
+ * Same matching as `matchClassAvailability` — deliberately not shared with it
+ * for the same reason `matchClassAvailability` does not share with
+ * `findClassId`: each has to stay free to evolve without the others' tests
+ * pinning it in place. Reads `isBooked`, a per-user flag the schedule page
+ * carries alongside every event (docs/api.md §4).
+ */
+export function matchClassBookedStatus(
+  props: SchedulePageProps,
+  wanted: Pick<Subscription, 'className' | 'startTime'>,
+  classDate: string,
+): ClassBookedStatus {
+  const known = (props.schedule?.dateList?.dates ?? []).find((d) => d.isoDate === classDate);
+  if (known?.disabled === true) return 'unknown';
+
+  const day = (props.schedule?.events ?? []).find((d) => d.date === classDate);
+  if (!day) return 'unknown';
+
+  const wantedName = normalizeName(wanted.className);
+  const wantedTime = normalizeTime(wanted.startTime);
+
+  const match = day.events.find(
+    (e) =>
+      normalizeName(e.metadata?.name ?? '') === wantedName &&
+      normalizeTime(e.metadata?.time ?? '') === wantedTime,
+  );
+
+  // Not listed at all is not the same claim as "not booked": a class Elixia
+  // has withdrawn, or renamed, says nothing about whether the booking made
+  // while it still existed was ever cancelled.
+  if (!match) return 'unknown';
+
+  return match.isBooked ? 'booked' : 'not-booked';
+}
+
 // --- booking responses -------------------------------------------------------
 
 /**
@@ -894,6 +948,18 @@ export class ElixiaClient implements BookingBackend {
     const url = `${this.baseUrl}${ENDPOINTS.schedule}?clubIds=${encodeURIComponent(clubId)}`;
     const props = await this.fetchPage(tokens, url);
     return checks.map((check) => matchClassAvailability(props, check, check.classDate));
+  }
+
+  /** Own fetch, deliberately not shared with `checkAvailability` — see its own doc comment. */
+  async checkBookedStatus(
+    tokens: StoredTokens,
+    center: string,
+    checks: Array<{ className: string; startTime: string; classDate: string }>,
+  ): Promise<ClassBookedStatus[]> {
+    const clubId = await this.resolveClubId(tokens, center);
+    const url = `${this.baseUrl}${ENDPOINTS.schedule}?clubIds=${encodeURIComponent(clubId)}`;
+    const props = await this.fetchPage(tokens, url);
+    return checks.map((check) => matchClassBookedStatus(props, check, check.classDate));
   }
 
   async login(email: string, password: string, nowMs: number): Promise<StoredTokens> {
