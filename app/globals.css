@@ -751,7 +751,11 @@ select {
   background: var(--surface);
   color: var(--text);
   font: inherit;
-  font-size: 14px;
+  /* 16px, not the body's 14: iOS and Android both zoom the whole page in on
+     focus when a text input's font-size is under 16px, and undo that zoom
+     only on blur — which reads as the screen jumping every time a field is
+     tapped. 16px is the threshold both platforms use to skip that zoom. */
+  font-size: 16px;
 }
 
 /* A box carrying a datalist is a picker as much as a select is, so it wears the
