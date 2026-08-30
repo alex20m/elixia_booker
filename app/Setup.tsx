@@ -263,7 +263,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
                 ))}
               </select>
               <p className="hint">
-                Class times are read in this zone. Pick the city your classes are held in, not the
+                Class times are read in this zone. Pick the timezone your classes are held in, not the
                 one you happen to be in today.
               </p>
             </div>
