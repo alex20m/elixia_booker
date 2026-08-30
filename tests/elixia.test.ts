@@ -11,6 +11,7 @@ import {
   findClubIdByName,
   listClubOptions,
   matchClassAvailability,
+  matchClassBookedStatus,
   parseInstructorName,
   performElixiaLogin,
   ElixiaCredentialsRejected,
@@ -494,6 +495,43 @@ describe('matchClassAvailability', () => {
     const late = subscription({ className: 'HIIT Run & Box', startTime: '20:00' });
     expect(matchClassAvailability(scheduleFixture(), early, '2026-08-21')).toBe('available');
     expect(matchClassAvailability(scheduleFixture(), late, '2026-08-21')).toBe('available');
+  });
+});
+
+describe('matchClassBookedStatus', () => {
+  it('is booked when the schedule says the signed-in user holds it', () => {
+    const props = scheduleFixture();
+    // subscription()'s default is 'HIIT Run & Box' at 18:30, the second event
+    // that date — not the first, which is a different class entirely.
+    props.schedule.events[0]!.events[1]!.isBooked = true;
+
+    expect(matchClassBookedStatus(props, subscription(), '2026-08-21')).toBe('booked');
+  });
+
+  it('is not-booked when the occurrence is listed and the flag says no', () => {
+    // The fixture's own default — nothing here holds a booking.
+    expect(matchClassBookedStatus(scheduleFixture(), subscription(), '2026-08-21')).toBe(
+      'not-booked',
+    );
+  });
+
+  it('is unknown for a date beyond Elixia\'s published schedule', () => {
+    expect(matchClassBookedStatus(scheduleFixture(), subscription(), '2026-09-05')).toBe(
+      'unknown',
+    );
+  });
+
+  it('is unknown for a date absent from the schedule entirely', () => {
+    expect(matchClassBookedStatus(scheduleFixture(), subscription(), '2027-01-01')).toBe(
+      'unknown',
+    );
+  });
+
+  it('is unknown when the date is published but this class is not on it', () => {
+    // A withdrawn or renamed class says nothing about whether a booking made
+    // while it still existed was ever cancelled — never read as "not booked".
+    const gone = subscription({ className: 'Bodypump' });
+    expect(matchClassBookedStatus(scheduleFixture(), gone, '2026-08-21')).toBe('unknown');
   });
 });
 

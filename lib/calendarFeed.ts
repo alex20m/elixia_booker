@@ -9,6 +9,14 @@
  * what booking through the SATS/Elixia app itself does: a class lands on your
  * calendar once it is actually booked, not the moment you decide you want it.
  *
+ * A booking later cancelled through Elixia's own app or site — this app never
+ * calls its own unbook endpoint — is dropped the same way: `reviewBookedOccurrences`
+ * (lib/service.ts) is what notices and sets `cancelledAtMs`, and the entry
+ * simply stops appearing here on the feed's next refresh. There is nothing to
+ * mark or invalidate on the calendar side; the app the user subscribed
+ * through (Google, Apple, Outlook) removes an event that is no longer in the
+ * source on its own next poll, the same way it added it.
+ *
  * Every class gets a fixed duration, because neither `Subscription` nor
  * `BookingHistoryEntry` records how long one runs — Elixia's schedule page
  * exposes it (`ScheduleEvent.metadata.duration`, docs/api.md §4) but nothing
@@ -43,7 +51,8 @@ const DEFAULT_CLASS_DURATION_MIN = 60;
  */
 const PAST_GRACE_MS = 24 * 60 * 60 * 1000;
 
-function parseClassStart(classDate: string, startTime: string): WallClock {
+/** Also used by `reviewBookedOccurrences` (lib/service.ts) to place the same occurrence in time. */
+export function parseClassStart(classDate: string, startTime: string): WallClock {
   const [year, month, day] = classDate.split('-').map(Number) as [number, number, number];
   const [hour, minute] = startTime.split(':').map(Number) as [number, number];
   return { year, month, day, hour, minute };
@@ -97,7 +106,10 @@ export function buildCalendarFeed(
   nowMs: number,
 ): string {
   const events = history
-    .filter((entry) => !entry.dryRun && SUCCESSFUL_OUTCOMES.has(entry.outcome))
+    .filter(
+      (entry) =>
+        !entry.dryRun && SUCCESSFUL_OUTCOMES.has(entry.outcome) && entry.cancelledAtMs === undefined,
+    )
     .map((entry) => {
       const startWall = parseClassStart(entry.classDate, entry.startTime);
       const { epochMs: startEpochMs } = zonedWallClockToInstant(startWall, profile.timeZone);
@@ -135,11 +147,12 @@ export function buildCalendarFeed(
     );
     if (entry.center) lines.push(`LOCATION:${escapeIcsText(entry.center)}`);
     lines.push(
-      `DESCRIPTION:${escapeIcsText(
-        entry.outcome === 'waitlisted'
-          ? 'Booked via Elixia Booker — you are on the waiting list.'
-          : 'Booked via Elixia Booker.',
-      )}`,
+      // Deliberately the same words regardless of outcome. Whether a booking
+      // landed outright or on the waiting list can still change after this is
+      // written — Elixia moves people up a waiting list on its own — and a
+      // calendar event has no way to be revised once a client has synced it,
+      // so it must not assert anything that can go stale.
+      'DESCRIPTION:Booked via Elixia Booker.',
       'END:VEVENT',
     );
   }

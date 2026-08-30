@@ -137,4 +137,20 @@ export interface Repo {
 
   appendHistory(userId: string, entry: BookingHistoryEntry): Promise<void>;
   listHistory(userId: string, limit?: number): Promise<BookingHistoryEntry[]>;
+  /**
+   * Record that a booking no longer holds — see `BookingHistoryEntry.cancelledAtMs`.
+   *
+   * Matched by subscription and class date rather than a history row id: those
+   * two together already name one occurrence uniquely (the same pair
+   * `lib/calendarFeed.ts` builds its event UID from), and the caller who wants
+   * this — `reviewBookedOccurrences` — has never had a reason to look up a raw
+   * row id. A no-op (returns false) if the row is already marked, or does not
+   * exist, or is not one of the outcomes that could ever have held a place.
+   */
+  markHistoryCancelled(
+    userId: string,
+    subscriptionId: string,
+    classDate: string,
+    nowMs: number,
+  ): Promise<boolean>;
 }

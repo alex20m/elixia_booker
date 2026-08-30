@@ -673,6 +673,67 @@ describe('booking history', () => {
     expect((await repo.listHistory(ALICE))[0]?.center).toBeUndefined();
   });
 
+  it('marks a booking cancelled, round-tripping when it was', async () => {
+    const alices = await addClass(ALICE, 'Bodypump');
+    await repo.appendHistory(ALICE, attempt(Date.UTC(2026, 3, 1, 5, 0), alices.id));
+
+    const marked = await repo.markHistoryCancelled(
+      ALICE,
+      alices.id,
+      '2026-04-08',
+      Date.UTC(2026, 3, 2, 6, 0),
+    );
+
+    expect(marked).toBe(true);
+    expect((await repo.listHistory(ALICE))[0]?.cancelledAtMs).toBe(Date.UTC(2026, 3, 2, 6, 0));
+  });
+
+  it('leaves cancelledAtMs out until a booking is actually marked', async () => {
+    const alices = await addClass(ALICE, 'Bodypump');
+    await repo.appendHistory(ALICE, attempt(Date.UTC(2026, 3, 1, 5, 0), alices.id));
+
+    expect((await repo.listHistory(ALICE))[0]?.cancelledAtMs).toBeUndefined();
+  });
+
+  it('does not mark a booking twice', async () => {
+    const alices = await addClass(ALICE, 'Bodypump');
+    await repo.appendHistory(ALICE, attempt(Date.UTC(2026, 3, 1, 5, 0), alices.id));
+    await repo.markHistoryCancelled(ALICE, alices.id, '2026-04-08', Date.UTC(2026, 3, 2, 6, 0));
+
+    const again = await repo.markHistoryCancelled(
+      ALICE,
+      alices.id,
+      '2026-04-08',
+      Date.UTC(2026, 3, 3, 6, 0),
+    );
+
+    expect(again).toBe(false);
+    // The first timestamp stands — a second call finds nothing left to mark.
+    expect((await repo.listHistory(ALICE))[0]?.cancelledAtMs).toBe(Date.UTC(2026, 3, 2, 6, 0));
+  });
+
+  it('does not mark a row belonging to a different subscription or date', async () => {
+    const alices = await addClass(ALICE, 'Bodypump');
+    await repo.appendHistory(ALICE, attempt(Date.UTC(2026, 3, 1, 5, 0), alices.id));
+
+    expect(await repo.markHistoryCancelled(ALICE, alices.id, '2026-04-15', Date.UTC(2026, 3, 2, 6, 0))).toBe(
+      false,
+    );
+    expect(await repo.markHistoryCancelled(BOB, alices.id, '2026-04-08', Date.UTC(2026, 3, 2, 6, 0))).toBe(
+      false,
+    );
+    expect((await repo.listHistory(ALICE))[0]?.cancelledAtMs).toBeUndefined();
+  });
+
+  it('does not mark an outcome that could never have held a place', async () => {
+    const alices = await addClass(ALICE, 'Bodypump');
+    await repo.appendHistory(ALICE, attempt(Date.UTC(2026, 3, 1, 5, 0), alices.id, 'too-early'));
+
+    expect(
+      await repo.markHistoryCancelled(ALICE, alices.id, '2026-04-08', Date.UTC(2026, 3, 2, 6, 0)),
+    ).toBe(false);
+  });
+
   it('honours the limit', async () => {
     const alices = await addClass(ALICE, 'Bodypump');
     for (let day = 1; day <= 4; day++) {
