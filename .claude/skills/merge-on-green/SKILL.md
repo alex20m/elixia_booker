@@ -19,18 +19,28 @@ not actually vetted.
 Wait for everything to finish, then merge. The whole difficulty is that GitHub
 will happily tell you everything has finished when it has not yet started.
 
-> **Tried and reverted: running this as `context: fork` in the background.**
-> Forking the whole loop into an isolated subagent looks like the obvious fix
-> for the context this skill burns during a long wait — the fork's own polling
-> never touches the calling conversation. In testing it silently failed to
-> come back: the forked subagent started a background sleep, yielded, and was
-> never resumed — no error, no notification, just a PR that sat unmerged with
-> nothing watching it. Whether that's specific to one execution environment or
-> general is unconfirmed; until background-fork resumption is verified
-> end-to-end (a real multi-minute CI wait, observed to actually resume and
-> report back), keep this loop inline in the calling conversation as below. A
-> silent no-op on a step that ends with an irreversible merge is worse than
-> the context cost this would have saved.
+> **Tested twice and reverted: running this as `context: fork`.** Forking the
+> whole loop into an isolated subagent is the obvious fix for the context this
+> skill burns during a long wait — the fork's own polling never touches the
+> calling conversation. Tested both ways `context: fork` can run: with
+> `background: true` (the default — resume later, out of band) and with
+> `background: false` (block the calling turn until the fork finishes). Both
+> failed identically: the invocation returns almost immediately with an
+> in-progress-sounding message ("waiting for the first poll," "3-minute
+> background sleep in progress") instead of the loop's actual outcome, and
+> nothing resumes it afterward — no error, no later notification, no update to
+> the PR. Confirmed by checking back after real wall-clock CI time had passed:
+> zero polling activity, PR left unmerged with nothing watching it. Whatever
+> is happening internally, in this execution environment a forked skill's own
+> multi-turn continuation (yield on a background command, resume when it
+> exits) does not carry through the way it does for this skill running inline
+> in the top-level session, or for a real background subagent spawned via the
+> `Agent` tool — both of those are directly observed to work reliably in the
+> same environment. If you're tempted to try `context: fork` here again,
+> that's the gap to close first: get a `Agent`-tool-spawned background
+> subagent to survive a multi-minute wait and report back before trying it as
+> a skill fork again — don't just flip `background` and re-test, that's
+> already been done. Until then, keep this loop inline as below.
 
 ## The one trap
 
