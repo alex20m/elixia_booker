@@ -30,6 +30,8 @@ const view = (overrides: Partial<DashboardView['account']> = {}, telegramConnect
       telegramChatId: '',
       elixiaEmail: '',
       elixiaStatus: 'unlinked',
+      calendarSyncEnabled: false,
+      calendarFeedToken: '',
       ...overrides,
     },
     telegramConnect,
@@ -97,7 +99,11 @@ beforeEach(() => {
             url: 'https://t.me/elixia_booker_bot?start=abc',
             expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
           }
-        : { ok: true };
+        : url === '/api/calendar' && init?.method !== 'DELETE'
+          ? { enabled: true, token: 'cal-tok' }
+          : url === '/api/calendar'
+            ? { enabled: false }
+            : { ok: true };
     return new Response(JSON.stringify(payload), { status: 200 });
   }) as unknown as typeof fetch);
 
@@ -306,5 +312,47 @@ describe('Settings save button', () => {
 
     expect(requests.filter((r) => r.url === '/api/settings')).toHaveLength(1);
     expect(label('save-btn')).toBe('Saved');
+  });
+});
+
+describe('Settings calendar', () => {
+  it('offers to turn sync on when it is off', () => {
+    render(view());
+
+    expect(byId('calendar-enable')).not.toBeNull();
+    expect(byId('calendar-url')).toBeNull();
+  });
+
+  it('turns sync on and shows the subscribe link', async () => {
+    render(view());
+
+    await click('calendar-enable');
+
+    expect(requests).toContainEqual({ url: '/api/calendar', method: 'POST', body: {} });
+    expect(byId<HTMLInputElement>('calendar-url')!.value).toContain('cal-tok');
+  });
+
+  it('shows the existing link, and can turn sync back off', async () => {
+    render(view({ calendarSyncEnabled: true, calendarFeedToken: 'existing-tok' }));
+
+    expect(byId<HTMLInputElement>('calendar-url')!.value).toContain('existing-tok');
+
+    await click('calendar-disable');
+
+    expect(requests).toContainEqual({ url: '/api/calendar', method: 'DELETE', body: undefined });
+    expect(byId('calendar-enable')).not.toBeNull();
+  });
+
+  it('can mint a fresh link without losing sync', async () => {
+    render(view({ calendarSyncEnabled: true, calendarFeedToken: 'old-tok' }));
+
+    await click('calendar-regenerate');
+
+    expect(requests).toContainEqual({
+      url: '/api/calendar',
+      method: 'POST',
+      body: { regenerate: true },
+    });
+    expect(byId<HTMLInputElement>('calendar-url')!.value).toContain('cal-tok');
   });
 });

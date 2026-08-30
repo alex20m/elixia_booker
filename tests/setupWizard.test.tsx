@@ -24,6 +24,8 @@ const STATE = {
   suggestedEmail: 'me@example.com',
   telegramConnect: true,
   telegramChatId: '',
+  calendarSyncEnabled: false,
+  calendarFeedToken: '',
 };
 
 let container: HTMLDivElement;
@@ -90,6 +92,17 @@ function stubFetch(): void {
           });
         }
         return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      if (init?.method === 'POST' && target === '/api/calendar') {
+        const parsed = init.body ? (JSON.parse(String(init.body)) as { regenerate?: boolean }) : {};
+        posts.push({ url: target, body: parsed });
+        state = { ...state, calendarSyncEnabled: true, calendarFeedToken: 'cal-tok' };
+        return new Response(JSON.stringify({ enabled: true, token: 'cal-tok' }), { status: 200 });
+      }
+      if (init?.method === 'DELETE' && target === '/api/calendar') {
+        posts.push({ url: target, body: null });
+        state = { ...state, calendarSyncEnabled: false };
+        return new Response(JSON.stringify({ enabled: false }), { status: 200 });
       }
       return new Response(JSON.stringify(state), { status: 200 });
     }),
@@ -180,12 +193,18 @@ async function throughToGymAccount(): Promise<void> {
   await click('setup-next');
 }
 
-/** Answer every page that has to be answered, leaving the install offer. */
-async function throughToInstall(): Promise<void> {
+/** Answer every page that has to be answered, leaving the calendar sync offer. */
+async function throughToCalendar(): Promise<void> {
   await throughToGymAccount();
   await type('setup-elixia-email', 'me@elixia.example');
   await type('setup-elixia-password', 'hunter2');
   await click('setup-finish');
+}
+
+/** Answer every page that has to be answered, leaving the install offer. */
+async function throughToInstall(): Promise<void> {
+  await throughToCalendar();
+  await click('setup-calendar-next');
 }
 
 describe('the membership page', () => {
@@ -412,6 +431,37 @@ describe('finishing', () => {
 });
 
 /**
+ * The calendar sync offer: like the install page, it asks for nothing
+ * required and comes after the four answers that do are already saved.
+ */
+describe('the calendar sync page', () => {
+  it('can be walked past without turning sync on', async () => {
+    await throughToCalendar();
+
+    expect(maybe('calendar-enable')).not.toBeNull();
+
+    await click('setup-calendar-next');
+
+    expect(posts.map((p) => p.url)).toEqual(['/api/setup', '/api/elixia']);
+  });
+
+  it('turns sync on and shows the subscribe link', async () => {
+    await throughToCalendar();
+
+    await click('calendar-enable');
+
+    expect(posts).toContainEqual({ url: '/api/calendar', body: {} });
+    expect(container.textContent).toMatch(/calendar sync is on/i);
+  });
+
+  it('offers no way back into the answers already saved', async () => {
+    await throughToCalendar();
+
+    expect(maybe('setup-back')).toBeNull();
+  });
+});
+
+/**
  * The one page of the wizard that asks for nothing.
  *
  * It comes last and after everything has been saved, because it is the only
@@ -429,7 +479,7 @@ describe('the install page', () => {
     expect(posts.map((p) => p.url)).toEqual(['/api/setup', '/api/elixia']);
     // Saved, but not finished: the wizard is still showing, on its last page.
     expect(done).toBe(0);
-    expect(container.textContent).toMatch(/Step 5 of 5/);
+    expect(container.textContent).toMatch(/Step 6 of 6/);
     expect(maybe('setup-done')).not.toBeNull();
   });
 
@@ -466,14 +516,22 @@ describe('the install page', () => {
     stubBrowser({ standalone: true });
     await throughToGymAccount();
 
-    expect(container.textContent).toMatch(/Step 4 of 4/);
+    // No install step in the count: membership, timezone, notifications, gym
+    // account, calendar sync — five, not six.
+    expect(container.textContent).toMatch(/Step 4 of 5/);
 
     await type('setup-elixia-email', 'me@elixia.example');
     await type('setup-elixia-password', 'hunter2');
     await click('setup-finish');
 
-    expect(done).toBe(1);
+    // Landed on calendar sync, not finished yet — that page still has to be
+    // walked past, installed app or not.
+    expect(done).toBe(0);
     expect(maybe('setup-done')).toBeNull();
+
+    await click('setup-calendar-next');
+
+    expect(done).toBe(1);
   });
 
   it('offers no way back into answers it has already submitted', async () => {

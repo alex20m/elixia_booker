@@ -19,6 +19,7 @@ import {
   type BookingBackend,
 } from './elixia';
 import { MockElixiaClient } from './mock';
+import { buildCalendarFeed, newCalendarFeedToken, CALENDAR_TOKEN_PATTERN } from './calendarFeed';
 import { importEncryptionKey, decryptJson, encryptJson, DecryptionError } from './auth/crypto';
 import { DuplicateSubscriptionError } from './db/repo';
 import { releasesFor, releasesInRange } from './planner';
@@ -182,6 +183,10 @@ export interface SetupState {
   telegramConnect: boolean;
   /** The chat already connected, so the page can show that step as done. */
   telegramChatId: string;
+  /** Whether calendar sync is already on, so the step can show that as done. */
+  calendarSyncEnabled: boolean;
+  /** The feed token, so the step can show the subscribe URL without asking again. */
+  calendarFeedToken: string;
 }
 
 export function setupState(config: AppConfig, profile: Profile, sessionEmail?: string): SetupState {
@@ -190,6 +195,8 @@ export function setupState(config: AppConfig, profile: Profile, sessionEmail?: s
     suggestedEmail: profile.notifyEmail ?? sessionEmail ?? '',
     telegramConnect: telegramConnectConfigured(config),
     telegramChatId: profile.telegramChatId ?? '',
+    calendarSyncEnabled: profile.calendarSyncEnabled ?? false,
+    calendarFeedToken: profile.calendarFeedToken ?? '',
   };
 }
 
@@ -357,6 +364,68 @@ export async function disconnectTelegram(config: AppConfig, profile: Profile): P
   const updated: Profile = { ...profile, telegramChatId: undefined };
   await config.repo.upsertProfile(updated);
   return updated;
+}
+
+// --- calendar sync -----------------------------------------------------
+
+/**
+ * Turn the calendar feed on.
+ *
+ * Mints a token only where one is needed: an account enabling sync for the
+ * first time gets a fresh one, but re-enabling after a disable — or a second
+ * call that is not asking to rotate — gets the same URL back, so a calendar
+ * app already subscribed to it keeps working. `regenerate` is the deliberate
+ * exception, for the one legitimate reason to change it: the old link may
+ * have leaked.
+ */
+export async function enableCalendarSync(
+  config: AppConfig,
+  profile: Profile,
+  options: { regenerate?: boolean } = {},
+): Promise<Profile> {
+  const updated: Profile = {
+    ...profile,
+    calendarSyncEnabled: true,
+    calendarFeedToken:
+      options.regenerate || !profile.calendarFeedToken
+        ? newCalendarFeedToken()
+        : profile.calendarFeedToken,
+  };
+  await config.repo.upsertProfile(updated);
+  return updated;
+}
+
+/**
+ * Turn the feed off. The token is left in place — see `Profile.calendarFeedToken`
+ * — so turning sync back on later does not hand out a different URL.
+ */
+export async function disableCalendarSync(config: AppConfig, profile: Profile): Promise<Profile> {
+  const updated: Profile = { ...profile, calendarSyncEnabled: false };
+  await config.repo.upsertProfile(updated);
+  return updated;
+}
+
+/**
+ * The ICS document a feed token names, or null if it names nothing servable.
+ *
+ * Read by a public route with no session — the token in the URL is the only
+ * credential — so every reason this can fail (an unknown token, sync switched
+ * off, an account that never finished setup and so has no timezone to place a
+ * class in) collapses to the same null. Anything more specific would tell a
+ * caller probing the endpoint which of its guesses had come closest.
+ */
+export async function calendarFeedFor(
+  config: AppConfig,
+  token: string,
+  nowMs: number,
+): Promise<string | null> {
+  if (!CALENDAR_TOKEN_PATTERN.test(token)) return null;
+
+  const profile = await config.repo.getProfileByCalendarToken(token);
+  if (!profile || !profile.calendarSyncEnabled || !isConfigured(profile)) return null;
+
+  const history = await config.repo.listHistory(profile.id);
+  return buildCalendarFeed(profile, history, nowMs);
 }
 
 // --- linking the Elixia account --------------------------------------------
@@ -609,6 +678,9 @@ export interface DashboardView {
     telegramChatId: string;
     elixiaEmail: string;
     elixiaStatus: Profile['elixiaStatus'];
+    calendarSyncEnabled: boolean;
+    /** Empty until sync has been turned on at least once. */
+    calendarFeedToken: string;
   };
   /**
    * Whether this deployment can offer the one-tap connect flow. False falls
@@ -657,6 +729,8 @@ export async function buildDashboard(
       telegramChatId: profile.telegramChatId ?? '',
       elixiaEmail: profile.elixiaEmail ?? '',
       elixiaStatus: profile.elixiaStatus,
+      calendarSyncEnabled: profile.calendarSyncEnabled ?? false,
+      calendarFeedToken: profile.calendarFeedToken ?? '',
     },
     subscriptions: byWhenTheyHappen.map(({ s, next }) => ({
       ...s,
@@ -1600,6 +1674,7 @@ async function bookEntry(
         attempts: report.attempts,
         firstAttemptOffsetMs: report.firstAttemptOffsetMs,
         dryRun: report.dryRun,
+        center: subscription.center,
       });
 
       await announce(config, profile, logger, describeReport(report));

@@ -11,6 +11,7 @@ import { LoadingScreen, SkeletonCard } from './components/Loading';
 import { Shell } from './components/Shell';
 import { InstallOffer, useInstallability } from './components/InstallCard';
 import { TelegramConnect } from './components/TelegramConnect';
+import { CalendarSync } from './components/CalendarSync';
 
 /**
  * The configuration pages a new account goes through before it can use the app.
@@ -50,20 +51,22 @@ import { TelegramConnect } from './components/TelegramConnect';
  * linked is exactly what the dashboard's own "Link your Elixia account" card is
  * for.
  *
- * After those four comes a fifth page that asks for nothing: the offer to
- * install the app to a home screen. It is deliberately the only page that can
- * be walked past, and deliberately placed *after* the save rather than before
- * it — a page that can be skipped must not be able to take four pages of
- * answers with it. Setup is the one moment the offer is certain to be seen, and
- * an app opened from a home screen is the difference between a booker someone
- * remembers to check and a tab they lose. Someone already running the installed
- * app never sees the page at all.
+ * After those four come two pages that ask for nothing required: an offer to
+ * sync booked classes to a calendar app, and the offer to install the app to a
+ * home screen. Both are deliberately placed *after* the save rather than
+ * before it — a page that can be skipped must not be able to take four pages
+ * of answers with it — and both stay available afterwards from Settings for
+ * anyone who skips them here. Someone already running the installed app never
+ * sees the install page at all.
  */
 
 /** The pages that have to be answered. */
 const CONFIG_STEPS = ['Membership', 'Timezone', 'Notifications', 'Gym account'] as const;
 
-/** And the one that does not. */
+/** The one that offers calendar sync, and can be skipped. */
+const CALENDAR_STEP = 'Calendar sync';
+
+/** And the one that does not ask for anything at all. */
 const INSTALL_STEP = 'Install app';
 
 export default function Setup({ onDone }: { onDone: () => void }) {
@@ -119,16 +122,21 @@ export default function Setup({ onDone }: { onDone: () => void }) {
 
   const connected = Boolean(state?.telegramChatId || chatId);
 
+  const onCalendarStep = step === CONFIG_STEPS.length;
+  const onInstallStep = step === CONFIG_STEPS.length + 1;
+
   const installability = useInstallability();
-  const onInstallStep = step === CONFIG_STEPS.length;
   // Dropped for someone already running the installed app, where the offer
   // would be nonsense.
   const offersInstall = installability !== 'installed';
   // Kept in the page list once the wizard is standing on it, so a browser that
   // reports itself installed the moment the prompt is accepted cannot pull the
   // page out from under the visitor still reading it.
-  const steps: readonly string[] =
-    offersInstall || onInstallStep ? [...CONFIG_STEPS, INSTALL_STEP] : CONFIG_STEPS;
+  const steps: readonly string[] = [
+    ...CONFIG_STEPS,
+    CALENDAR_STEP,
+    ...(offersInstall || onInstallStep ? [INSTALL_STEP] : []),
+  ];
   const lastConfigStep = step === CONFIG_STEPS.length - 1;
 
   // What each page needs before it will let the visitor move on. The gym
@@ -167,10 +175,10 @@ export default function Setup({ onDone }: { onDone: () => void }) {
       method: 'POST',
       body: JSON.stringify({ email: elixiaEmail.trim(), password: elixiaPassword }),
     });
-    // Everything asked for is saved; the install page is all that is left, and
-    // it is only shown where there is something to install.
-    if (offersInstall) setStep(step + 1);
-    else onDone();
+    // Everything asked for is saved; what is left — calendar sync, the install
+    // offer — asks for nothing required, so the wizard always moves on rather
+    // than deciding here whether either applies.
+    setStep(step + 1);
   };
 
   // Drawn only once the server has answered. Two of these pages depend on what
@@ -360,6 +368,27 @@ export default function Setup({ onDone }: { onDone: () => void }) {
             </div>
           )}
 
+          {onCalendarStep && (
+            <div className="stack">
+              <CalendarSync
+                enabled={state?.calendarSyncEnabled ?? false}
+                token={state?.calendarFeedToken ?? ''}
+                onChange={(next) =>
+                  setState((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          calendarSyncEnabled: next.enabled,
+                          calendarFeedToken: next.token || prev.calendarFeedToken,
+                        }
+                      : prev,
+                  )
+                }
+                onError={setError}
+              />
+            </div>
+          )}
+
           {onInstallStep && (
             <div className="stack">
               <p className="card-sub">
@@ -388,10 +417,10 @@ export default function Setup({ onDone }: { onDone: () => void }) {
           )}
 
           <div className="cluster mt-m">
-            {/* No way back from the install page: what came before it has been
-                submitted already, and stepping back into it would offer to
-                submit it a second time. */}
-            {step > 0 && !onInstallStep && (
+            {/* No way back from the calendar or install pages: what came
+                before either has been submitted already, and stepping back
+                into it would offer to submit it a second time. */}
+            {step > 0 && !onCalendarStep && !onInstallStep && (
               <button className="btn-quiet" id="setup-back" onClick={() => setStep(step - 1)}>
                 Back
               </button>
@@ -408,6 +437,17 @@ export default function Setup({ onDone }: { onDone: () => void }) {
               >
                 Finish
               </button>
+            ) : onCalendarStep ? (
+              // Whatever was chosen above is already saved by `CalendarSync`
+              // itself — there is nothing of this page's own left to submit,
+              // so moving on is a plain step change, never a request.
+              <button
+                id="setup-calendar-next"
+                className="btn-grow"
+                onClick={() => (offersInstall ? setStep(step + 1) : onDone())}
+              >
+                {offersInstall ? 'Next' : 'Finish setup'}
+              </button>
             ) : lastConfigStep ? (
               <ActionButton
                 id="setup-finish"
@@ -417,7 +457,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
                 onError={(err) => setError(err.message)}
                 onClick={save}
               >
-                {offersInstall ? 'Save and continue' : 'Finish setup'}
+                Save and continue
               </ActionButton>
             ) : (
               <button

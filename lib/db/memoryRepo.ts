@@ -43,6 +43,13 @@ export function createMemoryRepo(): MemoryRepo {
       return profiles.get(userId) ?? null;
     },
 
+    async getProfileByCalendarToken(token) {
+      for (const profile of profiles.values()) {
+        if (profile.calendarFeedToken === token) return profile;
+      }
+      return null;
+    },
+
     async upsertProfile(profile) {
       profiles.set(profile.id, { ...profile });
     },
