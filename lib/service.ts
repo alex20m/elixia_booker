@@ -740,6 +740,19 @@ export async function addSubscription(
     throw err;
   }
 
+  // The listing already said who's running it — `match` came from the same
+  // read used to validate the class above, so this costs nothing extra.
+  // Best-effort and never fatal to the add: `refreshInstructors` runs
+  // tonight regardless and will fill this in if it's missed here.
+  if (match.instructorName) {
+    try {
+      await config.repo.setSubscriptionInstructor(profile.id, subscription.id, match.instructorName);
+      subscription = { ...subscription, instructorName: match.instructorName };
+    } catch {
+      // Tonight's refresh will catch it either way.
+    }
+  }
+
   await reindexProfile(config, profile, nowMs);
 
   // Best-effort: check the new class's soonest occurrence right away, so a
