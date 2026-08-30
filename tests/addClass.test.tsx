@@ -25,6 +25,12 @@ import { titleCase } from '@/lib/dashboardState';
  * 226 — so these tests pin both halves of that: what is saved as it is
  * chosen, and what is offered back on the next visit. The class is never
  * among it.
+ *
+ * All three fields are the same drawn-list-behind-a-text-box control, so the
+ * generic `box*` helpers below drive whichever field's id they are given —
+ * the centre-specific names are just readability wrappers over them, and the
+ * class/slot describe blocks reuse the same helpers to prove the class and
+ * day/time fields behave identically, typing included.
  */
 
 const CENTERS = [
@@ -122,81 +128,6 @@ async function render(): Promise<void> {
   });
 }
 
-/**
- * The class and day/time pickers, which are drawn the same way as the centre:
- * a button showing the chosen row (or its placeholder) and a listbox the form
- * opens itself, rather than a native `<select>`.
- */
-function listboxButton(id: string): HTMLButtonElement {
-  const element = container.querySelector<HTMLButtonElement>(`#${id}`);
-  if (!element) throw new Error(`no #${id} in the form`);
-  return element;
-}
-
-/** What the button shows: the chosen row's label, or its placeholder. */
-function listboxText(id: string): string {
-  return listboxButton(id).textContent ?? '';
-}
-
-const listboxDisabled = (id: string): boolean => listboxButton(id).disabled;
-
-const listboxOpen = (id: string): boolean => container.querySelector(`#${id}-list`) !== null;
-
-/** Whether a row is chosen, as opposed to the button showing its placeholder. */
-const listboxHasSelection = (id: string): boolean =>
-  listboxButton(id).querySelector('.combo-placeholder') === null;
-
-/** The rows the listbox is currently showing, which the form draws itself. */
-function listboxOptions(id: string): string[] {
-  return [...container.querySelectorAll<HTMLElement>(`#${id}-list [role="option"]`)].map(
-    (option) => option.textContent ?? '',
-  );
-}
-
-async function openListbox(id: string): Promise<void> {
-  await act(async () => {
-    listboxButton(id).click();
-  });
-}
-
-/** Opens the list only if it is not already open — opening twice would close it. */
-async function ensureListboxOpen(id: string): Promise<void> {
-  if (!listboxOpen(id)) await openListbox(id);
-}
-
-async function pressListbox(id: string, key: string): Promise<void> {
-  await act(async () => {
-    listboxButton(id).dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
-  });
-}
-
-/** The row the keyboard would commit, which is what the button points at. */
-function activeListboxOption(id: string): string | null {
-  const activeId = listboxButton(id).getAttribute('aria-activedescendant');
-  return activeId ? (container.querySelector(`#${activeId}`)?.textContent ?? null) : null;
-}
-
-async function clickListboxOption(id: string, label: string): Promise<void> {
-  await openListbox(id);
-  const option = [...container.querySelectorAll<HTMLElement>(`#${id}-list [role="option"]`)].find(
-    (row) => row.textContent === label,
-  );
-  if (!option) throw new Error(`no "${label}" on the #${id} list`);
-  await act(async () => {
-    option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-  });
-}
-
-const chooseClass = (className: string): Promise<void> => clickListboxOption('s-class', className);
-
-/** The label a slot's `weekday|HH:MM` key renders as. */
-const slotLabel = (key: string): string => {
-  const [weekday = '', time = ''] = key.split('|');
-  return `${titleCase(weekday)} ${time}`;
-};
-
-const chooseSlot = (slot: string): Promise<void> => clickListboxOption('s-slot', slotLabel(slot));
-
 // A plain `input.value = text` goes through React's own tracked setter, which
 // updates its recorded value at the same time — so the dispatched event sees
 // no difference and onChange never fires. Setting through the native
@@ -206,73 +137,104 @@ const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
   'value',
 )!.set!;
 
-function centerBox(): HTMLInputElement {
-  const element = container.querySelector<HTMLInputElement>('#s-center');
-  if (!element) throw new Error('no #s-center in the form');
+/**
+ * Generic helpers for the one dropdown control every field in the form uses:
+ * a text box that is also the picker, with a list the app draws itself.
+ */
+function box(id: string): HTMLInputElement {
+  const element = container.querySelector<HTMLInputElement>(`#${id}`);
+  if (!element) throw new Error(`no #${id} in the form`);
   return element;
 }
 
-/** The rows the listbox is currently showing, which the form draws itself. */
-function centerList(): string[] {
-  return [...container.querySelectorAll<HTMLElement>('#s-center-list [role="option"]')].map(
+/** The rows the list is currently showing, which the form draws itself. */
+function boxList(id: string): string[] {
+  return [...container.querySelectorAll<HTMLElement>(`#${id}-list [role="option"]`)].map(
     (option) => option.textContent ?? '',
   );
 }
 
-const centerListOpen = (): boolean => container.querySelector('#s-center-list') !== null;
+const boxOpen = (id: string): boolean => container.querySelector(`#${id}-list`) !== null;
 
 /** Focusing the box is what opens it, the way a dropdown opens when clicked. */
-async function openCenter(): Promise<void> {
+async function openBox(id: string): Promise<void> {
   await act(async () => {
-    centerBox().dispatchEvent(new Event('focusin', { bubbles: true }));
+    box(id).dispatchEvent(new Event('focusin', { bubbles: true }));
   });
 }
 
-async function typeCenter(text: string): Promise<void> {
+async function typeBox(id: string, text: string): Promise<void> {
   await act(async () => {
-    const box = centerBox();
-    nativeInputValueSetter.call(box, text);
-    box.dispatchEvent(new Event('input', { bubbles: true }));
+    const el = box(id);
+    nativeInputValueSetter.call(el, text);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
   });
 }
 
 /** Picking with the pointer, which must beat the blur that would revert it. */
-async function clickCenterOption(name: string): Promise<void> {
-  const option = [...container.querySelectorAll<HTMLElement>('#s-center-list [role="option"]')].find(
-    (row) => row.textContent === name,
+async function clickBoxOption(id: string, label: string): Promise<void> {
+  const option = [...container.querySelectorAll<HTMLElement>(`#${id}-list [role="option"]`)].find(
+    (row) => row.textContent === label,
   );
-  if (!option) throw new Error(`no "${name}" on the centre list`);
+  if (!option) throw new Error(`no "${label}" on the #${id} list`);
   await act(async () => {
     option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
   });
 }
 
-async function pressCenter(key: string): Promise<void> {
+/** Opens the box, then picks a row off its list — the one-tap path a dropdown is for. */
+async function pickBoxOption(id: string, label: string): Promise<void> {
+  await openBox(id);
+  await clickBoxOption(id, label);
+}
+
+async function pressBox(id: string, key: string): Promise<void> {
   await act(async () => {
-    centerBox().dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+    box(id).dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
   });
 }
 
 /** React listens for focusout, not the blur that does not bubble. */
-async function leaveCenter(): Promise<void> {
+async function leaveBox(id: string): Promise<void> {
   await act(async () => {
-    centerBox().dispatchEvent(new Event('focusout', { bubbles: true }));
+    box(id).dispatchEvent(new Event('focusout', { bubbles: true }));
   });
 }
 
 /** The row the keyboard would commit, which is what the box points at. */
-function activeCenterOption(): string | null {
-  const id = centerBox().getAttribute('aria-activedescendant');
-  return id ? (container.querySelector(`#${id}`)?.textContent ?? null) : null;
+function activeBoxOption(id: string): string | null {
+  const activeId = box(id).getAttribute('aria-activedescendant');
+  return activeId ? (container.querySelector(`#${activeId}`)?.textContent ?? null) : null;
 }
+
+// Centre-specific names, kept for readability at call sites that are about
+// the centre specifically.
+const centerBox = (): HTMLInputElement => box('s-center');
+const centerList = (): string[] => boxList('s-center');
+const centerListOpen = (): boolean => boxOpen('s-center');
+const openCenter = (): Promise<void> => openBox('s-center');
+const typeCenter = (text: string): Promise<void> => typeBox('s-center', text);
+const clickCenterOption = (name: string): Promise<void> => clickBoxOption('s-center', name);
+const pressCenter = (key: string): Promise<void> => pressBox('s-center', key);
+const leaveCenter = (): Promise<void> => leaveBox('s-center');
+const activeCenterOption = (): string | null => activeBoxOption('s-center');
 
 // Named by id because that is what the form works in, chosen off the list
 // because that is what a person actually does with a dropdown.
-const chooseCenter = async (id: string): Promise<void> => {
+const chooseCenter = (id: string): Promise<void> => {
   const name = CENTERS.find((option) => option.id === id)?.name ?? id;
-  await openCenter();
-  await clickCenterOption(name);
+  return pickBoxOption('s-center', name);
 };
+
+const chooseClass = (className: string): Promise<void> => pickBoxOption('s-class', className);
+
+/** The label a slot's `weekday|HH:MM` key renders as. */
+const slotLabel = (key: string): string => {
+  const [weekday = '', time = ''] = key.split('|');
+  return `${titleCase(weekday)} ${time}`;
+};
+
+const chooseSlot = (slot: string): Promise<void> => pickBoxOption('s-slot', slotLabel(slot));
 
 async function clickAdd(): Promise<void> {
   await act(async () => {
@@ -406,9 +368,9 @@ describe('finding a centre', () => {
     await render();
     await openCenter();
     await typeCenter('Tapiola');
-    await ensureListboxOpen('s-class');
+    await openBox('s-class');
 
-    expect(listboxOptions('s-class').join('|')).toMatch(/Bodypump/);
+    expect(boxList('s-class').join('|')).toMatch(/Bodypump/);
     expect(saved).toEqual([{ center: '740' }]);
   });
 
@@ -417,9 +379,9 @@ describe('finding a centre', () => {
     // typed at speed is the same club as the "Sello" on the list.
     await render();
     await typeCenter('  kAMPPI ');
-    await ensureListboxOpen('s-class');
+    await openBox('s-class');
 
-    expect(listboxOptions('s-class').join('|')).toMatch(/Bodypump/);
+    expect(boxList('s-class').join('|')).toMatch(/Bodypump/);
     expect(saved).toEqual([{ center: '742' }]);
   });
 
@@ -429,7 +391,8 @@ describe('finding a centre', () => {
     await render();
     await typeCenter('Tap');
 
-    expect(listboxText('s-class')).toBe('Choose a centre first');
+    expect(box('s-class').value).toBe('');
+    expect(box('s-class').placeholder).toBe('Choose a centre first');
     expect(saved).toEqual([]);
     expect(addDisabled()).toBe(true);
   });
@@ -462,15 +425,13 @@ describe('finding a centre', () => {
     // second gym passes through text that matches nothing, and emptying the
     // class list there throws away a choice already made for a search that may
     // end in giving up.
-    await ensureListboxOpen('s-class');
-    expect(listboxOptions('s-class').join('|')).toMatch(/Bodypump/);
-    expect(listboxText('s-class')).toBe('Bodypump');
+    expect(box('s-class').value).toBe('Bodypump');
 
     await leaveCenter();
 
     expect(centerBox().value).toBe('Tapiola');
-    await ensureListboxOpen('s-class');
-    expect(listboxOptions('s-class').join('|')).toMatch(/Bodypump/);
+    await openBox('s-class');
+    expect(boxList('s-class').join('|')).toMatch(/Bodypump/);
   });
 
   it('empties the box when it is left holding a centre that was never chosen', async () => {
@@ -479,7 +440,7 @@ describe('finding a centre', () => {
     await leaveCenter();
 
     expect(centerBox().value).toBe('');
-    expect(listboxText('s-class')).toBe('Choose a centre first');
+    expect(box('s-class').placeholder).toBe('Choose a centre first');
   });
 
   it('clearing the box unpicks the centre and the classes with it', async () => {
@@ -488,8 +449,8 @@ describe('finding a centre', () => {
     await chooseClass('Bodypump');
     await typeCenter('');
 
-    expect(listboxText('s-class')).toBe('Choose a centre first');
-    expect(listboxDisabled('s-class')).toBe(true);
+    expect(box('s-class').placeholder).toBe('Choose a centre first');
+    expect(box('s-class').disabled).toBe(true);
     expect(addDisabled()).toBe(true);
   });
 
@@ -512,22 +473,20 @@ describe('choosing what to train', () => {
     // break up.
     await render();
     await chooseCenter('740');
-    await ensureListboxOpen('s-class');
+    await openBox('s-class');
 
-    expect(listboxOptions('s-class').filter((label) => label === 'Bodypump')).toHaveLength(1);
-    expect(listboxOptions('s-class').filter((label) => label === 'Yoga')).toHaveLength(1);
-    // One row per distinct class — there is no placeholder row any more, since
-    // the placeholder lives on the closed button instead.
-    expect(listboxOptions('s-class')).toHaveLength(2);
+    expect(boxList('s-class').filter((label) => label === 'Bodypump')).toHaveLength(1);
+    expect(boxList('s-class').filter((label) => label === 'Yoga')).toHaveLength(1);
+    expect(boxList('s-class')).toHaveLength(2);
   });
 
   it('keeps days and times out of the class step', async () => {
     await render();
     await chooseCenter('740');
-    await ensureListboxOpen('s-class');
+    await openBox('s-class');
 
-    expect(listboxOptions('s-class').join('|')).not.toMatch(/\d\d:\d\d/);
-    expect(listboxOptions('s-class').join('|')).not.toMatch(/monday/i);
+    expect(boxList('s-class').join('|')).not.toMatch(/\d\d:\d\d/);
+    expect(boxList('s-class').join('|')).not.toMatch(/monday/i);
   });
 
   it('says a centre publishes nothing rather than showing an empty picker', async () => {
@@ -535,8 +494,8 @@ describe('choosing what to train', () => {
     await chooseCenter('741');
 
     // An empty dropdown that still opens reads as a page that failed to load.
-    expect(listboxDisabled('s-class')).toBe(true);
-    expect(container.textContent).toMatch(/no classes/i);
+    expect(box('s-class').disabled).toBe(true);
+    expect(box('s-class').placeholder).toMatch(/no classes/i);
     expect(posts).toEqual([]);
   });
 
@@ -552,35 +511,123 @@ describe('choosing what to train', () => {
     await chooseClass('Bodypump');
     await chooseCenter('741');
 
-    expect(listboxText('s-class')).not.toMatch(/Bodypump/);
-    expect(listboxText('s-class')).toMatch(/Loading/);
-    expect(listboxDisabled('s-slot')).toBe(true);
+    expect(box('s-class').value).toBe('');
+    expect(box('s-class').placeholder).toMatch(/Loading/);
+    expect(box('s-slot').disabled).toBe(true);
     expect(addDisabled()).toBe(true);
   });
 });
 
-describe('the class and slot pickers draw their own list, like the centre', () => {
+describe('the class and slot pickers are the same dropdown as the centre', () => {
   it('shows every class the moment the box is opened', async () => {
     await render();
     await chooseCenter('740');
-    await openListbox('s-class');
+    await openBox('s-class');
 
-    expect(listboxOptions('s-class')).toEqual(['Bodypump', 'Yoga']);
+    expect(boxList('s-class')).toEqual(['Bodypump', 'Yoga']);
+  });
+
+  it('matches a typed class name anywhere in the name, not only at the start', async () => {
+    await render();
+    await chooseCenter('740');
+    await openBox('s-class');
+    await typeBox('s-class', 'og');
+
+    expect(boxList('s-class')).toEqual(['Yoga']);
+  });
+
+  it('picks the class whose name is typed in full', async () => {
+    await render();
+    await chooseCenter('740');
+    await typeBox('s-class', 'Yoga');
+
+    expect(box('s-class').value).toBe('Yoga');
+    // Choosing the class is what unlocks its own slots.
+    await openBox('s-slot');
+    expect(boxList('s-slot')).toEqual(['Monday 18:00', 'Wednesday 17:00']);
+  });
+
+  it('picks it regardless of case and stray spacing', async () => {
+    await render();
+    await chooseCenter('740');
+    await typeBox('s-class', '  yOGA ');
+
+    expect(box('s-class').value).toBe('Yoga');
+  });
+
+  it('picks nothing from a class name that is still half typed', async () => {
+    await render();
+    await chooseCenter('740');
+    await typeBox('s-class', 'Yog');
+
+    expect(box('s-class').value).toBe('Yog');
+    expect(box('s-slot').disabled).toBe(true);
+    expect(addDisabled()).toBe(true);
+  });
+
+  it('says so when nothing on the class list matches what was typed', async () => {
+    await render();
+    await chooseCenter('740');
+    await typeBox('s-class', 'nowhere');
+
+    expect(container.textContent).toMatch(/no classes match/i);
+  });
+
+  it('restores the chosen class when its box is left holding something else', async () => {
+    await render();
+    await chooseCenter('740');
+    await chooseClass('Yoga');
+    await typeBox('s-class', 'nonsense');
+    await leaveBox('s-class');
+
+    expect(box('s-class').value).toBe('Yoga');
   });
 
   it('picks a class with the keyboard alone', async () => {
     await render();
     await chooseCenter('740');
-    await openListbox('s-class');
-    await pressListbox('s-class', 'ArrowDown');
-    await pressListbox('s-class', 'ArrowDown');
+    await openBox('s-class');
+    await pressBox('s-class', 'ArrowDown');
+    await pressBox('s-class', 'ArrowDown');
 
-    expect(activeListboxOption('s-class')).toBe('Yoga');
+    expect(activeBoxOption('s-class')).toBe('Yoga');
 
-    await pressListbox('s-class', 'Enter');
+    await pressBox('s-class', 'Enter');
 
-    expect(listboxOpen('s-class')).toBe(false);
-    expect(listboxText('s-class')).toBe('Yoga');
+    expect(boxOpen('s-class')).toBe(false);
+    expect(box('s-class').value).toBe('Yoga');
+  });
+
+  it('closes the class list on Escape without changing what is picked', async () => {
+    await render();
+    await chooseCenter('740');
+    await chooseClass('Yoga');
+    await openBox('s-class');
+    await typeBox('s-class', 'Bo');
+    await pressBox('s-class', 'Escape');
+
+    expect(boxOpen('s-class')).toBe(false);
+    expect(box('s-class').value).toBe('Yoga');
+  });
+
+  it('lets you type a day and time to filter the slot list', async () => {
+    await render();
+    await chooseCenter('740');
+    await chooseClass('Yoga');
+    await openBox('s-slot');
+    await typeBox('s-slot', 'wed');
+
+    expect(boxList('s-slot')).toEqual(['Wednesday 17:00']);
+  });
+
+  it('picks the slot whose day and time is typed in full', async () => {
+    await render();
+    await chooseCenter('740');
+    await chooseClass('Yoga');
+    await typeBox('s-slot', 'Monday 18:00');
+
+    expect(box('s-slot').value).toBe('Monday 18:00');
+    expect(addDisabled()).toBe(false);
   });
 
   it('leaves the picked slot alone when its list is closed with Escape', async () => {
@@ -588,25 +635,21 @@ describe('the class and slot pickers draw their own list, like the centre', () =
     await chooseCenter('740');
     await chooseClass('Yoga');
     await chooseSlot('monday|18:00');
-    await openListbox('s-slot');
-    await pressListbox('s-slot', 'Escape');
+    await openBox('s-slot');
+    await pressBox('s-slot', 'Escape');
 
-    expect(listboxOpen('s-slot')).toBe(false);
-    expect(listboxText('s-slot')).toBe('Monday 18:00');
+    expect(boxOpen('s-slot')).toBe(false);
+    expect(box('s-slot').value).toBe('Monday 18:00');
   });
 
-  it('closes without picking anything when focus leaves the button', async () => {
+  it('closes without picking anything when the box is left empty', async () => {
     await render();
     await chooseCenter('740');
-    await openListbox('s-class');
+    await openBox('s-class');
+    await leaveBox('s-class');
 
-    // React listens for focusout, not the blur that does not bubble.
-    await act(async () => {
-      listboxButton('s-class').dispatchEvent(new Event('focusout', { bubbles: true }));
-    });
-
-    expect(listboxOpen('s-class')).toBe(false);
-    expect(listboxHasSelection('s-class')).toBe(false);
+    expect(boxOpen('s-class')).toBe(false);
+    expect(box('s-class').value).toBe('');
   });
 });
 
@@ -615,17 +658,17 @@ describe('choosing when', () => {
     await render();
     await chooseCenter('740');
 
-    expect(listboxDisabled('s-slot')).toBe(true);
-    expect(listboxText('s-slot')).toMatch(/class/i);
+    expect(box('s-slot').disabled).toBe(true);
+    expect(box('s-slot').placeholder).toMatch(/class/i);
   });
 
   it('offers only the days and times the chosen class actually runs', async () => {
     await render();
     await chooseCenter('740');
     await chooseClass('Yoga');
-    await ensureListboxOpen('s-slot');
+    await openBox('s-slot');
 
-    expect(listboxOptions('s-slot')).toEqual(['Monday 18:00', 'Wednesday 17:00']);
+    expect(boxList('s-slot')).toEqual(['Monday 18:00', 'Wednesday 17:00']);
   });
 
   it('submits the weekday and time of the slot that was picked', async () => {
@@ -669,7 +712,7 @@ describe('choosing when', () => {
     await chooseSlot('wednesday|17:00');
     await chooseClass('Bodypump');
 
-    expect(listboxHasSelection('s-slot')).toBe(false);
+    expect(box('s-slot').value).toBe('');
     expect(addDisabled()).toBe(true);
   });
 
@@ -699,8 +742,8 @@ describe('remembering where you train', () => {
 
     expect(centerBox().value).toBe('Tapiola');
     // The saved centre is only worth anything if it saves the fetch too.
-    await ensureListboxOpen('s-class');
-    expect(listboxOptions('s-class').join('|')).toMatch(/Bodypump/);
+    await openBox('s-class');
+    expect(boxList('s-class').join('|')).toMatch(/Bodypump/);
   });
 
   it('never remembers the class, which is the one thing being decided', async () => {
@@ -714,8 +757,8 @@ describe('remembering where you train', () => {
     // the next one — a prefilled class is a subscription nobody meant to
     // create.
     expect(saved.every((entry) => !JSON.stringify(entry).includes('Bodypump'))).toBe(true);
-    expect(listboxHasSelection('s-class')).toBe(false);
-    expect(listboxHasSelection('s-slot')).toBe(false);
+    expect(box('s-class').value).toBe('');
+    expect(box('s-slot').value).toBe('');
   });
 
   it('opens on an empty form when the remembered centre has since closed', async () => {
@@ -729,7 +772,7 @@ describe('remembering where you train', () => {
 
     expect(centerBox().value).toBe('');
     expect(container.textContent).not.toMatch(/999/);
-    expect(listboxText('s-class')).toBe('Choose a centre first');
+    expect(box('s-class').placeholder).toBe('Choose a centre first');
     expect(addDisabled()).toBe(true);
   });
 
