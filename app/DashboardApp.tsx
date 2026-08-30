@@ -5,9 +5,11 @@ import Link from 'next/link';
 import { authClient } from '@/lib/auth/client';
 import {
   apiRequest as api,
+  classStatus,
   dashboardScreen,
   describeUnavailable,
   describeUnlisted,
+  formatClassDate,
   loadDashboard,
   tabFromSearch,
   titleCase,
@@ -309,7 +311,7 @@ function ClassesTab({
     <>
       <section className="card">
         <div className="card-head">
-          <h2 className="card-title">Your classes</h2>
+          <h2 className="card-title">Upcoming bookings</h2>
           <span className="pill pill-neutral">{view.subscriptions.length}</span>
         </div>
         <ClassList view={view} refresh={refresh} />
@@ -366,6 +368,11 @@ function ClassList({ view, refresh }: { view: DashboardView; refresh: () => Prom
         // withdrawn altogether is the more serious fact, and showing both
         // would say the same thing about the same date twice.
         const unavailable = unlisted ? null : describeUnavailable(s.nextClassDate, s.unavailableClassDate);
+        const status = classStatus({
+          enabled: s.enabled,
+          notFound: Boolean(unlisted) || Boolean(unavailable),
+          nextReleaseAt: s.nextReleaseAt,
+        });
 
         return (
           <div
@@ -373,18 +380,21 @@ function ClassList({ view, refresh }: { view: DashboardView; refresh: () => Prom
             key={s.id}
           >
             <div className="row-main">
-              <div className="row-title">{s.className}</div>
-              <div className="row-meta">
-                {s.center} · {titleCase(s.weekday)} {s.startTime}
+              {s.nextClassDate && <div className="class-day">{formatClassDate(s.nextClassDate)}</div>}
+              <div className="class-body-row">
+                <div className={`class-bar${status.emphasize ? '' : ' is-muted'}`} />
+                <div className="class-time">{s.startTime}</div>
+                <div className="class-details">
+                  <div className="class-name">{s.className}</div>
+                  {s.instructorName && <div className="class-instructor">with {s.instructorName}</div>}
+                  <div className="class-location">
+                    {s.center} · {titleCase(s.weekday)}
+                  </div>
+                  <div className={status.emphasize ? 'class-status is-open' : 'class-status'}>
+                    {status.text}
+                  </div>
+                </div>
               </div>
-              <div className="row-meta">
-                {s.enabled
-                  ? s.nextReleaseAt
-                    ? `Opens ${new Date(s.nextReleaseAt).toLocaleString()}`
-                    : 'No upcoming release'
-                  : 'Paused'}
-              </div>
-              {s.instructorName && <div className="row-meta">with {s.instructorName}</div>}
               {unlisted && (
                 <div className="banner banner-warn mt-xs">
                   <span>{unlisted}</span>
