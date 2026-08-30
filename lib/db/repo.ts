@@ -73,6 +73,12 @@ export interface Repo {
   setSubscriptionEnabled(userId: string, id: string, enabled: boolean): Promise<boolean>;
   /** Records when a class went missing from the schedule; null once it is back. */
   setSubscriptionUnlisted(userId: string, id: string, atMs: number | null): Promise<boolean>;
+  /**
+   * Records who the schedule currently says is running a class; null to clear
+   * a name that no longer applies. Written by the nightly instructor refresh,
+   * never by booking or listing-check logic.
+   */
+  setSubscriptionInstructor(userId: string, id: string, name: string | null): Promise<boolean>;
 
   /** Replace a user's scheduled releases with a freshly computed set. */
   replaceDueEntries(userId: string, entries: DueEntry[]): Promise<void>;

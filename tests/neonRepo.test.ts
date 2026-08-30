@@ -324,12 +324,33 @@ describe('subscriptions', () => {
     expect((await repo.listSubscriptions(BOB))[0]?.unlistedSinceMs).toBeUndefined();
   });
 
+  it('round-trips who is running the class, and clears it when the name is null', async () => {
+    const subscription = await addClass(ALICE, 'Bodypump');
+    expect((await repo.listSubscriptions(ALICE))[0]?.instructorName).toBeUndefined();
+
+    expect(await repo.setSubscriptionInstructor(ALICE, subscription.id, 'Maija Meikäläinen')).toBe(
+      true,
+    );
+    expect((await repo.listSubscriptions(ALICE))[0]?.instructorName).toBe('Maija Meikäläinen');
+
+    expect(await repo.setSubscriptionInstructor(ALICE, subscription.id, null)).toBe(true);
+    expect((await repo.listSubscriptions(ALICE))[0]?.instructorName).toBeUndefined();
+  });
+
+  it('refuses to set an instructor on a class belonging to someone else', async () => {
+    const bobs = await addClass(BOB, 'Bodypump');
+
+    expect(await repo.setSubscriptionInstructor(ALICE, bobs.id, 'Someone Else')).toBe(false);
+    expect((await repo.listSubscriptions(BOB))[0]?.instructorName).toBeUndefined();
+  });
+
   it('reports not-found rather than failing when the id is not a uuid at all', async () => {
     // Reachable from the API as /api/subscriptions/<anything>; a raw Postgres
     // cast error here would be a 500 where the user deserves a 404.
     expect(await repo.deleteSubscription(ALICE, 'not-a-uuid')).toBe(false);
     expect(await repo.setSubscriptionEnabled(ALICE, 'not-a-uuid', false)).toBe(false);
     expect(await repo.setSubscriptionUnlisted(ALICE, 'not-a-uuid', Date.now())).toBe(false);
+    expect(await repo.setSubscriptionInstructor(ALICE, 'not-a-uuid', 'Someone')).toBe(false);
   });
 
   it('drops the scheduled releases of a deleted class', async () => {

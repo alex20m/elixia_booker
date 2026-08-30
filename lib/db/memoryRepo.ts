@@ -144,6 +144,14 @@ export function createMemoryRepo(): MemoryRepo {
       return true;
     },
 
+    async setSubscriptionInstructor(userId, id, name) {
+      const existing = subscriptions.get(id);
+      if (!existing || existing.userId !== userId) return false;
+      const { instructorName: _dropped, ...rest } = existing;
+      subscriptions.set(id, name === null ? rest : { ...rest, instructorName: name });
+      return true;
+    },
+
     async replaceDueEntries(userId, entries) {
       for (let i = dueEntries.length - 1; i >= 0; i--) {
         if (dueEntries[i]!.userId === userId) dueEntries.splice(i, 1);
