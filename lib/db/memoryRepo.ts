@@ -144,6 +144,14 @@ export function createMemoryRepo(): MemoryRepo {
       return true;
     },
 
+    async setSubscriptionUnavailableDate(userId, id, classDate) {
+      const existing = subscriptions.get(id);
+      if (!existing || existing.userId !== userId) return false;
+      const { unavailableClassDate: _dropped, ...rest } = existing;
+      subscriptions.set(id, classDate === null ? rest : { ...rest, unavailableClassDate: classDate });
+      return true;
+    },
+
     async setSubscriptionInstructor(userId, id, name) {
       const existing = subscriptions.get(id);
       if (!existing || existing.userId !== userId) return false;

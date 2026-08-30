@@ -10,6 +10,7 @@ import {
   findClassId,
   findClubIdByName,
   listClubOptions,
+  matchClassAvailability,
   parseInstructorName,
   performElixiaLogin,
   ElixiaCredentialsRejected,
@@ -457,6 +458,42 @@ describe('findClassId', () => {
   it('reports a class name that is listed on no matching slot that day', () => {
     const gone = subscription({ className: 'Bodypump' });
     expect(() => findClassId(scheduleFixture(), gone, '2026-08-21')).toThrow(ClassNotListedError);
+  });
+});
+
+describe('matchClassAvailability', () => {
+  it('is available when the date, name and start time all match', () => {
+    expect(matchClassAvailability(scheduleFixture(), subscription(), '2026-08-21')).toBe(
+      'available',
+    );
+  });
+
+  it('is not-published for a date beyond Elixia\'s published schedule', () => {
+    // Same date findClassId reports as ClassNotListedError with "beyond the
+    // published schedule" — this is the non-throwing sibling of that case.
+    expect(matchClassAvailability(scheduleFixture(), subscription(), '2026-09-05')).toBe(
+      'not-published',
+    );
+  });
+
+  it('is not-published for a date absent from the schedule entirely', () => {
+    expect(matchClassAvailability(scheduleFixture(), subscription(), '2027-01-01')).toBe(
+      'not-published',
+    );
+  });
+
+  it('is unavailable when the date is published but this class is not on it', () => {
+    // The one-off case: 2026-08-21 has other classes listed, just not this
+    // one — a real absence, not "hasn't opened yet".
+    const gone = subscription({ className: 'Bodypump' });
+    expect(matchClassAvailability(scheduleFixture(), gone, '2026-08-21')).toBe('unavailable');
+  });
+
+  it('matches on name and time the same way findClassId does', () => {
+    const early = subscription({ className: 'HIIT Run & Box', startTime: '18:30' });
+    const late = subscription({ className: 'HIIT Run & Box', startTime: '20:00' });
+    expect(matchClassAvailability(scheduleFixture(), early, '2026-08-21')).toBe('available');
+    expect(matchClassAvailability(scheduleFixture(), late, '2026-08-21')).toBe('available');
   });
 });
 

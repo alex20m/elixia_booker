@@ -1162,6 +1162,10 @@ button.link .spinner {
   opacity: 0.55;
 }
 
+.is-unavailable {
+  opacity: 0.55;
+}
+
 .empty {
   color: var(--text-alt);
   font-size: 14px;

@@ -6,6 +6,7 @@ import { authClient } from '@/lib/auth/client';
 import {
   apiRequest as api,
   dashboardScreen,
+  describeUnavailable,
   describeUnlisted,
   loadDashboard,
   tabFromSearch,
@@ -361,9 +362,16 @@ function ClassList({ view, refresh }: { view: DashboardView; refresh: () => Prom
     <div className="list" id="subs-list">
       {view.subscriptions.map((s) => {
         const unlisted = describeUnlisted(s.unlistedSinceMs);
+        // Superseded by `unlisted` when both apply: a class Elixia has
+        // withdrawn altogether is the more serious fact, and showing both
+        // would say the same thing about the same date twice.
+        const unavailable = unlisted ? null : describeUnavailable(s.nextClassDate, s.unavailableClassDate);
 
         return (
-          <div className={`row${s.enabled ? '' : ' is-paused'}`} key={s.id}>
+          <div
+            className={`row${s.enabled ? '' : ' is-paused'}${unavailable ? ' is-unavailable' : ''}`}
+            key={s.id}
+          >
             <div className="row-main">
               <div className="row-title">{s.className}</div>
               <div className="row-meta">
@@ -380,6 +388,11 @@ function ClassList({ view, refresh }: { view: DashboardView; refresh: () => Prom
               {unlisted && (
                 <div className="banner banner-warn mt-xs">
                   <span>{unlisted}</span>
+                </div>
+              )}
+              {unavailable && (
+                <div className="banner banner-info mt-xs">
+                  <span>{unavailable}</span>
                 </div>
               )}
             </div>

@@ -3,6 +3,7 @@ import {
   ApiError,
   apiRequest,
   dashboardScreen,
+  describeUnavailable,
   describeUnlisted,
   loadDashboard,
   tabFromSearch,
@@ -158,6 +159,35 @@ describe('describeUnlisted', () => {
     // Elixia not publishing a class is all this app can see. Saying it was
     // cancelled would be a guess the owner then acts on.
     expect(describeUnlisted(Date.now())).toMatch(/renamed, moved or dropped/i);
+  });
+});
+
+describe('describeUnavailable', () => {
+  it('says nothing when there is no upcoming occurrence to check', () => {
+    expect(describeUnavailable(null, undefined)).toBeNull();
+  });
+
+  it('says nothing when the flagged date is not the one currently upcoming', () => {
+    // The flag is only ever as fresh as the last check, and the occurrence it
+    // named can have rolled forward since — nothing to say until a fresh
+    // check catches up.
+    expect(describeUnavailable('2026-08-18', '2026-08-11')).toBeNull();
+  });
+
+  it('says nothing when the upcoming occurrence has not been flagged', () => {
+    expect(describeUnavailable('2026-08-11', undefined)).toBeNull();
+  });
+
+  it('names the date when the upcoming occurrence is confirmed missing', () => {
+    const message = describeUnavailable('2026-08-11', '2026-08-11')!;
+    expect(message).toContain('2026-08-11');
+    expect(message).toMatch(/not on Elixia's schedule/i);
+  });
+
+  it('says the class may still run on a later date, since some are one-off', () => {
+    // Unlike a withdrawn class, this must never read as a permanent removal.
+    const message = describeUnavailable('2026-08-11', '2026-08-11')!;
+    expect(message).toMatch(/one-off|later date/i);
   });
 });
 

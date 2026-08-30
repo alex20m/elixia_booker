@@ -35,6 +35,30 @@ export function describeUnlisted(unlistedSinceMs: number | undefined): string | 
   );
 }
 
+/**
+ * What to say about a class whose very next occurrence is confirmed absent
+ * from Elixia's schedule, or null when there is nothing to say.
+ *
+ * Unlike `describeUnlisted`, this is about one specific date rather than the
+ * class having gone altogether: some Elixia classes are one-off, so a date
+ * missing this week says nothing about the date after it. Compares against
+ * `nextClassDate` rather than trusting the stored flag alone — the flag is
+ * only ever as fresh as the last check, and the occurrence it named can have
+ * rolled forward since, in which case there is nothing to say until a fresh
+ * check catches up.
+ */
+export function describeUnavailable(
+  nextClassDate: string | null,
+  unavailableClassDate: string | undefined,
+): string | null {
+  if (nextClassDate === null || unavailableClassDate !== nextClassDate) return null;
+  return (
+    `Not on Elixia's schedule for ${nextClassDate}, so it will not be booked for this date. ` +
+    `This class can run one-off, so it may still be there for a later date — checked again ` +
+    `every night.`
+  );
+}
+
 /** A failed request, carrying the status so callers can tell 401 from the rest. */
 export class ApiError extends Error {
   readonly status: number;

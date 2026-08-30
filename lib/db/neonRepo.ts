@@ -40,7 +40,8 @@ const PROFILE_COLUMNS = `
 
 const SUBSCRIPTION_COLUMNS = `
   id, user_id, class_name, center, weekday, start_time,
-  priority, enabled, booking_window_days, unlisted_since, instructor_name, created_at
+  priority, enabled, booking_window_days, unlisted_since, instructor_name,
+  to_char(unavailable_class_date, 'YYYY-MM-DD') as unavailable_class_date, created_at
 `;
 
 const str = (value: unknown): string => String(value);
@@ -81,6 +82,7 @@ const toSubscription = (row: SqlRow): Subscription => ({
     : {}),
   ...(row.unlisted_since ? { unlistedSinceMs: toMs(row.unlisted_since) } : {}),
   ...(row.instructor_name ? { instructorName: str(row.instructor_name) } : {}),
+  ...(row.unavailable_class_date ? { unavailableClassDate: str(row.unavailable_class_date) } : {}),
   createdAtMs: toMs(row.created_at),
 });
 
@@ -260,6 +262,18 @@ export function createNeonRepo(sql: Sql): Repo {
            where user_id = $1 and id = $2::uuid
            returning id`,
           [userId, id, atMs === null ? null : new Date(atMs).toISOString()],
+        ),
+      );
+      return rows.length > 0;
+    },
+
+    async setSubscriptionUnavailableDate(userId, id, classDate) {
+      const rows = await rowsOrNoneForBadId(() =>
+        sql.query(
+          `update public.subscriptions set unavailable_class_date = $3::date
+           where user_id = $1 and id = $2::uuid
+           returning id`,
+          [userId, id, classDate],
         ),
       );
       return rows.length > 0;

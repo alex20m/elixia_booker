@@ -74,6 +74,13 @@ export interface Repo {
   /** Records when a class went missing from the schedule; null once it is back. */
   setSubscriptionUnlisted(userId: string, id: string, atMs: number | null): Promise<boolean>;
   /**
+   * Records the classDate (YYYY-MM-DD) of a subscription's soonest upcoming
+   * occurrence when it is confirmed missing from a published day; null once
+   * it is checked and found present, or the checked occurrence has rolled
+   * forward to a new date. See `Subscription.unavailableClassDate`.
+   */
+  setSubscriptionUnavailableDate(userId: string, id: string, classDate: string | null): Promise<boolean>;
+  /**
    * Records who the schedule currently says is running a class; null to clear
    * a name that no longer applies. Written by the nightly instructor refresh,
    * never by booking or listing-check logic.
