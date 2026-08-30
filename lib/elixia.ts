@@ -31,6 +31,7 @@ import {
 import type {
   AttemptOutcome,
   CenterOption,
+  ClassAvailabilityStatus,
   ClassOption,
   StoredTokens,
   Subscription,
@@ -61,6 +62,23 @@ export interface BookingBackend {
     subscription: Subscription,
     classDate: string,
   ): Promise<string>;
+  /**
+   * Whether specific class occurrences are on Elixia's published schedule
+   * right now, one schedule read for the whole batch rather than one per
+   * check — so reviewing every subscription at one centre costs one page
+   * fetch, not one per subscription (mirrors why `resolveClassId` only
+   * fetches once per call). Results come back in the same order as `checks`.
+   *
+   * Never throws for an occurrence that simply is not published yet, or is
+   * not on a published day — that is the answer, not a failure. Callers that
+   * want "not available" said out loud rather than propagated as an error
+   * (the chooser, the nightly review) read this instead of `resolveClassId`.
+   */
+  checkAvailability(
+    tokens: StoredTokens,
+    center: string,
+    checks: Array<{ className: string; startTime: string; classDate: string }>,
+  ): Promise<ClassAvailabilityStatus[]>;
   book(tokens: StoredTokens, classId: string, signal?: AbortSignal): Promise<AttemptOutcome>;
 }
 
@@ -607,6 +625,38 @@ export function findClassId(
   return match.id;
 }
 
+/**
+ * The non-throwing sibling of `findClassId`: where a specific class
+ * occurrence stands on Elixia's published schedule, as a status a caller can
+ * act on instead of an exception to catch.
+ *
+ * Reads exactly the same two fields `findClassId` does — deliberately not
+ * sharing code with it, so `findClassId`'s established error messages (and
+ * the tests pinned to them) are never at risk from a change made for this.
+ */
+export function matchClassAvailability(
+  props: SchedulePageProps,
+  wanted: Pick<Subscription, 'className' | 'startTime'>,
+  classDate: string,
+): ClassAvailabilityStatus {
+  const known = (props.schedule?.dateList?.dates ?? []).find((d) => d.isoDate === classDate);
+  if (known?.disabled === true) return 'not-published';
+
+  const day = (props.schedule?.events ?? []).find((d) => d.date === classDate);
+  if (!day) return 'not-published';
+
+  const wantedName = normalizeName(wanted.className);
+  const wantedTime = normalizeTime(wanted.startTime);
+
+  const match = day.events.find(
+    (e) =>
+      normalizeName(e.metadata?.name ?? '') === wantedName &&
+      normalizeTime(e.metadata?.time ?? '') === wantedTime,
+  );
+
+  return match ? 'available' : 'unavailable';
+}
+
 // --- booking responses -------------------------------------------------------
 
 /**
@@ -828,6 +878,22 @@ export class ElixiaClient implements BookingBackend {
     const clubId = await this.resolveClubId(tokens, subscription.center);
     const url = `${this.baseUrl}${ENDPOINTS.schedule}?clubIds=${encodeURIComponent(clubId)}`;
     return findClassId(await this.fetchPage(tokens, url), subscription, classDate);
+  }
+
+  /**
+   * One schedule read for `center`, checked against every occurrence in
+   * `checks` — so reviewing many subscriptions at one centre costs one page
+   * fetch, not one per subscription.
+   */
+  async checkAvailability(
+    tokens: StoredTokens,
+    center: string,
+    checks: Array<{ className: string; startTime: string; classDate: string }>,
+  ): Promise<ClassAvailabilityStatus[]> {
+    const clubId = await this.resolveClubId(tokens, center);
+    const url = `${this.baseUrl}${ENDPOINTS.schedule}?clubIds=${encodeURIComponent(clubId)}`;
+    const props = await this.fetchPage(tokens, url);
+    return checks.map((check) => matchClassAvailability(props, check, check.classDate));
   }
 
   async login(email: string, password: string, nowMs: number): Promise<StoredTokens> {

@@ -45,10 +45,12 @@ import type {
   BookingConfig,
   BookingHistoryEntry,
   CenterOption,
+  ClassAvailabilityStatus,
   ClassOption,
   ConfiguredProfile,
   DueEntry,
   NotifyChannel,
+  PlannedBooking,
   Profile,
   SealedElixiaSecret,
   StoredTokens,
@@ -70,6 +72,27 @@ export function timingConfig(profile: ConfiguredProfile): BookingConfig {
     classes: [],
     ...DEFAULT_TIMINGS,
   };
+}
+
+/**
+ * A subscription's soonest upcoming occurrence, or undefined if none falls
+ * within the scan window.
+ *
+ * The one release the dashboard's "Opens …" line is built from, and the one
+ * date `addSubscription` and `reviewNextOccurrences` check for availability
+ * — kept in one place so all three agree on what "next" means.
+ */
+function nextRelease(
+  subscription: Subscription,
+  profile: ConfiguredProfile,
+  nowMs: number,
+  timings: Pick<BookingConfig, 'timeZone' | 'bookingWindowDays'>,
+): PlannedBooking | undefined {
+  return releasesFor(
+    { ...subscription, bookingWindowDays: subscription.bookingWindowDays ?? profile.bookingWindowDays },
+    nowMs,
+    timings,
+  ).find((r) => r.releaseEpochMs > nowMs);
 }
 
 /** A problem to report back to the browser, with the status it deserves. */
@@ -592,7 +615,7 @@ export interface DashboardView {
    * the UI back to asking for a chat id by hand.
    */
   telegramConnect: boolean;
-  subscriptions: Array<Subscription & { nextReleaseAt: string | null }>;
+  subscriptions: Array<Subscription & { nextReleaseAt: string | null; nextClassDate: string | null }>;
   history: BookingHistoryEntry[];
   dryRun: boolean;
   apiDiscovered: boolean;
@@ -627,12 +650,12 @@ export async function buildDashboard(
       elixiaStatus: profile.elixiaStatus,
     },
     subscriptions: byWeek.map((s) => {
-      const next = releasesFor(
-        { ...s, bookingWindowDays: s.bookingWindowDays ?? profile.bookingWindowDays },
-        nowMs,
-        timings,
-      ).find((r) => r.releaseEpochMs > nowMs);
-      return { ...s, nextReleaseAt: next ? new Date(next.releaseEpochMs).toISOString() : null };
+      const next = nextRelease(s, profile, nowMs, timings);
+      return {
+        ...s,
+        nextReleaseAt: next ? new Date(next.releaseEpochMs).toISOString() : null,
+        nextClassDate: next ? next.classDate : null,
+      };
     }),
     telegramConnect: telegramConnectConfigured(config),
     history: await config.repo.listHistory(profile.id),
@@ -712,6 +735,31 @@ export async function addSubscription(
   }
 
   await reindexProfile(config, profile, nowMs);
+
+  // Best-effort: check the new class's soonest occurrence right away, so a
+  // one-off cancellation shows up before tonight's reindex gets to it — see
+  // `reviewNextOccurrences` for the recurring version of this same check.
+  // Never allowed to fail the add itself: the subscription already exists,
+  // and a read that fails here is retried again tonight regardless.
+  if (isConfigured(profile)) {
+    const next = nextRelease(subscription, profile, nowMs, timingConfig(profile));
+    if (next) {
+      try {
+        const [status] = await browsingSchedule(config, profile, nowMs, (backend, tokens) =>
+          backend.checkAvailability(tokens, center, [
+            { className: subscription.className, startTime: subscription.startTime, classDate: next.classDate },
+          ]),
+        );
+        if (status === 'unavailable') {
+          await config.repo.setSubscriptionUnavailableDate(profile.id, subscription.id, next.classDate);
+          subscription = { ...subscription, unavailableClassDate: next.classDate };
+        }
+      } catch {
+        // Tonight's reindex will catch it either way.
+      }
+    }
+  }
+
   return subscription;
 }
 
@@ -1056,6 +1104,106 @@ export async function reviewListedClasses(
 }
 
 /**
+ * Check each of a profile's classes against the published timetable for the
+ * one date that actually matters right now — its soonest upcoming occurrence
+ * — and record whichever of them are genuinely missing from that date.
+ *
+ * `reviewListedClasses` catches a class Elixia has withdrawn altogether: gone
+ * from every date in the ~14-day published window. This catches something
+ * narrower: a class that still runs most weeks but is missing for one
+ * specific date without the weekly slot itself going anywhere — some Elixia
+ * classes are one-off. That case sails straight past the general check, since
+ * the slot still shows up on some other date in the window, and would
+ * otherwise only surface at T-0 — indistinguishable there from a booking
+ * window that simply has not opened yet (docs/api.md §4).
+ *
+ * Own pass, own read, deliberately not folded into `reviewListedClasses`: see
+ * `refreshInstructors` for why isolating a check that reads and writes
+ * something booking itself never touches is worth doubling the reads per
+ * centre — a change made for one cannot then regress the other.
+ *
+ * Mirrors `reviewListedClasses`'s carefulness: one read per centre (batched
+ * across every subscription due there, not one fetch per subscription), and
+ * an unreadable centre leaves every subscription's flag exactly as it was.
+ */
+export async function reviewNextOccurrences(
+  config: AppConfig,
+  profile: Profile,
+  nowMs: number,
+): Promise<void> {
+  if (profile.elixiaStatus !== 'ok' || !isConfigured(profile)) return;
+
+  const subscriptions = (await config.repo.listSubscriptions(profile.id)).filter((s) => s.enabled);
+  const timings = timingConfig(profile);
+  const logger = new Logger();
+
+  const withNext = subscriptions
+    .map((s) => ({ subscription: s, next: nextRelease(s, profile, nowMs, timings) }))
+    .filter(
+      (x): x is { subscription: Subscription; next: PlannedBooking } => x.next !== undefined,
+    );
+
+  const centers = [...new Set(withNext.map((x) => x.subscription.center))];
+
+  for (const center of centers) {
+    const inCenter = withNext.filter((x) => x.subscription.center === center);
+
+    let statuses: ClassAvailabilityStatus[];
+    try {
+      statuses = await browsingSchedule(config, profile, nowMs, (backend, tokens) =>
+        backend.checkAvailability(
+          tokens,
+          center,
+          inCenter.map((x) => ({
+            className: x.subscription.className,
+            startTime: x.subscription.startTime,
+            classDate: x.next.classDate,
+          })),
+        ),
+      );
+    } catch (err) {
+      // Deliberately not a flag: "we could not look" is not "it is gone".
+      logger.log('occurrence.check.failed', {
+        userId: profile.id,
+        center,
+        error: (err as Error).message,
+      });
+      continue;
+    }
+
+    for (let i = 0; i < inCenter.length; i++) {
+      const { subscription, next } = inCenter[i]!;
+      const status = statuses[i];
+
+      if (status === 'unavailable') {
+        // Already flagged for this exact date: told once, not every night.
+        if (subscription.unavailableClassDate === next.classDate) continue;
+
+        await config.repo.setSubscriptionUnavailableDate(profile.id, subscription.id, next.classDate);
+        logger.log('occurrence.unavailable', {
+          userId: profile.id,
+          subscriptionId: subscription.id,
+          className: subscription.className,
+          classDate: next.classDate,
+        });
+        await announce(
+          config,
+          profile,
+          logger,
+          `ℹ️ ${subscription.className} · ${next.classDate} at ${subscription.center} is not on ` +
+            `Elixia's schedule for that date, so it will not be booked for this occurrence. It may ` +
+            `be a one-off change — later dates are checked automatically.`,
+        );
+      } else if (subscription.unavailableClassDate !== undefined) {
+        // Either it is listed again, or the checked date has moved on to a
+        // new occurrence — either way, nothing to say about `next` yet.
+        await config.repo.setSubscriptionUnavailableDate(profile.id, subscription.id, null);
+      }
+    }
+  }
+}
+
+/**
  * Check each of a profile's classes against the published timetable, and
  * record who the listing currently says is running it.
  *
@@ -1378,6 +1526,22 @@ async function bookEntry(
 
   const logger = new Logger(clock.now);
 
+  // Already confirmed missing from this exact date by the nightly review
+  // (see `reviewNextOccurrences`) — never attempted, so it costs no retry
+  // budget and cannot report a misleading "too-early"/"failed" outcome for a
+  // class that was never going to resolve. Re-checked fresh every night, so
+  // a one-off that comes back is booked again without anyone having to do
+  // anything.
+  if (subscription.unavailableClassDate === entry.classDate) {
+    logger.log('booking.skipped', {
+      userId: profile.id,
+      subscriptionId: subscription.id,
+      classDate: entry.classDate,
+      reason: 'confirmed unavailable for this date',
+    });
+    return false;
+  }
+
   try {
     const report = await executeBooking(
       {
@@ -1469,6 +1633,16 @@ export async function runReindex(
     reviewed += 1;
   }
 
+  // Third pass, same reasoning as the second: `reviewNextOccurrences` reads
+  // a ~1.5MB page per centre too, so it is what gets dropped when the clock
+  // runs out rather than risking the indexing pass above.
+  let occurrencesReviewed = 0;
+  for (const profile of profiles) {
+    if (options.deadlineMs !== undefined && Date.now() >= options.deadlineMs) break;
+    await reviewNextOccurrences(config, profile, nowMs);
+    occurrencesReviewed += 1;
+  }
+
   const pruned = await config.repo.pruneDueEntries(nowMs - 24 * 60 * 60 * 1000);
   logger.log('cron.reindex', {
     profiles: profiles.length,
@@ -1478,6 +1652,8 @@ export async function runReindex(
     // Persistently non-zero means the job is outgrowing its window: the
     // profiles at the end of the list are never getting reviewed.
     reviewSkipped: profiles.length - reviewed,
+    occurrencesReviewed,
+    occurrencesReviewSkipped: profiles.length - occurrencesReviewed,
   });
   return indexed;
 }

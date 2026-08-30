@@ -164,6 +164,22 @@ export class UnknownCenterError extends Error {
 }
 
 /**
+ * Where one specific class occurrence stands on Elixia's published schedule
+ * right now, without treating absence as an error.
+ *
+ * - `available`     — listed on that date; bookable once its window opens.
+ * - `unavailable`   — that date is published (other classes are listed on
+ *                      it) and this one simply is not among them. A real
+ *                      absence — a one-off cancellation, most likely, since
+ *                      some Elixia classes run that way — not "too early".
+ * - `not-published` — that date is not published yet at all (or is marked
+ *                      disabled), so nothing can be concluded either way —
+ *                      the same state `ClassNotListedError` represents
+ *                      before a booking window opens (docs/api.md §4).
+ */
+export type ClassAvailabilityStatus = 'available' | 'unavailable' | 'not-published';
+
+/**
  * Outcome of a single booking attempt.
  *
  * There is deliberately no `full`: Elixia never rejects a booking for being
@@ -375,6 +391,22 @@ export interface Subscription {
    * cleared) on a night the class cannot be read at all.
    */
   instructorName?: string;
+  /**
+   * The classDate (YYYY-MM-DD) of this subscription's soonest upcoming
+   * occurrence, as of the last time it was checked against a *published* day
+   * of Elixia's schedule and found genuinely missing from it.
+   *
+   * Not the same thing as `unlistedSinceMs`: that is for a class Elixia has
+   * withdrawn altogether, gone from every date in the published window. This
+   * is for one specific date coming up missing while the weekly slot
+   * otherwise still runs — some Elixia classes are one-off, so a date
+   * flagged here says nothing about the date after it. It always names the
+   * occurrence it was checked against, so a fresh check either clears it
+   * (the date is now listed, or the soonest upcoming date has moved on) or
+   * refiles it against whatever date is now soonest — nothing here outlives
+   * the occurrence it names.
+   */
+  unavailableClassDate?: string;
   createdAtMs: number;
 }
 

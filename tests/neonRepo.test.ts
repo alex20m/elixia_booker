@@ -324,6 +324,29 @@ describe('subscriptions', () => {
     expect((await repo.listSubscriptions(BOB))[0]?.unlistedSinceMs).toBeUndefined();
   });
 
+  it('round-trips the date a class was confirmed missing, reading and writing a plain date string', async () => {
+    // `date` columns are read through to_char (see this file's own header
+    // comment) — a driver that parsed it into a Date at UTC midnight could
+    // shift the calendar date under a non-UTC reader.
+    const subscription = await addClass(ALICE, 'Bodypump');
+    expect((await repo.listSubscriptions(ALICE))[0]?.unavailableClassDate).toBeUndefined();
+
+    expect(
+      await repo.setSubscriptionUnavailableDate(ALICE, subscription.id, '2026-08-25'),
+    ).toBe(true);
+    expect((await repo.listSubscriptions(ALICE))[0]?.unavailableClassDate).toBe('2026-08-25');
+
+    expect(await repo.setSubscriptionUnavailableDate(ALICE, subscription.id, null)).toBe(true);
+    expect((await repo.listSubscriptions(ALICE))[0]?.unavailableClassDate).toBeUndefined();
+  });
+
+  it('refuses to flag an unavailable date on a class belonging to someone else', async () => {
+    const bobs = await addClass(BOB, 'Bodypump');
+
+    expect(await repo.setSubscriptionUnavailableDate(ALICE, bobs.id, '2026-08-25')).toBe(false);
+    expect((await repo.listSubscriptions(BOB))[0]?.unavailableClassDate).toBeUndefined();
+  });
+
   it('round-trips who is running the class, and clears it when the name is null', async () => {
     const subscription = await addClass(ALICE, 'Bodypump');
     expect((await repo.listSubscriptions(ALICE))[0]?.instructorName).toBeUndefined();
@@ -350,6 +373,7 @@ describe('subscriptions', () => {
     expect(await repo.deleteSubscription(ALICE, 'not-a-uuid')).toBe(false);
     expect(await repo.setSubscriptionEnabled(ALICE, 'not-a-uuid', false)).toBe(false);
     expect(await repo.setSubscriptionUnlisted(ALICE, 'not-a-uuid', Date.now())).toBe(false);
+    expect(await repo.setSubscriptionUnavailableDate(ALICE, 'not-a-uuid', '2026-08-25')).toBe(false);
     expect(await repo.setSubscriptionInstructor(ALICE, 'not-a-uuid', 'Someone')).toBe(false);
   });
 

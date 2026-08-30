@@ -14,9 +14,11 @@
 
 import { ElixiaCredentialsRejected, UnknownCenterError } from './types';
 import type { BookingBackend } from './elixia';
+import { normalizeTime, weekdayOfIsoDate } from './elixia';
 import type {
   AttemptOutcome,
   CenterOption,
+  ClassAvailabilityStatus,
   ClassOption,
   StoredTokens,
   Subscription,
@@ -114,6 +116,37 @@ export class MockElixiaClient implements BookingBackend {
     classDate: string,
   ): Promise<string> {
     return `mock-${subscription.className.toLowerCase().replace(/\s+/g, '-')}-${classDate}`;
+  }
+
+  /**
+   * Available whenever the (name, weekday-of-date, time) triple is on the
+   * mock timetable — the same triple `listClasses` publishes, just checked
+   * against one concrete date instead of "any date in the window". Mirrors
+   * `listClasses` in rejecting an unknown centre; unlike the real adapter
+   * there is no "not published yet" state to reproduce here, since the mock
+   * timetable carries no publishing horizon of its own.
+   */
+  async checkAvailability(
+    _tokens: StoredTokens,
+    center: string,
+    checks: Array<{ className: string; startTime: string; classDate: string }>,
+  ): Promise<ClassAvailabilityStatus[]> {
+    const wanted = center.trim().toLowerCase();
+    const known = MOCK_CENTERS.some((c) => c.name.toLowerCase() === wanted || c.id === wanted);
+    if (!known) throw new UnknownCenterError(center);
+
+    return checks.map((check): ClassAvailabilityStatus => {
+      const weekday = weekdayOfIsoDate(check.classDate);
+      if (!weekday) return 'not-published';
+
+      const listed = MOCK_TIMETABLE.some(
+        (slot) =>
+          slot.className.toLowerCase() === check.className.trim().toLowerCase() &&
+          slot.weekday === weekday &&
+          slot.startTime === normalizeTime(check.startTime),
+      );
+      return listed ? 'available' : 'unavailable';
+    });
   }
 
   /**

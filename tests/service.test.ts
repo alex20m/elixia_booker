@@ -17,6 +17,7 @@ import {
   runDueBookings,
   refreshInstructors,
   reviewListedClasses,
+  reviewNextOccurrences,
   runInstructorSync,
   runReindex,
   saveCenterDefaults,
@@ -210,6 +211,18 @@ function firstRelease(sub: Subscription, windowDays = 7): number {
   )[0];
   if (!release) throw new Error('no release found for fixture');
   return release.releaseEpochMs;
+}
+
+/** The classDate of a subscription's soonest upcoming occurrence. */
+function firstClassDate(sub: Subscription, windowDays = 7): string {
+  const release = releasesInRange(
+    { ...sub, bookingWindowDays: windowDays },
+    nowMs,
+    nowMs + 21 * 86_400_000,
+    { timeZone: 'Europe/Helsinki', bookingWindowDays: windowDays },
+  )[0];
+  if (!release) throw new Error('no release found for fixture');
+  return release.classDate;
 }
 
 describe('profiles', () => {
@@ -652,6 +665,46 @@ describe('managing classes', () => {
     await mutateSubscription(config, profile, sub.id, 'toggle', nowMs);
     expect(await repo.claimDue(0, nowMs + 30 * 86_400_000)).toHaveLength(0);
   });
+
+  it('checks the soonest occurrence right away, so a one-off cancellation shows up before tonight\'s reindex', async () => {
+    const profile = await linkedProfile();
+    const mock = new MockElixiaClient();
+    config.backend = {
+      login: (email, password, at) => mock.login(email, password, at),
+      refresh: (tokens, at) => mock.refresh(tokens, at),
+      listCenters: (tokens) => mock.listCenters(tokens),
+      listClasses: (tokens, center) => mock.listClasses(tokens, center),
+      resolveClassId: (tokens, sub, date) => mock.resolveClassId(tokens, sub, date),
+      checkAvailability: async (tokens, center, checks) => checks.map(() => 'unavailable'),
+      book: (tokens, id) => mock.book(tokens, id),
+    };
+
+    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+    expect(sub.unavailableClassDate).toBe(firstClassDate(sub));
+
+    const stored = (await repo.listSubscriptions(profile.id))[0]!;
+    expect(stored.unavailableClassDate).toBe(firstClassDate(sub));
+  });
+
+  it('still adds the class when the immediate availability check cannot be read', async () => {
+    const profile = await linkedProfile();
+    const mock = new MockElixiaClient();
+    config.backend = {
+      login: (email, password, at) => mock.login(email, password, at),
+      refresh: (tokens, at) => mock.refresh(tokens, at),
+      listCenters: (tokens) => mock.listCenters(tokens),
+      listClasses: (tokens, center) => mock.listClasses(tokens, center),
+      resolveClassId: (tokens, sub, date) => mock.resolveClassId(tokens, sub, date),
+      checkAvailability: async () => {
+        throw new Error('elixia is down');
+      },
+      book: (tokens, id) => mock.book(tokens, id),
+    };
+
+    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+    expect(sub).toMatchObject({ className: 'Bodypump' });
+    expect(sub.unavailableClassDate).toBeUndefined();
+  });
 });
 
 describe('isolation between users', () => {
@@ -718,6 +771,49 @@ describe('the booking tick', () => {
   it('books a class the user added', async () => {
     const profile = await linkedProfile();
     const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+
+    setNow(firstRelease(sub) - 30_000);
+    expect(await runDueBookings(config, nowMs, instantClock())).toBe(1);
+
+    const history = await repo.listHistory(profile.id);
+    expect(history[0]).toMatchObject({ outcome: 'booked', className: 'Bodypump' });
+  });
+
+  it('skips a booking attempt for an occurrence already confirmed unavailable', async () => {
+    // Set by `reviewNextOccurrences` the night before — the class should
+    // never be attempted, and never cost a lookup, once it is confirmed
+    // missing from a published day.
+    const profile = await linkedProfile();
+    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+    await repo.setSubscriptionUnavailableDate(profile.id, sub.id, firstClassDate(sub));
+
+    let resolveCalled = false;
+    const mock = new MockElixiaClient();
+    config.backend = {
+      login: (email, password, at) => mock.login(email, password, at),
+      refresh: (tokens, at) => mock.refresh(tokens, at),
+      listCenters: (tokens) => mock.listCenters(tokens),
+      listClasses: (tokens, center) => mock.listClasses(tokens, center),
+      resolveClassId: (tokens, s, date) => {
+        resolveCalled = true;
+        return mock.resolveClassId(tokens, s, date);
+      },
+      checkAvailability: (tokens, center, checks) => mock.checkAvailability(tokens, center, checks),
+      book: (tokens, id) => mock.book(tokens, id),
+    };
+
+    setNow(firstRelease(sub) - 30_000);
+    expect(await runDueBookings(config, nowMs, instantClock())).toBe(0);
+    expect(resolveCalled).toBe(false);
+    expect(await repo.listHistory(profile.id)).toHaveLength(0);
+  });
+
+  it('still attempts a release whose flag names a different date', async () => {
+    // The flag only ever names one exact occurrence — a stale or unrelated
+    // date must never suppress a booking that was never confirmed missing.
+    const profile = await linkedProfile();
+    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+    await repo.setSubscriptionUnavailableDate(profile.id, sub.id, '2099-01-01');
 
     setNow(firstRelease(sub) - 30_000);
     expect(await runDueBookings(config, nowMs, instantClock())).toBe(1);
@@ -1120,6 +1216,7 @@ describe('classes that Elixia withdraws', () => {
       listCenters: (tokens) => mock.listCenters(tokens),
       listClasses: (tokens, center) => mock.listClasses(tokens, center),
       resolveClassId: (tokens, sub, date) => mock.resolveClassId(tokens, sub, date),
+      checkAvailability: (tokens, center, checks) => mock.checkAvailability(tokens, center, checks),
       book: (tokens, id) => mock.book(tokens, id),
       ...overrides,
     };
@@ -1282,6 +1379,164 @@ describe('classes that Elixia withdraws', () => {
   });
 });
 
+describe('one-off occurrences', () => {
+  /**
+   * `reviewListedClasses` catches a class withdrawn altogether — gone from
+   * every date in the published window. This is the narrower, date-specific
+   * check: a class that still runs most weeks but is confirmed missing for
+   * one specific date, which sails straight past the general check since the
+   * weekly slot still shows up on some other date.
+   */
+
+  function gym(overrides: Partial<BookingBackend> = {}): BookingBackend {
+    const mock = new MockElixiaClient();
+    return {
+      login: (email, password, at) => mock.login(email, password, at),
+      refresh: (tokens, at) => mock.refresh(tokens, at),
+      listCenters: (tokens) => mock.listCenters(tokens),
+      listClasses: (tokens, center) => mock.listClasses(tokens, center),
+      resolveClassId: (tokens, sub, date) => mock.resolveClassId(tokens, sub, date),
+      checkAvailability: (tokens, center, checks) => mock.checkAvailability(tokens, center, checks),
+      book: (tokens, id) => mock.book(tokens, id),
+      ...overrides,
+    };
+  }
+
+  /** Confirms every check as unavailable, whatever it is asked about. */
+  function gymUnavailable(): void {
+    config.backend = gym({
+      checkAvailability: async (tokens, center, checks) => checks.map(() => 'unavailable'),
+    });
+  }
+
+  const only = async (userId = USER_ID): Promise<Subscription> =>
+    (await repo.listSubscriptions(userId))[0]!;
+
+  it('flags the soonest occurrence when it is confirmed missing from a published day', async () => {
+    const profile = await linkedProfile();
+    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+    expect(sub.unavailableClassDate).toBeUndefined();
+
+    gymUnavailable();
+    await reviewNextOccurrences(config, profile, nowMs);
+
+    expect((await only()).unavailableClassDate).toBe(firstClassDate(sub));
+  });
+
+  it('leaves a class alone whose soonest occurrence is available', async () => {
+    const profile = await linkedProfile();
+    await addSubscription(config, profile, BODYPUMP, nowMs);
+
+    await reviewNextOccurrences(config, profile, nowMs);
+    expect((await only()).unavailableClassDate).toBeUndefined();
+  });
+
+  it('does not treat "not yet published" as unavailable', async () => {
+    // The ordinary state long before T-0: nothing can be concluded, so this
+    // must never read as a one-off cancellation.
+    const profile = await linkedProfile();
+    await addSubscription(config, profile, BODYPUMP, nowMs);
+
+    config.backend = gym({
+      checkAvailability: async (tokens, center, checks) => checks.map(() => 'not-published'),
+    });
+    await reviewNextOccurrences(config, profile, nowMs);
+
+    expect((await only()).unavailableClassDate).toBeUndefined();
+  });
+
+  it('clears the flag once the class is available again', async () => {
+    const profile = await linkedProfile();
+    await addSubscription(config, profile, BODYPUMP, nowMs);
+
+    gymUnavailable();
+    await reviewNextOccurrences(config, profile, nowMs);
+    expect((await only()).unavailableClassDate).toBeDefined();
+
+    delete config.backend;
+    await reviewNextOccurrences(config, profile, nowMs);
+    expect((await only()).unavailableClassDate).toBeUndefined();
+  });
+
+  it('flags nothing when Elixia cannot be read', async () => {
+    const profile = await linkedProfile();
+    await addSubscription(config, profile, BODYPUMP, nowMs);
+
+    config.backend = gym({
+      checkAvailability: async () => {
+        throw new Error('elixia is down');
+      },
+    });
+
+    await expect(reviewNextOccurrences(config, profile, nowMs)).resolves.toBeUndefined();
+    expect((await only()).unavailableClassDate).toBeUndefined();
+  });
+
+  it('tells the owner once, not every night', async () => {
+    const linked = await linkedProfile();
+    await repo.upsertProfile({ ...linked, telegramChatId: '4242', notifyChannel: 'telegram' });
+    const withChat = (await repo.getProfile(USER_ID))!;
+    await addSubscription(config, withChat, BODYPUMP, nowMs);
+
+    const sent: string[] = [];
+    const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      sent.push(String(JSON.parse(String(init?.body)).text));
+      return new Response('{}', { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    config.telegramBotToken = 'bot-token';
+
+    try {
+      gymUnavailable();
+      await reviewNextOccurrences(config, withChat, nowMs);
+      // Well short of this week's own release instant (09:00 local, an hour
+      // ahead of `nowMs`), so the soonest upcoming occurrence is still the
+      // same date and this is a genuine re-check, not a new occurrence.
+      setNow(nowMs + 30 * 60 * 1000);
+      await reviewNextOccurrences(config, withChat, nowMs);
+
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toMatch(/Bodypump/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('reads each centre once however many classes are checked there', async () => {
+    const profile = await linkedProfile();
+    await addSubscription(config, profile, BODYPUMP, nowMs);
+    await addSubscription(config, profile, { ...BODYPUMP, weekday: 'thursday' }, nowMs);
+    await addSubscription(
+      config,
+      profile,
+      { ...BODYPUMP, className: 'Yoga', weekday: 'monday', startTime: '17:00' },
+      nowMs,
+    );
+
+    const mock = new MockElixiaClient();
+    const centers: string[] = [];
+    config.backend = gym({
+      checkAvailability: async (tokens, center, checks) => {
+        centers.push(center);
+        return mock.checkAvailability(tokens, center, checks);
+      },
+    });
+
+    await reviewNextOccurrences(config, profile, nowMs);
+    expect(centers).toEqual(['Tapiola']);
+  });
+
+  it('is run for every linked profile by the nightly job', async () => {
+    const profile = await linkedProfile();
+    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+
+    gymUnavailable();
+    await runReindex(config, nowMs);
+
+    expect((await only()).unavailableClassDate).toBe(firstClassDate(sub));
+  });
+});
+
 describe('instructor names', () => {
   /**
    * Who is running a class changes week to week, so it is refreshed by its own
@@ -1300,6 +1555,7 @@ describe('instructor names', () => {
       listCenters: (tokens) => mock.listCenters(tokens),
       listClasses: (tokens, center) => mock.listClasses(tokens, center),
       resolveClassId: (tokens, sub, date) => mock.resolveClassId(tokens, sub, date),
+      checkAvailability: (tokens, center, checks) => mock.checkAvailability(tokens, center, checks),
       book: (tokens, id) => mock.book(tokens, id),
       ...overrides,
     };
