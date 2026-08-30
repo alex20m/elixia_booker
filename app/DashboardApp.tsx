@@ -406,7 +406,7 @@ function ClassList({ view, refresh }: { view: DashboardView; refresh: () => Prom
             <div className="row-actions">
               <ActionButton
                 id={`pause-${s.id}`}
-                className="btn-quiet btn-sm btn-icon"
+                className="btn-quiet btn-sm row-action-btn"
                 pendingLabel="…"
                 aria-label={s.enabled ? 'Pause' : 'Resume'}
                 onClick={async () => {
@@ -419,7 +419,7 @@ function ClassList({ view, refresh }: { view: DashboardView; refresh: () => Prom
               </ActionButton>
               <ActionButton
                 id={`remove-${s.id}`}
-                className="btn-danger btn-sm btn-icon"
+                className="btn-danger btn-sm row-action-btn"
                 pendingLabel="…"
                 aria-label="Remove"
                 onClick={async () => {
