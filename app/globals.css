@@ -751,11 +751,29 @@ select {
   background: var(--surface);
   color: var(--text);
   font: inherit;
-  /* 16px, not the body's 14: iOS and Android both zoom the whole page in on
-     focus when a text input's font-size is under 16px, and undo that zoom
-     only on blur — which reads as the screen jumping every time a field is
-     tapped. 16px is the threshold both platforms use to skip that zoom. */
+  /* 16px below the breakpoint, not the body's 14: iOS and Android both zoom
+     the whole page in on focus when a text input's font-size is under 16px,
+     and undo that zoom only on blur — which reads as the screen jumping every
+     time a field is tapped. 16px is the threshold both platforms use to skip
+     that zoom, and the @neondatabase/auth-ui inputs on /account already use
+     it below the same width (its `text-base md:text-sm`), which is why this
+     rule matches that width rather than picking one of its own. */
   font-size: 16px;
+}
+
+/* Above this width the zoom-on-focus behaviour above doesn't happen — it's a
+   phone/small-tablet thing — so text can go back to the app's normal 14px.
+   One rule here rather than a font-size override on each input or select: the
+   base rule above is already the single place every text box and dropdown in
+   the app gets its sizing from, so this is too. 48rem (768px) is Tailwind's
+   `md` breakpoint, matched deliberately: it is what @neondatabase/auth-ui's
+   own inputs already switch on, and picking anything else would make the
+   account page's fields resize at a different width than every field here. */
+@media (min-width: 48rem) {
+  input,
+  select {
+    font-size: 14px;
+  }
 }
 
 /* A box carrying a datalist is a picker as much as a select is, so it wears the
