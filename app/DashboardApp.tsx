@@ -376,6 +376,7 @@ function ClassList({ view, refresh }: { view: DashboardView; refresh: () => Prom
                     : 'No upcoming release'
                   : 'Paused'}
               </div>
+              {s.instructorName && <div className="row-meta">with {s.instructorName}</div>}
               {unlisted && (
                 <div className="banner banner-warn mt-xs">
                   <span>{unlisted}</span>
