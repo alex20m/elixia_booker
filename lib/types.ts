@@ -43,6 +43,8 @@ export interface ClassOption {
   className: string;
   weekday: Weekday;
   startTime: string;
+  /** Who is running the soonest published occurrence, if the listing says. */
+  instructorName?: string;
 }
 
 /** One class you want booked, every week. */
@@ -362,6 +364,17 @@ export interface Subscription {
    * week reads very differently from one gone for a month.
    */
   unlistedSinceMs?: number;
+  /**
+   * Who is currently running this class, as last seen on Elixia's schedule.
+   *
+   * Kept separately from the subscription's own fields because it is not
+   * something the user chose — it is refreshed nightly by its own job (see
+   * `refreshInstructors`), deliberately apart from the booking and
+   * listing-check logic, so a change to how instructors are read cannot break
+   * either. Absent until the first refresh finds one, and left alone (not
+   * cleared) on a night the class cannot be read at all.
+   */
+  instructorName?: string;
   createdAtMs: number;
 }
 

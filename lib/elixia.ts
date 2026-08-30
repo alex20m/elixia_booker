@@ -353,6 +353,8 @@ export interface ScheduleEvent {
     /** Local start time as displayed, "HH:MM". */
     time: string;
     duration: number;
+    /** Who is running it, as displayed: `"w/ <name>"`. Absent on some classes. */
+    instructor?: string;
   };
 }
 
@@ -463,6 +465,22 @@ function normalizeName(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
+const INSTRUCTOR_PREFIX_RE = /^w\/\s*/i;
+
+/**
+ * Strips the listing's own `"w/ "` prefix off an instructor field, e.g.
+ * `"w/ Maija Meikäläinen"` → `"Maija Meikäläinen"` (docs/api.md §4).
+ *
+ * Returns undefined for an absent or blank value, rather than `""`, so a
+ * caller can tell "nobody named" from "not shown" using one check (`if
+ * (instructorName)`) instead of two.
+ */
+export function parseInstructorName(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const name = raw.replace(INSTRUCTOR_PREFIX_RE, '').trim();
+  return name || undefined;
+}
+
 /**
  * The weekday a published date falls on.
  *
@@ -499,6 +517,10 @@ export const WEEK_ORDER: readonly Weekday[] = [
  * later, so anything this returns is resolvable on the day — and anything it
  * omits is not merely unlisted but unbookable by this app, since the booking
  * engine reads the same embedded props.
+ *
+ * `instructorName` comes from whichever occurrence is kept — the soonest —
+ * since that is who is actually running the next one, not a fact about the
+ * slot itself: Elixia can and does swap instructors week to week.
  */
 export function collectClassOptions(props: SchedulePageProps): ClassOption[] {
   const seen = new Map<string, ClassOption>();
@@ -513,7 +535,10 @@ export function collectClassOptions(props: SchedulePageProps): ClassOption[] {
       if (!className || !/^\d{2}:\d{2}$/.test(startTime)) continue;
 
       const key = `${normalizeName(className)}|${weekday}|${startTime}`;
-      if (!seen.has(key)) seen.set(key, { className, weekday, startTime });
+      if (!seen.has(key)) {
+        const instructorName = parseInstructorName(event.metadata?.instructor);
+        seen.set(key, { className, weekday, startTime, ...(instructorName ? { instructorName } : {}) });
+      }
     }
   }
 
