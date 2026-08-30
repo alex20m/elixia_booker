@@ -631,13 +631,22 @@ export async function buildDashboard(
   const subscriptions = await config.repo.listSubscriptions(profile.id);
   const timings = timingConfig(profile);
 
-  // Monday first, then by time, so the dashboard reads like a timetable
-  // rather than the order classes happened to be added in.
-  const byWeek = [...subscriptions].sort(
-    (a, b) =>
-      WEEK_ORDER.indexOf(a.weekday) - WEEK_ORDER.indexOf(b.weekday) ||
-      a.startTime.localeCompare(b.startTime),
-  );
+  const withNext = subscriptions.map((s) => ({ s, next: nextRelease(s, profile, nowMs, timings) }));
+
+  // In the order the classes will actually happen — a class this Friday
+  // belongs above one next Monday even though Monday sorts first in the
+  // week. Subscriptions with no upcoming occurrence (paused, or missing
+  // from Elixia's schedule) have nothing to order by, so they fall to the
+  // end and sort among themselves like a timetable.
+  const byWhenTheyHappen = [...withNext].sort((a, b) => {
+    if (a.next && b.next) return a.next.classEpochMs - b.next.classEpochMs;
+    if (a.next) return -1;
+    if (b.next) return 1;
+    return (
+      WEEK_ORDER.indexOf(a.s.weekday) - WEEK_ORDER.indexOf(b.s.weekday) ||
+      a.s.startTime.localeCompare(b.s.startTime)
+    );
+  });
 
   return {
     account: {
@@ -649,14 +658,11 @@ export async function buildDashboard(
       elixiaEmail: profile.elixiaEmail ?? '',
       elixiaStatus: profile.elixiaStatus,
     },
-    subscriptions: byWeek.map((s) => {
-      const next = nextRelease(s, profile, nowMs, timings);
-      return {
-        ...s,
-        nextReleaseAt: next ? new Date(next.releaseEpochMs).toISOString() : null,
-        nextClassDate: next ? next.classDate : null,
-      };
-    }),
+    subscriptions: byWhenTheyHappen.map(({ s, next }) => ({
+      ...s,
+      nextReleaseAt: next ? new Date(next.releaseEpochMs).toISOString() : null,
+      nextClassDate: next ? next.classDate : null,
+    })),
     telegramConnect: telegramConnectConfigured(config),
     history: await config.repo.listHistory(profile.id),
     dryRun: config.dryRun,

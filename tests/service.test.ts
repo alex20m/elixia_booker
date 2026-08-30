@@ -604,9 +604,13 @@ describe('managing classes', () => {
     expect(await repo.listSubscriptions(profile.id)).toHaveLength(3);
   });
 
-  it('lists booked classes for the week starting Monday, then by time', async () => {
-    // Added out of week order and out of time order within a day, so the
-    // dashboard's order can only come from sorting, not insertion order.
+  it('lists booked classes in the order they will actually happen, not by weekday', async () => {
+    // `nowMs` is a Tuesday. A weekday-first sort would put Monday's classes at
+    // the top of the list even though the next Monday is six days out, while
+    // Wednesday (tomorrow) and Friday happen first — exactly backwards from
+    // what a member glancing at the list needs. Added out of both week order
+    // and time order within a day, so the result can only come from sorting
+    // by the next actual occurrence, not insertion order.
     const profile = await linkedProfile();
     await addSubscription(config, profile, { ...BODYPUMP, weekday: 'friday' }, nowMs);
     await addSubscription(
@@ -620,11 +624,14 @@ describe('managing classes', () => {
 
     const view = await buildDashboard(config, profile, nowMs);
     expect(view.subscriptions.map((s) => `${s.weekday} ${s.startTime} ${s.className}`)).toEqual([
-      'monday 07:00 Busy Bootcamp',
-      'monday 09:00 Bodypump',
       'wednesday 09:00 Bodypump',
       'friday 09:00 Bodypump',
+      'monday 07:00 Busy Bootcamp',
+      'monday 09:00 Bodypump',
     ]);
+    // Each row's own next-occurrence date agrees with that order.
+    const dates = view.subscriptions.map((s) => s.nextClassDate);
+    expect(dates).toEqual([...dates].sort());
   });
 
   it('pauses, resumes and removes', async () => {
