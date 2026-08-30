@@ -1,8 +1,8 @@
 /**
  * Turns "Bodypump, Tuesdays at 09:00" into concrete release instants.
  *
- * The booking watcher asks: has anything I want opened for booking in the
- * next moment? This module answers that, and it is where the weekly
+ * The nightly reindex asks: what does each account want, and when does each of
+ * those open for booking? This module answers that, and it is where the weekly
  * recurrence meets the DST-aware arithmetic in schedule.ts.
  */
 

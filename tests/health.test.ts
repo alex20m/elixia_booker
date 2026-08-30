@@ -11,7 +11,14 @@ import { GET } from '@/app/api/health/route';
  * request 500'd, which sent the search in exactly the wrong direction.
  */
 
-const VARS = ['ENCRYPTION_KEY', 'DATABASE_URL', 'CRON_SECRET', 'QSTASH_TOKEN', 'APP_URL'] as const;
+const VARS = [
+  'ENCRYPTION_KEY',
+  'DATABASE_URL',
+  'QSTASH_TOKEN',
+  'APP_URL',
+  'QSTASH_CURRENT_SIGNING_KEY',
+  'QSTASH_NEXT_SIGNING_KEY',
+] as const;
 
 let saved: Record<string, string | undefined>;
 
@@ -48,38 +55,48 @@ describe('/api/health', () => {
 });
 
 /**
- * QStash is the mechanism that books classes, and it is deliberately
- * all-or-nothing: with any one of the token, the origin and the cron secret
- * missing it publishes nothing at all rather than publishing messages that
- * would fail hours later at delivery time (see lib/qstash.ts).
- *
- * That makes "dormant" a state the app can sit in indefinitely while looking
- * completely healthy from outside — which is the same trap this file's header
- * describes for ENCRYPTION_KEY, and it cost a missed booking before it was
- * reported here. Absence of the booking mechanism has to be visible in the one
- * place the setup guide tells you to look.
+ * QStash is the only mechanism that books classes, and health has to report
+ * the *whole* round trip, not just its outbound half: publishing the schedule
+ * needs QSTASH_TOKEN and APP_URL, and authenticating the deliveries that
+ * schedule then triggers needs both signing keys. A deployment missing any one
+ * part is the worst case — messages are published and every delivery 401s,
+ * hours later, on a path nobody is watching — while looking completely healthy
+ * from outside. That is the same trap this file's header describes for
+ * ENCRYPTION_KEY, and it cost a missed booking before it was reported here.
  */
 describe('/api/health and the QStash booking path', () => {
+  const PARTS = [
+    'QSTASH_TOKEN',
+    'APP_URL',
+    'QSTASH_CURRENT_SIGNING_KEY',
+    'QSTASH_NEXT_SIGNING_KEY',
+  ] as const;
+
   const live = () => {
     process.env.QSTASH_TOKEN = 'qstash-token';
     process.env.APP_URL = 'https://booker.example';
-    process.env.CRON_SECRET = 'cron-secret';
+    process.env.QSTASH_CURRENT_SIGNING_KEY = 'sig_cur';
+    process.env.QSTASH_NEXT_SIGNING_KEY = 'sig_next';
   };
 
-  it('reports the booking path as live when all three parts are set', async () => {
+  it('reports the booking path as live when every part is set', async () => {
     live();
     expect(await health()).toMatchObject({ qstashConfigured: true });
   });
 
-  it.each(['QSTASH_TOKEN', 'APP_URL', 'CRON_SECRET'] as const)(
-    'reports it as not live when %s alone is missing',
-    async (missing) => {
-      // Each of the three is individually load-bearing. Reporting "configured"
-      // on two out of three is the reading that would send someone hunting
-      // through Upstash for a delivery that was never published.
-      live();
-      delete process.env[missing];
-      expect(await health()).toMatchObject({ qstashConfigured: false });
-    },
-  );
+  it.each(PARTS)('reports it as not live when %s alone is missing', async (missing) => {
+    // Each part is individually load-bearing. Reporting "configured" while one
+    // is absent is the reading that sends someone hunting through Upstash for a
+    // delivery that was never published, or never accepted.
+    live();
+    delete process.env[missing];
+    expect(await health()).toMatchObject({ qstashConfigured: false });
+  });
+
+  it('no longer reports a separate cronConfigured field', async () => {
+    // The shared CRON_SECRET is gone; the cron guard is the QStash signature,
+    // whose readiness qstashConfigured already covers.
+    live();
+    expect(await health()).not.toHaveProperty('cronConfigured');
+  });
 });

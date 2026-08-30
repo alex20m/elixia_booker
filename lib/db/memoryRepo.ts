@@ -163,15 +163,6 @@ export function createMemoryRepo(): MemoryRepo {
       return claimed.sort((a, b) => a.releaseEpochMs - b.releaseEpochMs);
     },
 
-    async peekNextRelease(afterMs, nowMs = Date.now()) {
-      let earliest: number | null = null;
-      for (const e of dueEntries) {
-        if (e.claimedAtMs !== undefined && e.claimedAtMs >= nowMs - CLAIM_LEASE_MS) continue;
-        if (e.releaseEpochMs < afterMs) continue;
-        if (earliest === null || e.releaseEpochMs < earliest) earliest = e.releaseEpochMs;
-      }
-      return earliest;
-    },
 
     async pruneDueEntries(beforeMs) {
       let removed = 0;

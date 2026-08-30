@@ -6,7 +6,7 @@
  */
 
 import { createMemoryRepo } from './db/memoryRepo';
-import { qstashTargetFor } from './qstash';
+import { qstashTargetFor, qstashSigningKeysFor } from './qstash';
 import type { BookingBackend } from './elixia';
 import type { Repo } from './db/repo';
 
@@ -37,12 +37,10 @@ export interface AppConfig {
   // account in a deployment start life claiming the same membership tier and
   // the same city — a claim nobody made and nothing checked. They are asked
   // for during setup instead; see lib/service.ts `completeSetup`.
-  /** Shared secret the cron endpoints require. */
-  cronSecret?: string;
   /**
-   * QStash API token. Without one, release instants are not published and the
-   * GitHub Actions watcher remains the only thing driving booking — see
-   * lib/qstash.ts for why that scheduler is the one being replaced.
+   * QStash API token. Without one, release instants are never published and
+   * nothing drives booking at all — QStash is the only scheduler. See
+   * lib/qstash.ts.
    */
   qstashToken?: string;
   /**
@@ -110,25 +108,33 @@ export function encryptionConfigured(): boolean {
 }
 
 /**
- * Whether this deployment can actually schedule bookings through QStash.
+ * Whether this deployment can actually schedule *and* receive bookings through
+ * QStash — the whole round trip, not just the outbound half.
  *
- * Deliberately delegates to `qstashTargetFor` rather than repeating the check,
- * so what health reports and what the scheduler does cannot drift apart — a
- * health endpoint that says "configured" about a rule it has reimplemented is
- * worse than none.
+ * Publishing needs the token and this deployment's own origin
+ * (`qstashTargetFor`); accepting the delivery QStash then makes needs both
+ * signing keys (`qstashSigningKeysFor`), because the tick endpoint
+ * authenticates a QStash call by verifying its signature and nothing else.
+ * Delegates to both rather than reimplementing either, so what health reports
+ * and what the code does cannot drift apart.
  *
  * Reported for the same reason as `encryptionConfigured`: the path is
- * all-or-nothing, so a deployment missing one of the three parts publishes
- * nothing at all while looking entirely healthy from outside.
+ * all-or-nothing, and a deployment missing any one part is the worst case —
+ * messages get published and then every delivery 401s, hours later, on a path
+ * nobody is watching — while looking entirely healthy from outside.
  */
 export function qstashConfigured(): boolean {
-  return (
+  const canPublish =
     qstashTargetFor({
       qstashToken: process.env.QSTASH_TOKEN,
       appUrl: process.env.APP_URL,
-      cronSecret: process.env.CRON_SECRET,
-    }) !== null
-  );
+    }) !== null;
+  const canVerify =
+    qstashSigningKeysFor({
+      currentSigningKey: process.env.QSTASH_CURRENT_SIGNING_KEY,
+      nextSigningKey: process.env.QSTASH_NEXT_SIGNING_KEY,
+    }) !== null;
+  return canPublish && canVerify;
 }
 
 export function loadAppConfig(options: LoadOptions = {}): AppConfig {
@@ -156,7 +162,6 @@ export function loadAppConfig(options: LoadOptions = {}): AppConfig {
     ...(process.env.NOTIFY_FROM_EMAIL ? { notifyFromEmail: process.env.NOTIFY_FROM_EMAIL } : {}),
     dryRun: flag(process.env.DRY_RUN),
     mock: flag(process.env.MOCK_ELIXIA),
-    ...(process.env.CRON_SECRET ? { cronSecret: process.env.CRON_SECRET } : {}),
     ...(process.env.QSTASH_TOKEN ? { qstashToken: process.env.QSTASH_TOKEN } : {}),
     ...(process.env.APP_URL ? { appUrl: process.env.APP_URL } : {}),
     ephemeralStore: options.repo === undefined,

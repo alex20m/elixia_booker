@@ -422,10 +422,10 @@ describe('due entries', () => {
   });
 
   it('claims a release only once, until the claim expires', async () => {
-    // The watcher's own loop can ask "what's due right now" twice in quick
-    // succession around the same release — once before firing it, once again
-    // on the next iteration while it's still inside the claim window. The
-    // second ask must get nothing, or the class gets booked twice.
+    // QStash delivers at least once, so two ticks can ask "what's due right
+    // now" for the same release inside the same claim window — a retried
+    // delivery, or a duplicate message. The second ask must get nothing, or
+    // the class gets booked twice.
     const alices = await addClass(ALICE, 'Bodypump');
     const release = Date.UTC(2026, 3, 1, 5, 0);
     await repo.replaceDueEntries(ALICE, [entry(ALICE, alices.id, release)]);
@@ -463,40 +463,6 @@ describe('due entries', () => {
       claimedAt + CLAIM_LEASE_MS + 1,
     );
     expect(afterLeaseExpires.map((e) => e.releaseEpochMs)).toEqual([release]);
-  });
-
-  it('peeks the earliest unclaimed release without claiming it', async () => {
-    const alices = await addClass(ALICE, 'Bodypump');
-    const sooner = Date.UTC(2026, 3, 1, 5, 0);
-    const later = Date.UTC(2026, 3, 8, 5, 0);
-    await repo.replaceDueEntries(ALICE, [
-      entry(ALICE, alices.id, later),
-      entry(ALICE, alices.id, sooner),
-    ]);
-
-    expect(await repo.peekNextRelease(0)).toBe(sooner);
-    // Peeking must not have claimed it: it is still there to actually claim.
-    expect((await repo.claimDue(sooner, sooner)).map((e) => e.releaseEpochMs)).toEqual([sooner]);
-  });
-
-  it('respects the floor, and reports nothing scheduled that far out', async () => {
-    const alices = await addClass(ALICE, 'Bodypump');
-    const release = Date.UTC(2026, 3, 1, 5, 0);
-    await repo.replaceDueEntries(ALICE, [entry(ALICE, alices.id, release)]);
-
-    expect(await repo.peekNextRelease(release + 1)).toBeNull();
-  });
-
-  it('peek skips a claimed release until its claim expires', async () => {
-    const alices = await addClass(ALICE, 'Bodypump');
-    const release = Date.UTC(2026, 3, 1, 5, 0);
-    await repo.replaceDueEntries(ALICE, [entry(ALICE, alices.id, release)]);
-
-    const claimedAt = Date.UTC(2026, 3, 1, 4, 59);
-    await repo.claimDue(release, release, claimedAt);
-
-    expect(await repo.peekNextRelease(0, claimedAt + CLAIM_LEASE_MS - 1)).toBeNull();
-    expect(await repo.peekNextRelease(0, claimedAt + CLAIM_LEASE_MS + 1)).toBe(release);
   });
 
   it('prunes only the releases older than the cutoff, and says how many', async () => {

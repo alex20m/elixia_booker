@@ -23,11 +23,12 @@ export const maxDuration = 60;
 const SAFETY_MARGIN_MS = 5_000;
 
 /**
- * The booking tick. Fired by the booking watcher (see
- * .github/workflows/watch.yml), which sleeps to the exact release instant
- * using its own clock rather than depending on a scheduler's punctuality.
+ * The booking tick. Fired by a QStash delayed message scheduled for
+ * T-minus-lead before each release instant (lib/qstash.ts); it then does its
+ * own millisecond-precise sleep to T-0 (lib/booking.ts) before booking.
  *
- * GET and POST both work so any caller can drive it.
+ * GET and POST both work so any caller with a valid QStash signature can drive
+ * it.
  */
 async function tick(request: Request): Promise<Response> {
   return handle(async () => {

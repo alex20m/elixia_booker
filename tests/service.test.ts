@@ -732,8 +732,9 @@ describe('the booking tick', () => {
   });
 
   it('still fires when the tick arrives a minute late', async () => {
-    // GitHub Actions schedules are queued, not punctual. Skipping the slot
-    // would be strictly worse than trying immediately.
+    // A QStash delivery can land slightly after its scheduled instant, or be
+    // retried after one. Skipping the slot would be strictly worse than trying
+    // immediately.
     const profile = await linkedProfile();
     const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
     const release = firstRelease(sub);
@@ -743,10 +744,9 @@ describe('the booking tick', () => {
   });
 
   it('does not double-book when two ticks race for the same release', async () => {
-    // The watcher's own loop can plausibly call this twice in quick
-    // succession around one release — it fires the tick, and by the time
-    // that request returns and the loop asks again, the same release can
-    // still fall inside the next claim window. The second call must find
+    // QStash delivers at least once, so one release instant can plausibly
+    // trigger this twice — a retried delivery, or a duplicate message — with
+    // both landing inside the same claim window. The second call must find
     // nothing left to claim.
     const profile = await linkedProfile();
     const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
@@ -1078,12 +1078,13 @@ describe('the remembered centre', () => {
 
   it('does not touch the booking schedule, which the centre has no bearing on', async () => {
     const profile = await linkedProfile();
-    await addSubscription(config, profile, BODYPUMP, nowMs);
-    const before = await repo.peekNextRelease(0);
+    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
 
     await saveCenterDefaults(config, profile, { center: '740' });
 
-    expect(await repo.peekNextRelease(0)).toBe(before);
+    // The releases the subscription scheduled are still there, untouched.
+    const due = await repo.claimDue(0, Number.MAX_SAFE_INTEGER);
+    expect(due.map((e) => e.releaseEpochMs)).toContain(firstRelease(sub));
   });
 
   it('refuses a value too long to be a centre, rather than storing it', async () => {

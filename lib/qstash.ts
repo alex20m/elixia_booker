@@ -1,20 +1,21 @@
 /**
  * Scheduling the booking tick through QStash.
  *
- * The booking watcher (.github/workflows/watch.yml) exists because GitHub's own
- * cron is not punctual enough to be trusted with a release instant. But its
- * *start* still depends on that same scheduler, and GitHub documents a
+ * Booking used to be driven by a long-lived GitHub Actions job that slept to
+ * the release on the runner's own clock. That job existed because GitHub's own
+ * cron is not punctual enough to be trusted with a release instant — but its
+ * *start* still depended on that same scheduler, and GitHub documents a
  * sufficiently loaded schedule trigger as dropped outright rather than merely
- * delayed — which is what happened on 2026-08-28, leaving no watcher awake for
- * nine hours and missing a booking with nothing in the Actions log to show for
- * it: no failed run, no queued run, just an absent one.
+ * delayed. That happened on 2026-08-28, leaving no job awake for nine hours and
+ * missing a booking with nothing in the Actions log to show for it: no failed
+ * run, no queued run, just an absent one.
  *
  * QStash removes the scheduler from that path entirely. Instead of a job that
  * must already be running in order to notice a release, each release instant is
  * handed to a service whose whole product is delivering an HTTP call at a
  * chosen time, with retries and a dead-letter queue behind it.
  *
- * Two properties of the existing design are what make this simple:
+ * Two properties of the design are what make this simple:
  *
  *  - **The tick claims a window, not a booking.** `runDueBookings` claims
  *    everything due within a minute either side (lib/service.ts), so one
@@ -40,8 +41,7 @@
  * budget: enough to refresh a session and resolve the class id before
  * lib/booking.ts performs its own millisecond-precise sleep to T-0, while
  * leaving most of the invocation's time budget for that sleep and the retry
- * loop after it. Mirrors the lead the watcher workflow uses for the same
- * reason.
+ * loop after it.
  */
 export const TICK_LEAD_MS = 20_000;
 
@@ -101,22 +101,22 @@ export interface QstashTarget {
 }
 
 /**
- * Whether this deployment can schedule through QStash at all.
+ * Whether this deployment can publish a scheduled tick through QStash at all.
  *
- * All three parts are required together. Being *partly* configured is the
- * genuinely dangerous state: a message published without the cron secret is
- * delivered and 401s until it exhausts its retries, and one with no origin
- * cannot be addressed at all. Both fail silently at delivery time — hours
- * after publishing, on a path nobody is watching — so the refusal happens here
- * instead, where the fallback is simply the existing watcher.
+ * Both parts are required together. Being *partly* configured is the genuinely
+ * dangerous state: a message pointed at no origin cannot be addressed at all,
+ * and it fails silently at delivery time — hours after publishing, on a path
+ * nobody is watching — so the refusal happens here instead. Whether an inbound
+ * delivery can then be *authenticated* is a separate check on the signing keys
+ * (`qstashSigningKeysFor`); `qstashConfigured` in lib/appConfig.ts is what ties
+ * the two together for the health endpoint.
  */
 export function qstashTargetFor(config: {
   qstashToken?: string | undefined;
   appUrl?: string | undefined;
-  cronSecret?: string | undefined;
 }): QstashTarget | null {
-  const { qstashToken, appUrl, cronSecret } = config;
-  if (!qstashToken || !appUrl || !cronSecret) return null;
+  const { qstashToken, appUrl } = config;
+  if (!qstashToken || !appUrl) return null;
   return { appUrl };
 }
 
@@ -229,9 +229,9 @@ export function tickMessagesFor(
  * Publish the ticks for a set of release instants.
  *
  * Never throws. Scheduling happens *after* the due rows are written, and those
- * rows are what the existing watcher books from, so a QStash outage must
- * degrade to "the old mechanism is still driving this" rather than failing the
- * settings save that triggered the reindex.
+ * rows are the source of truth the tick books from, so a QStash outage must
+ * degrade to "nothing new was enqueued this run, the next reindex will retry"
+ * rather than failing the settings save that triggered the reindex.
  */
 export async function scheduleBookingTicks(
   releaseEpochMs: readonly number[],
