@@ -19,6 +19,19 @@ not actually vetted.
 Wait for everything to finish, then merge. The whole difficulty is that GitHub
 will happily tell you everything has finished when it has not yet started.
 
+> **Tried and reverted: running this as `context: fork` in the background.**
+> Forking the whole loop into an isolated subagent looks like the obvious fix
+> for the context this skill burns during a long wait — the fork's own polling
+> never touches the calling conversation. In testing it silently failed to
+> come back: the forked subagent started a background sleep, yielded, and was
+> never resumed — no error, no notification, just a PR that sat unmerged with
+> nothing watching it. Whether that's specific to one execution environment or
+> general is unconfirmed; until background-fork resumption is verified
+> end-to-end (a real multi-minute CI wait, observed to actually resume and
+> report back), keep this loop inline in the calling conversation as below. A
+> silent no-op on a step that ends with an irreversible merge is worse than
+> the context cost this would have saved.
+
 ## The one trap
 
 Ask GitHub for a PR's checks a few seconds after opening it and you get a short
@@ -34,15 +47,12 @@ satisfied, trivially, in the window before the real work starts — and merging
 there means merging code CI never looked at.
 
 So the rule is not "wait for the checks I can see". It is "wait until GitHub says
-the commit is mergeable and passing, having given it long enough to know". There
-is no manifest to maintain and no workflow file to parse — just one field and one
-floor on how early you trust it.
+the commit is mergeable and passing, having given it long enough to know."
 
 ## What green means
 
-Do not reconstruct this from the check list. GitHub already computes it, over
-every check run *and* commit status attached to the head commit, and hands it to
-you as one field: `mergeable_state` on the PR.
+Read `mergeable_state` on the PR — GitHub's own rollup over every check run and
+commit status on the head commit. Don't reconstruct it from the check list.
 
 | `mergeable_state` | Meaning | Merge? |
 |---|---|---|
@@ -54,43 +64,29 @@ you as one field: `mergeable_state` on the PR.
 | `unknown` | GitHub has not finished computing it | Re-poll; not a verdict |
 
 `clean` is the only value you merge on, and it is strict: a *failed* check makes
-the state `unstable` just as a pending one does. That is the right default — a
-red deploy preview should stop you and make you look — but it means an `unstable`
-state that never resolves is your cue to read the check list and find out which
-of the two it is.
+the state `unstable` just as a pending one does. An `unstable` that never
+resolves is your cue to read the check list and find out which of the two it is.
 
-Reading this field rather than the check list is what makes the skill portable.
-External services — deploy previews, coverage bots, preview-comment bots — never
-appear in `.github/workflows/` and cannot be enumerated from the repo, but they
-report against the commit, so GitHub's rollup counts them and you get them for
-free. There is no list to maintain and no YAML to parse.
-
-Anchor every reading to the **current head SHA**. A green result for code you
-have since replaced says nothing about what you are about to merge.
+This field is what makes the skill portable: external services (deploy
+previews, coverage bots) report against the commit and GitHub's rollup counts
+them for free — no YAML to parse, no list to maintain. Anchor every reading to
+the **current head SHA**; a green result for code you have since replaced says
+nothing about what you are about to merge.
 
 ## Arm this only when the branch is finished
 
 Merging is the one irreversible step here, and the loop runs asynchronously — a
 wake-up lands whenever it lands, including in the middle of you editing the same
-branch. So start it only when the work is genuinely done: the change is complete,
-the tests you intend to add exist, and you have no further commits planned.
-
-Before every merge, two mechanical checks:
+branch. Start it only when the work is genuinely done. Before every merge:
 
 ```bash
 git status --porcelain          # must be empty — no uncommitted work
 git log origin/<branch>..HEAD   # must be empty — nothing unpushed
 ```
 
-Either one non-empty means the PR does not contain the work yet, and CI validated
-something other than what you meant to ship.
-
-If a wake-up arrives while you are still working — you went back to fix
-something, a review landed, you thought of one more test — **do not merge on it.**
-Re-arm the wait and let the new commits go through CI first. A merge that races
-your own editing is the same class of mistake as merging before CI finishes: it
-lands a state nobody vetted, and everything still in flight has to become a
-second PR.
+Either one non-empty means the PR does not contain the work yet. If a wake-up
+arrives while you are still working, **do not merge on it** — re-arm the wait
+and let the new commits go through CI first.
 
 ## The loop
 
@@ -106,9 +102,9 @@ changes, the evidence is void and the clock restarts (step 5).
 ### 2. Wait before looking
 
 Looking early cannot teach you anything, so spend the time asleep rather than
-polling. Estimate the pipeline's duration from the repo's own history —
-`get_check_runs` on a recently merged PR reports `started_at` and `completed_at`
-per job — and default to **3 minutes, then every 2** when there is nothing to
+polling. Estimate the pipeline's duration from the repo's own history
+(`get_check_runs` on a recently merged PR reports `started_at`/`completed_at`
+per job); default to **3 minutes, then every 2** when there is nothing to
 measure. Expect longer for suites with browser or container steps.
 
 Wait with a **background** `sleep`, then end the turn:
@@ -118,20 +114,18 @@ Bash({command: "sleep 180", run_in_background: true, description: "wait before f
 ```
 
 The session is re-invoked when it exits, so a wait costs one tool call and no
-context. For waits beyond ~10 minutes, or where the container may be recycled,
-`mcp__Claude_Code_Remote__send_later({delay_minutes: N, message: "..."})` survives
-restarts, at one-minute granularity.
+context. For waits beyond ~10 minutes, or where the session's container may be
+recycled while idle, `mcp__Claude_Code_Remote__send_later({delay_minutes: N,
+message: "..."})` survives restarts because it wakes this same, addressable
+session rather than an ephemeral subagent — at one-minute granularity.
 
 Two non-options: foreground `sleep` is blocked in some harnesses, and firing
-tool calls back-to-back to pass time burns context while revealing nothing. A
-`Monitor` poll loop that exits on a terminal state is a good fit *if* the shell
-can reach the GitHub API — worth one call to check, since sandboxed environments
-often proxy or block `api.github.com` and ship no `gh` CLI, leaving the MCP tools
-as the only route.
+tool calls back-to-back to pass time burns context while revealing nothing.
 
-A PR-activity subscription, where available, is a fine way to hear about failures
-sooner — but never a replacement for the loop. Success events and pushes are
-documented to arrive late or not at all, so silence from it is not evidence.
+A PR-activity subscription, where available, is a fine way to hear about
+failures sooner — but never a replacement for the loop. Success events and
+pushes are documented to arrive late or not at all, so silence from it is not
+evidence.
 
 ### 3. Poll one field
 
@@ -152,63 +146,42 @@ mcp__github__pull_request_read({method: "get_status",     owner, repo, pullNumbe
 ```
 
 Both, when you do reach for them. Actions jobs arrive as *check runs* while many
-external services post *commit statuses*, so either one alone is half the picture
-— a combined status of `success` is perfectly normal while every Actions job is
-still running.
+external services post *commit statuses*, so either one alone is half the
+picture — a combined status of `success` is perfectly normal while every
+Actions job is still running.
 
 `skipped` is a pass; conditional jobs and unconfigured integrations skip
 routinely. `cancelled` is the one that reads like a pass and is not — a killed
 run produced no verdict, so re-run it or push a fix rather than counting it.
 
 **Expect these reads to lag, sometimes by many minutes.** A check run can report
-`in_progress`, and the job's own step list can show a step still running, long
-after both actually finished — the completion timestamp you eventually get back
-is earlier than the moment you asked. So a job that looks stuck is usually a
-stale read, not a hung runner. Before concluding anything is wrong, check the
-job's `completed_at` against the wall clock rather than against how long you
-have been waiting, and re-poll once. Do not re-run a job, cancel it, or start
-debugging a "hang" on the strength of one stale-looking read — and do not tell
-the user something is stuck until a fresh read at a known time still says so.
+`in_progress` long after it actually finished. Before concluding anything is
+wrong, check the job's `completed_at` against the wall clock and re-poll once —
+don't re-run, cancel, or start debugging a "hang" off one stale-looking read.
 
 ### 4. Know what the field cannot tell you
 
-`mergeable_state` is a rollup over the checks that **exist**. It does not predict
-checks that are coming. A repo with no CI at all reports `clean` immediately and
-permanently — correctly — and that is the same answer it gives in the moments
-after a push, before anything has been created. So a `clean` obtained seconds
-after pushing is not evidence of anything, however green it looks.
+`mergeable_state` is a rollup over the checks that **exist**. It does not
+predict checks that are coming. A repo with no CI at all reports `clean`
+immediately and permanently — the same answer it gives in the moments after a
+push, before anything has been created. It is also officially **undocumented**
+and can go briefly stale between consecutive calls — the best single signal
+available, not a contract. What it does track well: an Actions job merely
+running is enough to hold the state at `unstable`.
 
-Two further reasons to keep it as your primary signal rather than your only one:
-it is an officially **undocumented** field — GitHub staff have said so on the
-record, and the GraphQL enum mirroring it has been seen returning values its own
-documentation omits — and tools built on it report it going briefly stale or
-inconsistent between consecutive calls. It is the best single signal available,
-not a contract.
+The blind spot is narrow — PR-open to first check run existing has measured at
+five-to-six seconds, and the step-2 floor clears that by two orders of
+magnitude — but two cases still deserve an explicit decision:
 
-What it does track well, measured with every externally-reported check already
-terminal so nothing else could explain the reading: an Actions job merely running
-is enough to hold the state at `unstable`. The field follows CI progress on its
-own — it is only the not-yet-created that it cannot see.
-
-That blind spot is narrow. From a PR opening to its first Actions check run
-existing was six seconds in one measurement and five in another. The floor in
-step 2 clears it by two orders of magnitude, and by three minutes in any
-transient disagreement has resolved too. That is the floor's job — do not drop it
-on the grounds that the field looks authoritative. The way to remove it is
-configuration, not a better reading of the API; see the last section.
-
-Two cases still deserve an explicit decision rather than a silent merge:
-
-- **A `clean` PR with no checks at all**, minutes after the push. Either CI does
-  not run on pull requests here, or nothing was triggered. Both are fine reasons
-  to merge — but confirm which, with one `get_check_runs`, instead of assuming.
+- **A `clean` PR with no checks at all, minutes after the push.** Confirm with
+  one `get_check_runs` whether CI just doesn't run here, or nothing was
+  triggered — both are fine reasons to merge, but know which.
 - **Workflows that trigger other workflows** (`on: workflow_run`). A second run
-  is created only after the first finishes, so a brief `clean` can appear between
-  them. If the repo has any, confirm with
-  `mcp__github__actions_list({method: "list_workflow_runs", owner, repo,
-  workflow_runs_filter: {branch: "<head branch>"}})` — keep the entries whose
-  `head_sha` matches yours and require every `status` to be `completed`. Read
-  only `head_sha`, `status`, and `conclusion`; these objects are very large.
+  is created only after the first finishes, so a brief `clean` can appear
+  between them. If the repo has any, confirm with `mcp__github__actions_list({
+  method: "list_workflow_runs", owner, repo, workflow_runs_filter: {branch:
+  "<head branch>"}})`, keeping entries whose `head_sha` matches yours and
+  requiring every `status` to be `completed`.
 
 Both are exceptions. The ordinary path is step 3 alone.
 
@@ -218,11 +191,12 @@ Both are exceptions. The ordinary path is step 3 alone.
 mcp__github__get_job_logs({owner, repo, run_id, failed_only: true, return_content: true, tail_lines: 200})
 ```
 
-`run_id` is in the failing check's `html_url` (`.../actions/runs/<run_id>/job/<job_id>`).
+`run_id` is in the failing check's `html_url`
+(`.../actions/runs/<run_id>/job/<job_id>`).
 
 Fix the underlying problem, reproducing locally where you can. Never reach green
-by weakening an assertion, skipping a test, or re-running a job until it passes —
-a flake you re-ran away is a bug you shipped, and where the suite is the only
+by weakening an assertion, skipping a test, or re-running a job until it passes
+— a flake you re-ran away is a bug you shipped, and where the suite is the only
 review, nothing else will catch it.
 
 After pushing, **the clock and the evidence reset**: back to step 1 with the new
@@ -233,11 +207,10 @@ head SHA, and wait out the pipeline again.
 `mergeable_state: clean` proves the head commit's own checks passed — it does
 not prove nothing new has landed on the default branch since. GitHub only
 reports `behind` for that when the repo requires branches to be up to date
-before merging (a stricter branch-protection setting most repos do not turn
-on); without it, a PR can sit `clean` while `main` has moved ahead, and
-squash-merging it produces a merge nobody's CI ever ran against the code as it
-will actually land. So this is the last gate, checked explicitly rather than
-inferred from `mergeable_state`:
+before merging (a stricter setting most repos don't turn on); without it, a PR
+can sit `clean` while `main` has moved ahead, and squash-merging it produces a
+merge nobody's CI ever ran against the code as it will actually land. Check
+explicitly rather than inferring it:
 
 ```bash
 git fetch origin main
@@ -245,19 +218,17 @@ git merge-base --is-ancestor origin/main HEAD && echo up-to-date || echo behind
 ```
 
 - **Behind** → rebase onto `origin/main`, resolve any conflicts, push, and go
-  back to step 1 with the new head SHA. Never merge on the strength of the old
-  evidence — a rebase changes the commit, and only a fresh green run vetted
-  what you are actually about to land. Loop this as many times as it takes;
-  the check is cheap, and a `main` that moved once can move again while you
-  wait out the re-run.
+  back to step 1 with the new head SHA. Old evidence doesn't carry over a
+  rebase, and a `main` that moved once can move again while you wait out the
+  re-run — loop this as many times as it takes.
 - **Up to date** → proceed to merge below.
 
 ### 7. Merge
 
-Confirm the PR is still open, that the SHA you validated is still `head.sha`, and
-that the working tree is clean with nothing unpushed. Then merge with the method
-the repo's conventions call for — squash where each PR should collapse to a
-single commit on the default branch:
+Confirm the PR is still open, that the SHA you validated is still `head.sha`,
+and that the working tree is clean with nothing unpushed. Then merge with the
+method the repo's conventions call for — squash where each PR should collapse
+to a single commit on the default branch:
 
 ```
 mcp__github__merge_pull_request({
@@ -268,78 +239,62 @@ mcp__github__merge_pull_request({
 })
 ```
 
-Supplying `commit_title` and `commit_message` keeps history readable; the default
-squash body is the concatenation of every "fix lint" commit on the branch.
+Supplying `commit_title` and `commit_message` keeps history readable; the
+default squash body is the concatenation of every "fix lint" commit on the
+branch.
 
 Verify rather than assume: re-read the PR and confirm `merged_at` is set. A 405
 means GitHub refused — re-read `mergeable_state` for the reason instead of
-retrying. Note that `list_pull_requests` reports `merged: false` even for merged
-PRs, so trust `merged_at` from `pull_request_read`.
+retrying. Note that `list_pull_requests` reports `merged: false` even for
+merged PRs, so trust `merged_at` from `pull_request_read`.
 
 Report the outcome plainly: merged, or what is blocking it.
 
 ## Do not
 
 - **Do not merge on "everything I can see has passed."** That is the trap this
-  whole skill exists to close — the checks you can see are not the checks there
-  will be.
+  whole skill exists to close — the checks you can see are not the checks
+  there will be.
 - **Do not trust a `clean` you got seconds after pushing.** The field describes
   the checks that exist, and at that point none do.
-- **Do not rebuild the verdict by hand from the check list** when `mergeable_state`
-  already aggregates it. Reach for the list to explain a state, not to determine
-  one — and never read the combined status alone, which may carry only a deploy
-  provider's entry and say `success` while the tests are mid-flight.
-- **Do not use auto-merge as a shortcut** *in a repo with no required checks.*
-  GitHub's auto-merge waits only for checks branch protection marks *required*;
+- **Do not rebuild the verdict by hand from the check list** when
+  `mergeable_state` already aggregates it. Reach for the list to explain a
+  state, not to determine one.
+- **Do not use auto-merge as a shortcut** *in a repo with no required checks* —
+  GitHub's auto-merge waits only for checks branch protection marks required;
   with none configured it merges as soon as it can, which is this same bug with
   fewer chances to notice. Where required checks exist it is not a shortcut but
   the right answer — see below.
 - **Do not merge while you are still working on the branch.** Green on a commit
-  you have already moved past is not permission to land it, and the merge cannot
-  be taken back.
+  you have already moved past is not permission to land it.
 - **Do not stop watching a PR you opened.** An unmerged PR left behind is an
   unfinished task, and no one else is coming to finish it.
 - **Do not skip the step 6 freshness check because `mergeable_state` said
-  `clean`.** `clean` means the head commit's own checks passed, not that
-  `main` has stood still — those are different questions unless the repo
-  requires branches to be up to date.
+  `clean`.** `clean` means the head commit's own checks passed, not that `main`
+  has stood still, unless the repo requires branches to be up to date.
 
 ## How to delete the floor: require the checks
 
-The floor is a symptom of repository configuration, not a limitation you can read
-your way around. Without required status checks, the question it guards is
-**undecidable**: "will another check appear on this commit?" has no answer,
-because any GitHub App may create a check run at any moment and nothing declares
-in advance that it intends to. GitHub cannot report a check nobody has created
-yet. Time is the only bound available, which is why there is a floor.
+The floor is a symptom of repository configuration, not a limitation you can
+read your way around. Without required status checks, "will another check
+appear on this commit?" is undecidable — any GitHub App may create a check run
+at any moment, and GitHub cannot report one nobody has created yet.
 
-Declaring required status checks turns that open question into a closed one. The
-expected set is written down, so GitHub reports a required check that has not
-reported *yet* as expected — the PR reads "Waiting for status to be reported" and
-`mergeable_state` is `blocked`, not `clean`. There is then no instant at which a
-commit with unfinished checks looks mergeable, and the window this skill spends a
-floor to cover simply does not exist.
+Declaring required status checks turns that into a closed question: a required
+check that hasn't reported *yet* reads `blocked`, not `clean`, so there is no
+instant where an unfinished commit looks mergeable. Two things then change:
 
-In a repo configured that way, two things change:
-
-- **Poll immediately.** `blocked` covers the early window deterministically, so
-  the floor becomes a pure efficiency choice rather than a correctness guard.
+- **Poll immediately** — `blocked` covers the early window deterministically.
 - **Better, stop polling.** `mcp__github__enable_pr_auto_merge` with
-  `mergeMethod: "SQUASH"` hands the whole loop to GitHub, which merges exactly
-  when the required checks pass. The warning against auto-merge above applies
-  only to repos *without* required checks; with them it is the correct mechanism
-  and this skill reduces to arming it once. This still does not cover step 6's
-  freshness check unless the branch-protection rule also requires branches to
-  be up to date before merging — without that, GitHub's auto-merge will happily
-  merge a `clean` PR sitting behind a `main` that has since moved.
+  `mergeMethod: "SQUASH"` hands the loop to GitHub, which merges exactly when
+  required checks pass. This still doesn't cover step 6's freshness check
+  unless the branch-protection rule also requires being up to date.
 
-Setting it up is a repository setting, not something the API tools here can do:
-Settings → Branches (or Rules → Rulesets) → protect the default branch → *Require
-status checks to pass before merging*, then add each job name to gate. Names
-appear in the picker once they have run at least once.
-
-One failure mode to design around: a required check whose workflow is skipped by
-path or branch filtering never reports at all, and the PR blocks forever. Only
-require checks that run unconditionally on every pull request.
+Setting it up is a repository setting: Settings → Branches (or Rules →
+Rulesets) → protect the default branch → *Require status checks to pass before
+merging*, then add each job name (names appear once they've run at least once).
+One trap: a required check whose workflow is skipped by path/branch filtering
+never reports, and the PR blocks forever — only require checks that run
+unconditionally on every pull request.
 
 Until a repo is configured this way, keep the floor.
