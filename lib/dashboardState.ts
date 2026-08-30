@@ -59,6 +59,77 @@ export function describeUnavailable(
   );
 }
 
+const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
+const MONTH_SHORT = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+] as const;
+
+const pad2 = (n: number): string => String(n).padStart(2, '0');
+
+/**
+ * "Wed 9 Sep" for a calendar date "YYYY-MM-DD".
+ *
+ * Read in UTC rather than in the reader's own timezone, the same reasoning
+ * `weekdayOfIsoDate` (lib/elixia.ts) gives: a date-only string names a
+ * calendar day, and parsing it in any zone but UTC can walk that day
+ * backwards or forwards across midnight depending on where the reader is.
+ */
+export function formatClassDate(isoDate: string): string {
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  return `${WEEKDAY_SHORT[d.getUTCDay()]} ${d.getUTCDate()} ${MONTH_SHORT[d.getUTCMonth()]}`;
+}
+
+/**
+ * "Wed 2 Sep, 19:00" for a release instant.
+ *
+ * A fixed format rather than `toLocaleString()`, which renders the day and
+ * month as bare digits in whatever order the reader's own locale prefers —
+ * exactly the pair (`02/09` vs `09/02`) a US-locale browser and everyone else
+ * disagree about, for a value where being misread has real consequences.
+ * Read in the reader's own local time (not UTC, unlike `formatClassDate`
+ * above): this names an instant, and the whole point is showing it at the
+ * wall-clock time it actually is for whoever is looking at the screen.
+ */
+export function formatReleaseAt(iso: string): string {
+  const d = new Date(iso);
+  return (
+    `${WEEKDAY_SHORT[d.getDay()]} ${d.getDate()} ${MONTH_SHORT[d.getMonth()]}, ` +
+    `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+  );
+}
+
+/** What `classStatus` reports: the line to show, and whether it is good news. */
+export interface ClassStatus {
+  text: string;
+  /** Whether this is an actual opening time, worth the accent colour. */
+  emphasize: boolean;
+}
+
+/**
+ * The one-line status shown where a release time goes in the class list.
+ *
+ * Always returns something, so a row is never left blank where a date and
+ * time are expected — silence there reads as broken, not as "there is
+ * nothing to add". `notFound` covers both ways a class can be missing from
+ * Elixia's schedule (withdrawn altogether, or absent for one specific date);
+ * either already gets its own detailed banner right below the row, so this
+ * is deliberately not that explanation — it is the glanceable version of the
+ * same fact, for a list read a row at a time rather than one row read
+ * closely.
+ */
+export function classStatus(input: {
+  enabled: boolean;
+  notFound: boolean;
+  nextReleaseAt: string | null;
+}): ClassStatus {
+  if (!input.enabled) return { text: 'Paused', emphasize: false };
+  if (input.notFound) return { text: "Not on Elixia's schedule", emphasize: false };
+  if (input.nextReleaseAt) {
+    return { text: `Opens ${formatReleaseAt(input.nextReleaseAt)}`, emphasize: true };
+  }
+  return { text: 'No upcoming release', emphasize: false };
+}
+
 /** A failed request, carrying the status so callers can tell 401 from the rest. */
 export class ApiError extends Error {
   readonly status: number;

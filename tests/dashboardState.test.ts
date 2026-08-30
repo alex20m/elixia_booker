@@ -2,9 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ApiError,
   apiRequest,
+  classStatus,
   dashboardScreen,
   describeUnavailable,
   describeUnlisted,
+  formatClassDate,
+  formatReleaseAt,
   loadDashboard,
   tabFromSearch,
   type DashboardLoad,
@@ -188,6 +191,66 @@ describe('describeUnavailable', () => {
     // Unlike a withdrawn class, this must never read as a permanent removal.
     const message = describeUnavailable('2026-08-11', '2026-08-11')!;
     expect(message).toMatch(/one-off|later date/i);
+  });
+});
+
+describe('formatClassDate', () => {
+  it('reads a calendar date as itself, not shifted by the reader\'s own timezone', () => {
+    // Parsed in UTC deliberately (see the function's own comment): a reader
+    // west of UTC parsing this date-only string in local time would see it
+    // roll back to the day before.
+    expect(formatClassDate('2026-09-09')).toBe('Wed 9 Sep');
+  });
+
+  it('is a fixed, unambiguous format rather than day/month digits', () => {
+    // "09/09" and "02/09" are exactly the pair a US-locale reader and
+    // everyone else disagree about — spelling the month out removes the
+    // question entirely.
+    expect(formatClassDate('2026-09-02')).not.toMatch(/\d\/\d/);
+  });
+});
+
+describe('formatReleaseAt', () => {
+  it('names the weekday, day and month, then a 24h time', () => {
+    const iso = new Date(2026, 8, 2, 19, 0).toISOString();
+    expect(formatReleaseAt(iso)).toBe('Wed 2 Sep, 19:00');
+  });
+
+  it('pads a single-digit minute, so the row does not misalign next to others', () => {
+    const iso = new Date(2026, 8, 2, 7, 5).toISOString();
+    expect(formatReleaseAt(iso)).toBe('Wed 2 Sep, 07:05');
+  });
+});
+
+describe('classStatus', () => {
+  it('says Paused before anything else, even when a release time exists', () => {
+    // A paused class keeps its computed release around (so resuming it does
+    // not need a fresh reindex to look right) — but showing that time would
+    // read as still active.
+    expect(
+      classStatus({ enabled: false, notFound: false, nextReleaseAt: '2026-09-02T16:00:00.000Z' }),
+    ).toEqual({ text: 'Paused', emphasize: false });
+  });
+
+  it('flags a class missing from the schedule ahead of a stale release time', () => {
+    expect(
+      classStatus({ enabled: true, notFound: true, nextReleaseAt: '2026-09-02T16:00:00.000Z' }),
+    ).toEqual({ text: "Not on Elixia's schedule", emphasize: false });
+  });
+
+  it('shows the formatted opening time, and marks it worth emphasis', () => {
+    const iso = new Date(2026, 8, 2, 19, 0).toISOString();
+    expect(classStatus({ enabled: true, notFound: false, nextReleaseAt: iso })).toEqual({
+      text: 'Opens Wed 2 Sep, 19:00',
+      emphasize: true,
+    });
+  });
+
+  it('says there is no upcoming release when nothing else explains the gap', () => {
+    expect(classStatus({ enabled: true, notFound: false, nextReleaseAt: null })).toEqual({
+      text: 'No upcoming release',
+      emphasize: false,
+    });
   });
 });
 
