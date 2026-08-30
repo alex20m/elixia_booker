@@ -414,7 +414,7 @@ function ClassList({ view, refresh }: { view: DashboardView; refresh: () => Prom
                   await refresh();
                 }}
               >
-                {s.enabled ? <PauseIcon size={22} /> : <PlayIcon size={22} />}
+                {s.enabled ? <PauseIcon size={26} /> : <PlayIcon size={26} />}
                 <span className="btn-label">{s.enabled ? 'Pause' : 'Resume'}</span>
               </ActionButton>
               <ActionButton
@@ -427,7 +427,7 @@ function ClassList({ view, refresh }: { view: DashboardView; refresh: () => Prom
                   await refresh();
                 }}
               >
-                <TrashIcon size={22} />
+                <TrashIcon size={26} />
                 <span className="btn-label">Remove</span>
               </ActionButton>
             </div>

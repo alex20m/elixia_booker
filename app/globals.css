@@ -1248,8 +1248,8 @@ button.link .spinner {
   }
 
   .row-action-btn {
-    width: 36px;
-    height: 36px;
+    width: var(--tap);
+    height: var(--tap);
     min-height: 0;
     padding: 0;
   }
