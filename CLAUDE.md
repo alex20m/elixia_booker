@@ -440,12 +440,9 @@ git push -u origin <branch-name>
 
 Open an MR from `<branch-name>` to `main` and wait for CI/CD to run.
 
-- Invoke the `merge-on-green` skill with its arguments (owner, repo, PR
-  number, branch, worktree path) to watch the pipeline and merge. It runs as a
-  background subagent, so the turn can end while it waits — that is the point,
-  it keeps a multi-minute CI wait off this conversation's context. Do NOT
-  remove the worktree until it reports back `MERGED`.
-- CI failures found during that wait are the skill's job to fix and re-push (it works in `worktree_path` directly); it only reports `BLOCKED` back here when a failure needs a decision only you or the user can make.
+- Follow the `merge-on-green` skill to watch the pipeline and merge. Do NOT
+  remove the worktree or stop the agent until all checks pass.
+- If CI fails, iterate in the same worktree/branch and re-run the pipeline.
 - Once all checks are green, merge automatically — see
   [PR & Merge Policy](#pr--merge-policy-default-auto). Do not wait to be asked,
   unless the user said not to merge this particular task.
