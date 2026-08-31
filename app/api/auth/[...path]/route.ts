@@ -159,8 +159,44 @@ function withVerificationLanding(original: RouteHandler): RouteHandler {
   };
 }
 
+const isGetSession = (path: string[]): boolean => path.length === 1 && path[0] === 'get-session';
+
+/** A response this proxy's own upstream call reported as a network-level blip, not an answer. */
+const isTransientFailure = (response: Response): boolean => response.status >= 500;
+
+/**
+ * Retries the one session check every sign-in makes of itself.
+ *
+ * A fresh sign-in makes this call twice over inside Neon Auth's own handler:
+ * once to mint the signed session-data cookie from the new session token, and
+ * again when the client refetches its session right afterwards. Either one
+ * hitting a one-off blip talking to the managed instance — the kind that
+ * clears by the next attempt — comes back as a 502 with no session in it, even
+ * though the credentials were correct and the session cookie is already
+ * sitting on the response. The sign-in form has no way to tell that apart from
+ * a real failure, so it shows the same dead end either way: the password field
+ * clears and the visitor is left signed in but looking signed out, until they
+ * reload the page by hand or retry and get lucky.
+ *
+ * A wrong password is a 200 with an empty session, never a 502 — so retrying
+ * only on a transient status here can never paper over a real failure, only
+ * the network blip the credentials already survived. Scoped to `get-session`
+ * alone and to a single retry: this is absorbing one blip, not building a
+ * general-purpose retry policy for a proxy that forwards mutations too.
+ */
+function withSessionRetry(original: RouteHandler): RouteHandler {
+  return async (request, context) => {
+    const { path } = await context.params;
+    if (!isGetSession(path)) return original(request, context);
+
+    const first = await original(request, context);
+    if (!isTransientFailure(first)) return first;
+    return original(request, context);
+  };
+}
+
 export const GET = handler
-  ? withVerificationLanding(withAccountPurge(handler.GET, isDeleteUserCallback))
+  ? withVerificationLanding(withAccountPurge(withSessionRetry(handler.GET), isDeleteUserCallback))
   : unconfigured;
 export const POST = handler ? withAccountPurge(handler.POST, isDeleteUser) : unconfigured;
 export const PUT = handler?.PUT ?? unconfigured;

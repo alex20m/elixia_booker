@@ -144,6 +144,69 @@ describe('every other auth request', () => {
 });
 
 /**
+ * GET /api/auth/get-session — the check every sign-in makes of itself right
+ * after it succeeds.
+ *
+ * Neon Auth's own handler makes this call twice over on a fresh sign-in: once
+ * inside the proxy, to mint the signed session-data cache cookie from the new
+ * session token, and again when the client refetches its session afterwards.
+ * A one-off blip talking to the managed instance — the kind that clears on the
+ * next attempt — turns either of those into a 502 with no session in it. The
+ * credentials were correct and the session cookie is already sitting on the
+ * response; the only thing that failed was this follow-up check. But the
+ * sign-in form has no way to tell "your password was wrong" apart from "the
+ * session check after your password was right happened to blip", so it shows
+ * the same dead end either way: the password field clears, a toast most people
+ * scroll past fires, and the visitor is left signed in but looking signed out
+ * until they reload the page by hand or try again and get lucky.
+ *
+ * The fix is narrow on purpose: retry this one idempotent GET, once, and only
+ * for this one path. A wrong password is a 200 with an empty session, never a
+ * 502, so a retry here can never paper over a real failure — it only absorbs
+ * the network blip the credentials already survived.
+ */
+describe('GET /api/auth/get-session', () => {
+  it('retries once when the upstream blips, so a transient failure right after signing in does not read as a failed session', async () => {
+    getHandler
+      .mockResolvedValueOnce(jsonResponse({ error: 'upstream timed out', code: 'NETWORK_TIMEOUT' }, 502))
+      .mockResolvedValueOnce(jsonResponse({ session: { id: 's1' }, user: { id: 'user_1' } }));
+
+    const response = await GET(new Request('http://x/api/auth/get-session'), context(['get-session']));
+
+    expect(getHandler).toHaveBeenCalledTimes(2);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ session: { id: 's1' }, user: { id: 'user_1' } });
+  });
+
+  it('gives up after one retry rather than hiding a real, sustained outage', async () => {
+    getHandler.mockResolvedValue(jsonResponse({ error: 'upstream timed out', code: 'NETWORK_TIMEOUT' }, 502));
+
+    const response = await GET(new Request('http://x/api/auth/get-session'), context(['get-session']));
+
+    expect(getHandler).toHaveBeenCalledTimes(2);
+    expect(response.status).toBe(502);
+  });
+
+  it('does not retry a request that already has an answer', async () => {
+    getHandler.mockResolvedValue(jsonResponse({ session: null, user: null }));
+
+    const response = await GET(new Request('http://x/api/auth/get-session'), context(['get-session']));
+
+    expect(getHandler).toHaveBeenCalledTimes(1);
+    expect(await response.json()).toEqual({ session: null, user: null });
+  });
+
+  it('leaves every other GET alone, even one that also 502s', async () => {
+    getHandler.mockResolvedValue(jsonResponse({ error: 'nope' }, 502));
+
+    const response = await GET(new Request('http://x/api/auth/list-sessions'), context(['list-sessions']));
+
+    expect(getHandler).toHaveBeenCalledTimes(1);
+    expect(response.status).toBe(502);
+  });
+});
+
+/**
  * The link in the verification email.
  *
  * Better Auth verifies the token, sets the session cookie, and only then looks
