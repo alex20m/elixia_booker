@@ -3,6 +3,7 @@ import {
   detectPlatform,
   installState,
   manualInstall,
+  readInstallPopupDismissed,
   standaloneFrom,
   type Platform,
 } from '@/lib/pwa';
@@ -100,6 +101,31 @@ describe('detectPlatform', () => {
 
   it('recognises Android', () => {
     expect(detectPlatform(ANDROID, 5)).toBe('android');
+  });
+});
+
+describe('readInstallPopupDismissed', () => {
+  it('is not dismissed when nothing has been stored', () => {
+    expect(readInstallPopupDismissed({ getItem: () => null })).toBe(false);
+  });
+
+  it('is dismissed once the flag has been written', () => {
+    expect(readInstallPopupDismissed({ getItem: () => '1' })).toBe(true);
+  });
+
+  it('treats storage that cannot be read as not dismissed', () => {
+    expect(
+      readInstallPopupDismissed({
+        getItem: () => {
+          throw new Error('blocked');
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it('treats a missing storage object the same as an empty one', () => {
+    expect(readInstallPopupDismissed(null)).toBe(false);
+    expect(readInstallPopupDismissed(undefined)).toBe(false);
   });
 });
 
