@@ -134,6 +134,15 @@ verification, password reset and sessions.
 - Every database query is scoped to the signed-in user; `tests/neonRepo.test.ts`
   checks isolation against real Postgres.
 
+**Deleting an account** needs `NEON_API_KEY`. The managed Neon Auth instance
+does not expose Better Auth's own `/delete-user` route — it answers 404 — so
+"Delete account" removes the identity through the Neon API
+([docs](https://neon.com/docs/reference/api/auth/delete-branch-neon-auth-user))
+and then purges the app's own data. Mint the key by hand in the Neon console
+(Account settings → API keys) and add it in Vercel; `NEON_PROJECT_ID` is
+already there from the Neon integration. Without the key nothing else is
+affected — only that button fails, with the reason shown to the user.
+
 ## Layout
 
 ```
