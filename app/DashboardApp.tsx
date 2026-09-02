@@ -23,6 +23,7 @@ import Setup from './Setup';
 import { SettingsPanel } from './SettingsPanel';
 import { ActionButton } from './components/ActionButton';
 import { InstallButton, InstallCard } from './components/InstallCard';
+import { InstallPopup } from './components/InstallPopup';
 import { BusyBar, LoadingScreen, SkeletonCard, SkeletonList } from './components/Loading';
 import { NavMenu, type NavSection } from './components/NavMenu';
 import { Shell } from './components/Shell';
@@ -239,24 +240,31 @@ function Dashboard({
   const linked = view.account.elixiaStatus === 'ok';
 
   return (
-    <Shell
-      actions={
-        <>
-          <InstallButton />
-          <NavMenu sections={SECTIONS} current={tab} onSelect={selectTab} />
-        </>
-      }
-    >
-      <BusyBar busy={refreshing} label="Refreshing your classes…" />
+    <>
+      {/* Announces itself rather than waiting in Settings or the header —
+          but only here, where there is an account to come back to. It never
+          appears on the signed-out screen or mid-setup, which already carries
+          its own install step as the wizard's last page. */}
+      <InstallPopup />
+      <Shell
+        actions={
+          <>
+            <InstallButton />
+            <NavMenu sections={SECTIONS} current={tab} onSelect={selectTab} />
+          </>
+        }
+      >
+        <BusyBar busy={refreshing} label="Refreshing your classes…" />
 
-      <main className="main">
-        <DeploymentAlerts view={view} />
+        <main className="main">
+          <DeploymentAlerts view={view} />
 
-        {tab === 'classes' && <ClassesTab view={view} refresh={refresh} linked={linked} />}
-        {tab === 'activity' && <ActivityTab view={view} />}
-        {tab === 'settings' && <SettingsTab view={view} refresh={refresh} linked={linked} />}
-      </main>
-    </Shell>
+          {tab === 'classes' && <ClassesTab view={view} refresh={refresh} linked={linked} />}
+          {tab === 'activity' && <ActivityTab view={view} />}
+          {tab === 'settings' && <SettingsTab view={view} refresh={refresh} linked={linked} />}
+        </main>
+      </Shell>
+    </>
   );
 }
 

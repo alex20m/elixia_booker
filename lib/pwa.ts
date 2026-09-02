@@ -169,3 +169,54 @@ export function parkedInstallPrompt(): BeforeInstallPromptEvent | null {
     INSTALL_PROMPT_KEY
   ] ?? null;
 }
+
+/**
+ * Whether the standalone popup nagging someone to install has been silenced
+ * for good.
+ *
+ * "Not now" is deliberately *not* stored anywhere: the whole point of that
+ * button is that the popup comes back next visit. Only "Don't show again"
+ * writes this key, so it is the one flag that has to survive a reload.
+ */
+export const INSTALL_POPUP_DISMISSED_KEY = 'elixia-install-popup-dismissed';
+
+/**
+ * Read the dismissal flag.
+ *
+ * Wrapped because `localStorage` throws rather than reads empty in a browser
+ * with site data blocked (private-browsing Safari, some enterprise policies),
+ * and an unhandled throw here would take the popup's host component down
+ * with it. Failing to "not dismissed" just means the popup can be seen again,
+ * which is the safe direction to fail in.
+ */
+export function readInstallPopupDismissed(
+  storage: Pick<Storage, 'getItem'> | null | undefined,
+): boolean {
+  try {
+    return storage?.getItem(INSTALL_POPUP_DISMISSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Record that the popup should never appear again on this device.
+ *
+ * The synthetic `storage` event is what makes the write visible immediately:
+ * a real `setItem` in the same tab that wrote it fires no event at all — only
+ * other tabs are told — and the popup reads this flag through
+ * `useSyncExternalStore`, which only re-renders when its subscription fires.
+ * Without this, dismissing would leave the popup open until something
+ * unrelated happened to re-render it.
+ */
+export function storeInstallPopupDismissed(): void {
+  try {
+    window.localStorage.setItem(INSTALL_POPUP_DISMISSED_KEY, '1');
+  } catch {
+    // A choice that cannot be remembered still applies for this visit — the
+    // popup just comes back next time, which is the same as "Not now".
+  }
+  window.dispatchEvent(
+    new StorageEvent('storage', { key: INSTALL_POPUP_DISMISSED_KEY, newValue: '1' }),
+  );
+}
