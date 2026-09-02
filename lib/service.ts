@@ -1326,6 +1326,12 @@ export async function reviewNextOccurrences(
  * (lib/calendarFeed.ts) forever, since nothing else ever looks at that row
  * again.
  *
+ * Called from `calendarFeedFor` alone, inline on every feed fetch — there is
+ * deliberately no nightly pass. A subscribed calendar app polls its source on
+ * its own schedule regardless of what this app does, so a fetch is never far
+ * away, and running this only when something is actually about to be served
+ * means an account with calendar sync switched off never pays for it at all.
+ *
  * Scoped tightly on purpose. Only a booking's own most recent success can
  * plausibly still be upcoming — anything earlier has already happened — so
  * this is normally zero or one occurrence per subscription, not one query per
@@ -1865,15 +1871,11 @@ export async function runReindex(
     occurrencesReviewed += 1;
   }
 
-  // Fourth and last, and last on purpose: purely cosmetic (it only ever
-  // trims the calendar feed), so it is the first thing sacrificed when the
-  // clock is short, never the booking-affecting passes above it.
-  let bookedReviewed = 0;
-  for (const profile of profiles) {
-    if (options.deadlineMs !== undefined && Date.now() >= options.deadlineMs) break;
-    await reviewBookedOccurrences(config, profile, nowMs);
-    bookedReviewed += 1;
-  }
+  // No pass here for `reviewBookedOccurrences`, on purpose: `calendarFeedFor`
+  // already runs it inline on every feed fetch (see its own doc comment), so
+  // a nightly pass would only ever catch a cancellation for an account whose
+  // calendar app has gone this long without polling at all — the same "once
+  // in a while" a subscribed calendar is expected to do on its own.
 
   const pruned = await config.repo.pruneDueEntries(nowMs - 24 * 60 * 60 * 1000);
   logger.log('cron.reindex', {
@@ -1886,8 +1888,6 @@ export async function runReindex(
     reviewSkipped: profiles.length - reviewed,
     occurrencesReviewed,
     occurrencesReviewSkipped: profiles.length - occurrencesReviewed,
-    bookedReviewed,
-    bookedReviewSkipped: profiles.length - bookedReviewed,
   });
   return indexed;
 }

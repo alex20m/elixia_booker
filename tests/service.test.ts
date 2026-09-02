@@ -1762,17 +1762,29 @@ describe('cancelled bookings', () => {
     expect(centers).toEqual(['Tapiola']);
   });
 
-  it('is run for every linked profile by the nightly job', async () => {
+  it('is not run by the nightly job — only inline, whenever the calendar feed is actually fetched', async () => {
+    // Deliberately not part of runReindex: it would cost a schedule read for
+    // every account with an upcoming booking, every night, whether or not
+    // anyone's calendar app was ever going to ask. `calendarFeedFor` already
+    // runs this same check inline on every fetch, and a subscribed calendar
+    // polls its source on its own schedule regardless — so a nightly pass
+    // would only ever save the wait until the *next* poll, at the cost of
+    // running it for accounts that never turned calendar sync on at all.
     const profile = await linkedProfile();
     const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
     await bookUpcoming(profile, sub);
 
+    let called = false;
     config.backend = gym({
-      checkBookedStatus: async (tokens, center, checks) => checks.map(() => 'not-booked'),
+      checkBookedStatus: async (tokens, center, checks) => {
+        called = true;
+        return checks.map(() => 'not-booked');
+      },
     });
     await runReindex(config, nowMs);
 
-    expect((await onlyHistory()).cancelledAtMs).toBe(nowMs);
+    expect(called).toBe(false);
+    expect((await onlyHistory()).cancelledAtMs).toBeUndefined();
   });
 });
 
