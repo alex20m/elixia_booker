@@ -149,6 +149,29 @@ describe('the verify job', () => {
       }
     }
   });
+
+  it('installs a browser and runs the end-to-end suite, even after an earlier check failed', () => {
+    // The vitest suite mocks the auth proxy's handler directly, so it cannot
+    // catch a bug that only shows up in what the browser does with the
+    // response (see tests-e2e/login.spec.ts) — this is what closed that gap,
+    // and it is worth just as much protection against being silently dropped
+    // as the four checks above.
+    for (const [file, workflow] of Object.entries(workflows)) {
+      const commands = commandsOf(workflow, 'verify');
+      expect(commands, `${file} must install a Playwright browser`).toMatch(/playwright install/);
+      expect(commands, `${file} must run the end-to-end suite`).toContain('npm run test:e2e');
+
+      const e2eSteps = (jobOf(file, 'verify').steps ?? []).filter((step) =>
+        /playwright install|npm run test:e2e/.test(step.run ?? ''),
+      );
+      expect(e2eSteps.length, `${file} must have both an install and a run step`).toBe(2);
+      for (const step of e2eSteps) {
+        expect(step.if, `${file}: "${step.name}" must run even after an earlier failure`).toBe(
+          '${{ !cancelled() }}',
+        );
+      }
+    }
+  });
 });
 
 describe('deploying', () => {

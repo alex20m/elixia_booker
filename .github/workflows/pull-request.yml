@@ -43,8 +43,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # The four checks below each run even when an earlier one failed, so one
-      # push reports every problem instead of revealing them one round-trip at a
+      # The checks below each run even when an earlier one failed, so one push
+      # reports every problem instead of revealing them one round-trip at a
       # time. The job still fails if any of them do.
       - name: Lint
         if: ${{ !cancelled() }}
@@ -63,3 +63,14 @@ jobs:
       - name: Build
         if: ${{ !cancelled() }}
         run: npm run build
+
+      - name: Install Playwright browser
+        if: ${{ !cancelled() }}
+        run: npx playwright install --with-deps chromium
+
+      # Drives the real sign-in UI in a real browser against a real (built)
+      # instance of the app — see playwright.config.ts and tests-e2e/ for what
+      # the unit suite above can't reach: what the browser actually shows.
+      - name: End-to-end tests
+        if: ${{ !cancelled() }}
+        run: npm run test:e2e

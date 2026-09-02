@@ -22,6 +22,9 @@ out/
 coverage/
 next-env.d.ts
 *.tsbuildinfo
+playwright-report/
+test-results/
+blob-report/
 
 # OS / editor
 .DS_Store

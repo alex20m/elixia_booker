@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 import { fileURLToPath } from 'node:url';
 
 export default defineConfig({
@@ -22,5 +22,9 @@ export default defineConfig({
     // externalizing it straight to Node's loader, so the next/headers and
     // next/server aliases above actually get applied.
     server: { deps: { inline: [/@neondatabase\/auth/] } },
+    // tests-e2e/ holds Playwright specs, which also match the default
+    // *.spec.ts include glob below — without this, vitest tries to run them
+    // too, using `test`/`expect` from the wrong library.
+    exclude: [...configDefaults.exclude, 'tests-e2e/**'],
   },
 });

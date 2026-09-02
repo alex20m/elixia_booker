@@ -160,19 +160,28 @@ npm test           # full suite, no services required
 npm run typecheck
 npm run lint
 npm run build
+npm run test:e2e   # drives the real UI in a browser; builds and starts the app itself
 ```
 
 Covers DST-aware scheduling, retry bounds, encryption, cron auth, per-user
 isolation, and CI pipeline shape. Also mutation-tested against dozens of
 deliberately broken variants to confirm the suite actually catches them.
 
+`test:e2e` (Playwright, see `playwright.config.ts` and `tests-e2e/`) drives
+the sign-in flow in a real browser against a real, built instance of the app
+and a small fake Neon Auth server (`tests-e2e/fixtures/fakeNeonAuth.ts`) —
+the layer that catches a bug the unit suite can't, because it only exists in
+what the browser actually shows: a toast nobody sees, a retry that fixes the
+network call but not the screen. No real credentials or services needed; it
+builds and serves the app itself, so the first run takes a bit longer.
+
 ### CI/CD
 
-Two workflows (`pull-request.yml`, `main.yml`) run lint/typecheck/test/build
-— neither deploys or migrates. Vercel's Git integration deploys every push;
-`vercel.json` runs migrations as part of the build (`npm run migrate && next
-build`) so a failed migration blocks the deploy instead of shipping a broken
-schema.
+Two workflows (`pull-request.yml`, `main.yml`) run
+lint/typecheck/test/build/e2e — neither deploys or migrates. Vercel's Git
+integration deploys every push; `vercel.json` runs migrations as part of the
+build (`npm run migrate && next build`) so a failed migration blocks the
+deploy instead of shipping a broken schema.
 
 ## Design constraints
 
