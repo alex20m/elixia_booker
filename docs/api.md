@@ -443,6 +443,14 @@ building.
 - [ ] **Any cap on concurrent bookings per member?** Unanswered. The observed
       `409` is about *overlapping* bookings specifically, which is not the same
       thing as a total cap.
+- [ ] **Does `isBooked` on the schedule listing (§4) read true for a
+      waitlisted place, or only a confirmed one?** Matters for
+      `matchClassBookedStatus` (`lib/elixia.ts`), which reads it to notice a
+      cancellation and stop serving the class on the calendar feed. Every
+      capture so far read a fresh, unbooked listing; none re-fetched the
+      listing while genuinely on a waiting list. If `isBooked` turns out false
+      for a waitlisted place too, that function currently reads it as
+      cancelled the first time it runs.
 
 ---
 

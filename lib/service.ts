@@ -431,6 +431,17 @@ export async function calendarFeedFor(
   const profile = await config.repo.getProfileByCalendarToken(token);
   if (!profile || !profile.calendarSyncEnabled || !isConfigured(profile)) return null;
 
+  // Checked here, not only by the nightly job: a calendar app's very first
+  // fetch — the moment someone subscribes — has to be accurate immediately,
+  // not "accurate once tonight's reindex has had a chance to run". The
+  // nightly pass still exists, both as a backstop for a feed nobody has
+  // fetched since a cancellation happened and to send the "this was
+  // cancelled" notification even when nobody is looking. `pending` inside it
+  // is normally empty or a handful of rows, so an ordinary fetch costs
+  // nothing extra; only an account with a class booked and not yet run adds
+  // a schedule read here, and only for that one centre.
+  await reviewBookedOccurrences(config, profile, nowMs);
+
   const history = await config.repo.listHistory(profile.id);
   return buildCalendarFeed(profile, history, nowMs);
 }

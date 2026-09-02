@@ -682,6 +682,15 @@ export function matchClassAvailability(
  * `findClassId`: each has to stay free to evolve without the others' tests
  * pinning it in place. Reads `isBooked`, a per-user flag the schedule page
  * carries alongside every event (docs/api.md §4).
+ *
+ * Unconfirmed: whether `isBooked` reads true for a *waitlisted* place, not
+ * only a fully confirmed one. docs/api.md §6 never captured a listing read
+ * back for a waitlisted user, only the booking response itself. If it turns
+ * out `isBooked` is false while merely waitlisted, every waitlisted booking
+ * would look cancelled the first time this runs — the opposite failure from
+ * the one this function exists to catch. Confirming it needs one more
+ * capture: book into a class already full, then re-fetch its listing while
+ * still on the waiting list.
  */
 export function matchClassBookedStatus(
   props: SchedulePageProps,
