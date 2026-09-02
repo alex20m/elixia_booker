@@ -899,6 +899,23 @@ input::placeholder {
   color: var(--text-disabled);
 }
 
+/* Cursor is not part of a button's *look*, so it sits outside the
+   `:not([data-slot])` guard below rather than inside it: every button gets a
+   pointer regardless of who renders it. Without this rule the account page's
+   Save/Cancel/Delete buttons — @neondatabase/auth-ui's own `[data-slot]`
+   controls — fell back to the browser's plain arrow, since neither Tailwind
+   preflight nor that package's own button styles set a cursor at all. A
+   disabled button still gets `not-allowed` painted on, even though
+   auth-ui's `disabled:pointer-events-none` means the pointer never reaches it
+   to show it — cheap to state and correct if that ever changes. */
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
 /* `a.btn` exists because signing in and reaching the account pages are
    navigations to Neon Auth's own routes, not actions. They stay anchors —
    openable in a new tab, reachable like every other link — and only borrow the
@@ -921,7 +938,11 @@ input::placeholder {
    navy in light, white slabs in dark. `:where()` matches exactly the same
    elements and contributes nothing, which leaves this rule at (0,0,1) — the
    specificity a bare `button` had before the guard existed, and the one every
-   opt-out below is written against. */
+   opt-out below is written against.
+
+   Cursor is deliberately not repeated here — the plain `button`/`button:disabled`
+   rule above already covers it for every button regardless of `data-slot`, and
+   `a.btn` still needs its own since an anchor isn't a `button` at all. */
 button:where(:not([data-slot])),
 a.btn {
   display: inline-flex;
@@ -938,9 +959,12 @@ a.btn {
   font-size: 14px;
   font-weight: 600;
   text-decoration: none;
-  cursor: pointer;
   transition: background-color 0.12s ease, border-color 0.12s ease,
     color 0.12s ease;
+}
+
+a.btn {
+  cursor: pointer;
 }
 
 button:where(:not([data-slot])):hover:not(:disabled),
@@ -951,7 +975,6 @@ a.btn:hover {
 button:where(:not([data-slot])):disabled {
   background: var(--disabled-bg);
   color: var(--disabled-fg);
-  cursor: not-allowed;
 }
 
 .btn-block {

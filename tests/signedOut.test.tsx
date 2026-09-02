@@ -104,6 +104,12 @@ describe('the signed-out screen', () => {
  * the sign-up form came out as a solid navy block with no readable text on it,
  * and a white one in dark mode. Nothing in a jsdom render can see this: no
  * stylesheet is applied there, so the rule is asserted where it is written.
+ *
+ * `cursor` is deliberately exempt from this check: unlike a background or a
+ * text colour, a bare `button { cursor: pointer }` cannot make auth-ui's own
+ * controls unreadable, and one is needed precisely because those controls set
+ * no cursor of their own — see buttonCursor.test.ts. Only rules that touch
+ * `background` or `color` are the ones this test still has to catch.
  */
 describe('the base button styles', () => {
   it('never claim a button that @neondatabase/auth-ui rendered', () => {
@@ -112,23 +118,27 @@ describe('the base button styles', () => {
       '',
     );
 
-    const selectors = [...css.matchAll(/([^{}]+)\{/g)]
-      .map((match) => (match[1] ?? '').trim())
-      .filter((selector) => !selector.startsWith('@'))
-      .flatMap((list) => list.split(','))
-      .map((selector) => selector.trim())
-      .filter(Boolean);
+    const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((match) => ({
+      selectors: (match[1] ?? '').trim(),
+      declarations: match[2] ?? '',
+    }));
 
-    const unguarded = selectors.filter((selector) => {
-      // Only the subject matters: `.appbar button.btn-quiet` styles one of ours.
-      const subject = selector.split(/[\s>+~]+/).filter(Boolean).pop() ?? '';
-      // `:not(…)` narrows what a selector matches, so it cannot be what makes
-      // one specific to this app's own buttons — strip it before asking.
-      const qualifiers = subject.replace(/:not\([^)]*\)/g, '');
-      if (!/^button(?![\w-])/.test(qualifiers)) return false;
-      if (/[.#[]/.test(qualifiers)) return false;
-      return !subject.includes(':not([data-slot])');
-    });
+    const unguarded = rules
+      .filter((rule) => !rule.selectors.startsWith('@'))
+      .filter((rule) => /(?:^|;|\s)(background|color)\s*:/.test(rule.declarations))
+      .flatMap((rule) => rule.selectors.split(','))
+      .map((selector) => selector.trim())
+      .filter(Boolean)
+      .filter((selector) => {
+        // Only the subject matters: `.appbar button.btn-quiet` styles one of ours.
+        const subject = selector.split(/[\s>+~]+/).filter(Boolean).pop() ?? '';
+        // `:not(…)` narrows what a selector matches, so it cannot be what makes
+        // one specific to this app's own buttons — strip it before asking.
+        const qualifiers = subject.replace(/:not\([^)]*\)/g, '');
+        if (!/^button(?![\w-])/.test(qualifiers)) return false;
+        if (/[.#[]/.test(qualifiers)) return false;
+        return !subject.includes(':not([data-slot])');
+      });
 
     expect(unguarded).toEqual([]);
   });
