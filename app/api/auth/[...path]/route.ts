@@ -3,24 +3,26 @@ import { loadAppConfig } from '@/lib/appConfig';
 import { neonSql } from '@/lib/db/neon';
 import { createNeonRepo } from '@/lib/db/neonRepo';
 import { deleteAccount } from '@/lib/service';
+import { deleteNeonAuthUser } from '@/lib/auth/neonUsers';
 
 /**
  * Proxies every Neon Auth request — sign in, sign up, session refresh, email
- * verification, password reset, account deletion — to the managed Better
- * Auth instance. This is what `authClient` in app/providers.tsx and the auth
- * pages under app/auth/* talk to; the SDK never calls Neon directly from the
- * browser.
+ * verification, password reset — to the managed Better Auth instance. This is
+ * what `authClient` in app/providers.tsx and the auth pages under app/auth/*
+ * talk to; the SDK never calls Neon directly from the browser.
  *
  * Two requests get more done here than the rest, both because Neon Auth is
  * managed remotely and has no hook of its own for the app to run anything
  * from, while this proxy is the one place every request passes through
  * regardless:
  *
- * - **Account deletion** purges the app's own data — profile, subscriptions,
- *   the sealed Elixia secret, history — right after the identity itself is
- *   confirmed gone. See `deleteAccount` in lib/service.ts, and the
- *   housekeeping note at the bottom of db/migrations/0001_initial_schema.sql
- *   this replaces.
+ * - **Account deletion** is not forwarded at all. The managed instance has no
+ *   `/delete-user` route — it answers 404 — so the deletion is carried out
+ *   against the Neon Console API here (see `handleAccountDeletion` and
+ *   lib/auth/neonUsers.ts), and only then is the app's own data purged, which
+ *   no upstream hook would ever run because the schema keeps no foreign key
+ *   back to the identity. See `deleteAccount` in lib/service.ts and the
+ *   housekeeping note at the bottom of db/migrations/0001_initial_schema.sql.
  * - **Email verification** is finished here rather than upstream, so the
  *   session it mints survives the trip back to the browser. See
  *   `withVerificationLanding` below for why that is not automatic.
@@ -28,10 +30,13 @@ import { deleteAccount } from '@/lib/service';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+const jsonResponse = (body: unknown, status = 200): Response =>
+  new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+
 const unconfigured = (): Response =>
-  new Response(
-    JSON.stringify({ error: 'Neon Auth is not configured. Set NEON_AUTH_BASE_URL and NEON_AUTH_COOKIE_SECRET.' }),
-    { status: 503, headers: { 'content-type': 'application/json' } },
+  jsonResponse(
+    { error: 'Neon Auth is not configured. Set NEON_AUTH_BASE_URL and NEON_AUTH_COOKIE_SECRET.' },
+    503,
   );
 
 const auth = neonAuth();
@@ -41,26 +46,6 @@ type RouteContext = { params: Promise<{ path: string[] }> };
 type RouteHandler = (request: Request, context: RouteContext) => Promise<Response>;
 
 const isDeleteUser = (path: string[]): boolean => path.length === 1 && path[0] === 'delete-user';
-const isDeleteUserCallback = (path: string[]): boolean =>
-  path.length === 2 && path[0] === 'delete-user' && path[1] === 'callback';
-
-/**
- * Better Auth's `/delete-user` answers both an immediate deletion and a
- * "verification email sent" request with the same 200 status — only the
- * `message` tells them apart. The `/delete-user/callback` link that confirms
- * a verified deletion redirects on success instead of returning JSON. Both
- * shapes are asserted in better-auth's own OpenAPI metadata for these routes.
- */
-async function deletionSucceeded(response: Response): Promise<boolean> {
-  if (response.status >= 300 && response.status < 400) return true;
-  if (!response.ok) return false;
-  try {
-    const body = (await response.json()) as { message?: string };
-    return body.message === 'User deleted';
-  } catch {
-    return false;
-  }
-}
 
 async function purgeAppData(userId: string): Promise<void> {
   const sql = neonSql();
@@ -69,24 +54,58 @@ async function purgeAppData(userId: string): Promise<void> {
   await deleteAccount(config, userId);
 }
 
-/** Wraps a proxied handler so a successful deletion purges the app's own data. */
-function withAccountPurge(original: RouteHandler, isDeletionPath: (path: string[]) => boolean): RouteHandler {
+/**
+ * Deletes the signed-in account, in place of forwarding to the managed Better
+ * Auth instance.
+ *
+ * The browser reaches this through Neon's own DeleteAccountCard, whose
+ * `authClient.deleteUser()` call treats any 2xx JSON body as success and shows
+ * a toast from the `error` field on anything else, then navigates to the
+ * sign-out view.
+ *
+ * Order matters: the identity goes first, and the app's own data is only
+ * purged once that succeeds — betting on a deletion that did not happen would
+ * wipe a still-live account's Elixia credentials and subscriptions. A failure
+ * to purge afterwards, or to clear the session, must not read back as a failed
+ * deletion, so both are logged and swallowed.
+ */
+async function handleAccountDeletion(): Promise<Response> {
+  if (!auth) return unconfigured();
+
+  const { data: session } = await auth.getSession();
+  const userId = session?.user?.id;
+  if (!userId) return jsonResponse({ error: 'Not signed in.' }, 401);
+
+  try {
+    await deleteNeonAuthUser(userId);
+  } catch (err) {
+    console.error('Account deletion failed at the identity step', err);
+    return jsonResponse(
+      { error: err instanceof Error ? err.message : 'Could not delete the account.' },
+      502,
+    );
+  }
+
+  await purgeAppData(userId).catch((err) => {
+    console.error('Failed to purge app data after account deletion', err);
+  });
+
+  // getSession trusts the signed session-data cookie without calling upstream,
+  // so a cookie left on the browser would keep the now-deleted user "signed
+  // in" until it expired. Clear it.
+  await auth.signOut().catch((err) => {
+    console.error('Failed to clear the session after account deletion', err);
+  });
+
+  return jsonResponse({ success: true });
+}
+
+/** Intercepts the account-deletion POST; forwards everything else upstream. */
+function withAccountDeletion(original: RouteHandler): RouteHandler {
   return async (request, context) => {
     const { path } = await context.params;
-    if (!auth || !isDeletionPath(path)) return original(request, context);
-
-    // Captured before forwarding: a successful deletion clears the session
-    // cookie, so the user id is only readable from the request that asked.
-    const { data: session } = await auth.getSession();
-    const userId = session?.user?.id;
-
-    const response = await original(request, context);
-    if (userId && (await deletionSucceeded(response.clone()))) {
-      await purgeAppData(userId).catch((err) => {
-        console.error('Failed to purge app data after account deletion', err);
-      });
-    }
-    return response;
+    if (auth && isDeleteUser(path)) return handleAccountDeletion();
+    return original(request, context);
   };
 }
 
@@ -196,9 +215,9 @@ function withSessionRetry(original: RouteHandler): RouteHandler {
 }
 
 export const GET = handler
-  ? withVerificationLanding(withAccountPurge(withSessionRetry(handler.GET), isDeleteUserCallback))
+  ? withVerificationLanding(withSessionRetry(handler.GET))
   : unconfigured;
-export const POST = handler ? withAccountPurge(handler.POST, isDeleteUser) : unconfigured;
+export const POST = handler ? withAccountDeletion(handler.POST) : unconfigured;
 export const PUT = handler?.PUT ?? unconfigured;
 export const DELETE = handler?.DELETE ?? unconfigured;
 export const PATCH = handler?.PATCH ?? unconfigured;

@@ -2,25 +2,26 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * /api/auth/[...path] — the proxy in front of the managed Better Auth
- * instance, and the one place account deletion passes through.
+ * instance, and the one place account deletion is handled.
  *
- * Neon Auth is managed remotely and has no hook of its own for the app to run
- * cleanup from when an account is deleted, so this proxy purges the app's own
- * data itself, right after the identity is confirmed gone. These tests pin
- * exactly when that purge does and does not fire: on the immediate-deletion
- * response, on the verification callback's redirect, and never on a request
- * that merely *asks* for deletion (which may only have sent an email), never
- * on an unrelated auth request, and never without a session to attribute the
- * purge to.
+ * The managed instance has no `/delete-user` route of its own, so deletion is
+ * not forwarded: the route deletes the identity through the Neon Console API
+ * (lib/auth/neonUsers.ts), then purges the app's own data — which no upstream
+ * hook would ever run because the schema keeps no foreign key back to it — and
+ * clears the session. These tests pin that the purge only fires once the
+ * identity is actually gone, never before, and never for an unrelated auth
+ * request.
  */
 
 const getSession = vi.fn();
+const signOut = vi.fn();
 const postHandler = vi.fn();
 const getHandler = vi.fn();
 
 vi.mock('@/lib/auth/neonAuth', () => ({
   neonAuth: () => ({
     getSession,
+    signOut,
     handler: () => ({
       GET: getHandler,
       POST: postHandler,
@@ -29,6 +30,10 @@ vi.mock('@/lib/auth/neonAuth', () => ({
       PATCH: vi.fn(),
     }),
   }),
+}));
+
+vi.mock('@/lib/auth/neonUsers', () => ({
+  deleteNeonAuthUser: vi.fn(),
 }));
 
 vi.mock('@/lib/db/neon', () => ({
@@ -49,6 +54,7 @@ vi.mock('@/lib/service', async (importOriginal) => ({
 }));
 
 const { deleteAccount } = await import('@/lib/service');
+const { deleteNeonAuthUser } = await import('@/lib/auth/neonUsers');
 const { GET, POST } = await import('@/app/api/auth/[...path]/route');
 
 const context = (path: string[]) => ({ params: Promise.resolve({ path }) });
@@ -56,75 +62,63 @@ const context = (path: string[]) => ({ params: Promise.resolve({ path }) });
 const jsonResponse = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
+const deleteUserRequest = () =>
+  POST(new Request('http://x/api/auth/delete-user', { method: 'POST' }), context(['delete-user']));
+
 beforeEach(() => {
   vi.clearAllMocks();
   getSession.mockResolvedValue({ data: { user: { id: 'user_deleting' } } });
+  signOut.mockResolvedValue({ data: {}, error: null });
+  vi.mocked(deleteNeonAuthUser).mockResolvedValue(undefined);
 });
 
 describe('POST /api/auth/delete-user', () => {
-  it('purges the app data once the identity is actually deleted', async () => {
-    postHandler.mockResolvedValue(jsonResponse({ success: true, message: 'User deleted' }));
+  it('deletes the identity via the Neon API, then purges the app data and clears the session', async () => {
+    const response = await deleteUserRequest();
 
-    const response = await POST(new Request('http://x/api/auth/delete-user', { method: 'POST' }), context([
-      'delete-user',
-    ]));
-
+    expect(deleteNeonAuthUser).toHaveBeenCalledWith('user_deleting');
     expect(deleteAccount).toHaveBeenCalledWith(expect.anything(), 'user_deleting');
+    expect(signOut).toHaveBeenCalled();
+    expect(postHandler).not.toHaveBeenCalled(); // never forwarded upstream — there is no route there
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ success: true, message: 'User deleted' });
+    expect(await response.json()).toEqual({ success: true });
   });
 
-  it('does not purge anything when a verification email was sent instead', async () => {
-    // Betting the deletion happened here would wipe a still-live account's
-    // Elixia credentials and subscriptions before the user has even clicked
-    // the confirmation link.
-    postHandler.mockResolvedValue(jsonResponse({ success: true, message: 'Verification email sent' }));
+  it('does not purge anything when deleting the identity fails, and surfaces the reason', async () => {
+    // Betting the deletion happened would wipe a still-live account's Elixia
+    // credentials and subscriptions.
+    vi.mocked(deleteNeonAuthUser).mockRejectedValue(
+      new Error('Neon API refused to delete the user (HTTP 403)'),
+    );
 
-    await POST(new Request('http://x/api/auth/delete-user', { method: 'POST' }), context(['delete-user']));
+    const response = await deleteUserRequest();
 
     expect(deleteAccount).not.toHaveBeenCalled();
+    expect(signOut).not.toHaveBeenCalled();
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({
+      error: 'Neon API refused to delete the user (HTTP 403)',
+    });
   });
 
-  it('does not purge anything when the deletion attempt failed', async () => {
-    postHandler.mockResolvedValue(jsonResponse({ error: 'Invalid password' }, 400));
-
-    await POST(new Request('http://x/api/auth/delete-user', { method: 'POST' }), context(['delete-user']));
-
-    expect(deleteAccount).not.toHaveBeenCalled();
-  });
-
-  it('does not purge anything with no session to attribute it to', async () => {
+  it('refuses with 401 and touches nothing when there is no session', async () => {
     getSession.mockResolvedValue({ data: null });
-    postHandler.mockResolvedValue(jsonResponse({ success: true, message: 'User deleted' }));
 
-    await POST(new Request('http://x/api/auth/delete-user', { method: 'POST' }), context(['delete-user']));
+    const response = await deleteUserRequest();
 
+    expect(deleteNeonAuthUser).not.toHaveBeenCalled();
     expect(deleteAccount).not.toHaveBeenCalled();
-  });
-});
-
-describe('GET /api/auth/delete-user/callback', () => {
-  it('purges the app data on the redirect a verified deletion answers with', async () => {
-    getHandler.mockResolvedValue(new Response(null, { status: 302, headers: { location: '/auth/sign-out' } }));
-
-    const response = await GET(
-      new Request('http://x/api/auth/delete-user/callback?token=abc'),
-      context(['delete-user', 'callback']),
-    );
-
-    expect(deleteAccount).toHaveBeenCalledWith(expect.anything(), 'user_deleting');
-    expect(response.status).toBe(302);
+    expect(response.status).toBe(401);
   });
 
-  it('does not purge anything when the token is rejected', async () => {
-    getHandler.mockResolvedValue(jsonResponse({ error: 'Invalid token' }, 404));
+  it('still reports success when the post-deletion cleanup fails — the identity is already gone', async () => {
+    vi.mocked(deleteAccount).mockRejectedValue(new Error('database unreachable'));
+    signOut.mockRejectedValue(new Error('sign-out blipped'));
 
-    await GET(
-      new Request('http://x/api/auth/delete-user/callback?token=bad'),
-      context(['delete-user', 'callback']),
-    );
+    const response = await deleteUserRequest();
 
-    expect(deleteAccount).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ success: true });
   });
 });
 

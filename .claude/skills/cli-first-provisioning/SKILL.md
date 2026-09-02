@@ -397,7 +397,7 @@ Client side, `createAuthClient()` from `@neondatabase/auth/next`, and the vanill
 client takes the auth URL directly. A React SPA installs `@neondatabase/neon-js`
 instead and reads `VITE_NEON_AUTH_URL`.
 
-Eight things that bite:
+Nine things that bite:
 
 - **The catch-all segment must be `[...path]`.** The handler reads `params.path`,
   so any other name routes nothing. The package's own JSDoc example says
@@ -464,6 +464,25 @@ Eight things that bite:
   `@neondatabase/auth@0.5.0-beta`'s proxy; when a flow "works but the user
   isn't signed in afterwards", read the endpoint's source for that
   redirect-versus-JSON branch before anything else.
+- **Account deletion is not in the proxy — the managed instance has no
+  `/delete-user` route.** Better Auth only registers that endpoint when
+  `user.deleteUser.enabled` is set in the *server* config, which you cannot set
+  on a managed instance, so `authClient.deleteUser()` (and the UI library's
+  `DeleteAccountCard`, which calls it) comes back **404**. The supported path is
+  the Neon Console API, and it is **branch-scoped** because `neon_auth` is a
+  per-branch schema: `DELETE https://console.neon.tech/api/v2/projects/{project_id}/branches/{branch_id}/auth/users/{id}`
+  with `Authorization: Bearer $NEON_API_KEY`. Resolve the branch from
+  `GET .../projects/{id}/branches` (the one with `"default": true`) unless you
+  already hold its id. Two knock-on costs: the API key is one you **mint by hand**
+  in the Neon console — the Vercel integration supplies `NEON_PROJECT_ID` but not
+  a key — so deletion has a manual setup step the rest of auth does not; and
+  because there is no upstream success to react to, the catch-all route has to
+  intercept `delete-user` itself and do the app's own cleanup there — purge your
+  data *after* the identity call returns, and **clear the session explicitly**,
+  since `auth.getSession()` trusts the signed session-data cookie without calling
+  upstream and would otherwise keep the deleted user "signed in" until it
+  expired. Verified against `@neondatabase/auth@0.5.0-beta` and the Neon API
+  docs, 2026-09.
 
 Managed Better Auth is documented as **AWS regions only** (no Azure), and as not
 supporting projects with IP Allow or Private Networking enabled. Confirm against
