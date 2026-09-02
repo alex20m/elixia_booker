@@ -1,7 +1,9 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import { createMemoryRepo } from '@/lib/db/memoryRepo';
 import { CALENDAR_TOKEN_PATTERN } from '@/lib/calendarFeed';
-import { enableCalendarSync, disableCalendarSync, calendarFeedFor } from '@/lib/service';
+import { MockElixiaClient } from '@/lib/mock';
+import { enableCalendarSync, disableCalendarSync, calendarFeedFor, linkElixia } from '@/lib/service';
+import type { BookingBackend } from '@/lib/elixia';
 import type { AppConfig } from '@/lib/appConfig';
 import type { Profile } from '@/lib/types';
 
@@ -15,7 +17,14 @@ import type { Profile } from '@/lib/types';
 const NOW = Date.UTC(2026, 8, 1, 12, 0);
 
 const repo = createMemoryRepo();
-const config = { repo, encryptionKey: 'k', dryRun: false, mock: true, ephemeralStore: false } as AppConfig;
+const ENCRYPTION_KEY = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
+const config = {
+  repo,
+  encryptionKey: ENCRYPTION_KEY,
+  dryRun: false,
+  mock: true,
+  ephemeralStore: false,
+} as AppConfig;
 
 const configured: Profile = {
   id: 'alice',
@@ -108,5 +117,53 @@ describe('calendarFeedFor', () => {
     const bob = await enableCalendarSync(config, (await repo.getProfile('bob'))!);
 
     expect(await calendarFeedFor(config, bob.calendarFeedToken!, NOW)).toBeNull();
+  });
+
+  it('drops a booking cancelled through Elixia on the very first fetch, without waiting for a nightly run', async () => {
+    // The bug this pins: a calendar app's first fetch — the moment someone
+    // subscribes, or re-subscribes after deleting and re-adding the calendar
+    // on their device — has to be correct immediately. Waiting for
+    // `runReindex` to get around to it means a freshly (re)subscribed
+    // calendar can start out showing a class the user already cancelled.
+    const linked = await linkElixia(config, configured, 'gym@example.com', 'correct-horse', NOW);
+    const sub = await repo.createSubscription({
+      userId: linked.id,
+      className: 'Bodypump',
+      center: 'Tapiola',
+      weekday: 'tuesday',
+      startTime: '09:00',
+      priority: 1,
+    });
+    await repo.appendHistory('alice', {
+      atMs: NOW,
+      subscriptionId: sub.id,
+      className: 'Bodypump',
+      classDate: '2026-09-08',
+      startTime: '09:00',
+      outcome: 'booked',
+      attempts: 1,
+      firstAttemptOffsetMs: 0,
+      dryRun: false,
+      center: 'Tapiola',
+    });
+
+    const mock = new MockElixiaClient();
+    const gym: BookingBackend = {
+      login: (email, password, at) => mock.login(email, password, at),
+      refresh: (tokens, at) => mock.refresh(tokens, at),
+      listCenters: (tokens) => mock.listCenters(tokens),
+      listClasses: (tokens, center) => mock.listClasses(tokens, center),
+      resolveClassId: (tokens, s, date) => mock.resolveClassId(tokens, s, date),
+      checkAvailability: (tokens, center, checks) => mock.checkAvailability(tokens, center, checks),
+      checkBookedStatus: async (tokens, center, checks) => checks.map(() => 'not-booked'),
+      book: (tokens, id) => mock.book(tokens, id),
+    };
+    const withBackend: AppConfig = { ...config, backend: gym };
+
+    const on = await enableCalendarSync(withBackend, linked);
+    const feed = await calendarFeedFor(withBackend, on.calendarFeedToken!, NOW);
+
+    expect(feed).not.toContain('BEGIN:VEVENT');
+    expect((await repo.listHistory('alice'))[0]?.cancelledAtMs).toBe(NOW);
   });
 });
