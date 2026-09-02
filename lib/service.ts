@@ -1329,9 +1329,16 @@ export async function reviewNextOccurrences(
  * Scoped tightly on purpose. Only a booking's own most recent success can
  * plausibly still be upcoming — anything earlier has already happened — so
  * this is normally zero or one occurrence per subscription, not one query per
- * history row. Rows written before `center` existed are skipped outright
- * (nothing to ask Elixia about without a centre to ask it at), which only
- * affects bookings made before this check shipped.
+ * history row.
+ *
+ * A row written before `center` existed falls back to the *live* subscription's
+ * own centre. Skipping those rows outright — this function's first version —
+ * was a real bug, not a narrow gap: for any account that had already been
+ * booking classes when this check shipped, every currently-relevant booking
+ * *is* one of those rows, so nothing was ever checked and a cancelled class
+ * never left the calendar, no matter how many nights passed. The fallback only
+ * fails where the subscription itself has since been deleted too, which is
+ * rarer and means there is no live source left to name a centre with anyway.
  *
  * Mirrors `reviewNextOccurrences`'s carefulness otherwise: one read per
  * centre, batched, and an unreadable centre leaves every booking's status
@@ -1345,20 +1352,28 @@ export async function reviewBookedOccurrences(
   if (profile.elixiaStatus !== 'ok' || !isConfigured(profile)) return;
 
   const logger = new Logger();
+  const centerBySubscription = new Map(
+    (await config.repo.listSubscriptions(profile.id)).map((s) => [s.id, s.center]),
+  );
 
   const pending = (await config.repo.listHistory(profile.id))
-    .filter(
-      (entry): entry is BookingHistoryEntry & { subscriptionId: string; center: string } =>
-        entry.subscriptionId !== null &&
-        entry.center !== undefined &&
-        !entry.dryRun &&
-        entry.cancelledAtMs === undefined &&
-        (entry.outcome === 'booked' || entry.outcome === 'waitlisted'),
-    )
-    .map((entry) => {
-      const startWall = parseClassStart(entry.classDate, entry.startTime);
+    .flatMap((entry) => {
+      if (
+        entry.subscriptionId === null ||
+        entry.dryRun ||
+        entry.cancelledAtMs !== undefined ||
+        (entry.outcome !== 'booked' && entry.outcome !== 'waitlisted')
+      ) {
+        return [];
+      }
+      const center = entry.center ?? centerBySubscription.get(entry.subscriptionId);
+      if (center === undefined) return [];
+      return [{ entry, subscriptionId: entry.subscriptionId, center }];
+    })
+    .map((x) => {
+      const startWall = parseClassStart(x.entry.classDate, x.entry.startTime);
       const { epochMs: classEpochMs } = zonedWallClockToInstant(startWall, profile.timeZone);
-      return { entry, classEpochMs };
+      return { ...x, classEpochMs };
     })
     // Already happened: whether it was cancelled in the meantime no longer
     // changes anything a calendar needs to show.
@@ -1366,10 +1381,10 @@ export async function reviewBookedOccurrences(
 
   if (pending.length === 0) return;
 
-  const centers = [...new Set(pending.map((x) => x.entry.center))];
+  const centers = [...new Set(pending.map((x) => x.center))];
 
   for (const center of centers) {
-    const inCenter = pending.filter((x) => x.entry.center === center);
+    const inCenter = pending.filter((x) => x.center === center);
 
     let statuses: ClassBookedStatus[];
     try {
@@ -1396,12 +1411,12 @@ export async function reviewBookedOccurrences(
     }
 
     for (let i = 0; i < inCenter.length; i++) {
-      const { entry } = inCenter[i]!;
+      const { entry, subscriptionId, center: entryCenter } = inCenter[i]!;
       if (statuses[i] !== 'not-booked') continue;
 
       const marked = await config.repo.markHistoryCancelled(
         profile.id,
-        entry.subscriptionId,
+        subscriptionId,
         entry.classDate,
         nowMs,
       );
@@ -1409,7 +1424,7 @@ export async function reviewBookedOccurrences(
 
       logger.log('booking.cancelled', {
         userId: profile.id,
-        subscriptionId: entry.subscriptionId,
+        subscriptionId,
         className: entry.className,
         classDate: entry.classDate,
       });
@@ -1417,7 +1432,7 @@ export async function reviewBookedOccurrences(
         config,
         profile,
         logger,
-        `ℹ️ ${entry.className} · ${entry.classDate} at ${entry.center} was cancelled through ` +
+        `ℹ️ ${entry.className} · ${entry.classDate} at ${entryCenter} was cancelled through ` +
           `Elixia, so it has been taken off your synced calendar.`,
       );
     }

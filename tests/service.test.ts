@@ -1691,10 +1691,29 @@ describe('cancelled bookings', () => {
     expect(called).toBe(false);
   });
 
-  it('skips a row written before this check existed, for lack of a centre to ask', async () => {
+  it('falls back to the live subscription\'s centre for a row written before this check existed', async () => {
+    // The bug this pins: the first version of this check skipped any row with
+    // no stored centre outright — which meant every booking made before the
+    // column existed was never checked, ever, for as long as the subscription
+    // stayed the same. For an account that was already using the booker when
+    // this shipped, that was not a narrow gap, it was everything.
     const profile = await linkedProfile();
     const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
     await bookUpcoming(profile, sub, { center: undefined });
+
+    config.backend = gym({
+      checkBookedStatus: async (tokens, center, checks) => checks.map(() => 'not-booked'),
+    });
+    await reviewBookedOccurrences(config, profile, nowMs);
+
+    expect((await onlyHistory()).cancelledAtMs).toBe(nowMs);
+  });
+
+  it('skips a row whose subscription has since been deleted too, for lack of any centre to ask', async () => {
+    const profile = await linkedProfile();
+    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+    await bookUpcoming(profile, sub, { center: undefined });
+    await mutateSubscription(config, profile, sub.id, 'delete', nowMs);
 
     let called = false;
     config.backend = gym({

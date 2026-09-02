@@ -166,4 +166,56 @@ describe('calendarFeedFor', () => {
     expect(feed).not.toContain('BEGIN:VEVENT');
     expect((await repo.listHistory('alice'))[0]?.cancelledAtMs).toBe(NOW);
   });
+
+  it('drops an "old" booking too — one made before the centre was ever recorded on its row', async () => {
+    // The bug actually reported in production: an account that had been
+    // booking classes since before `center` was added to booking_history
+    // found that *no* cancelled class ever left its calendar, on any day,
+    // because every one of its rows lacked a stored centre and the check
+    // skipped every such row outright. The subscription itself still names a
+    // centre, and that has to be enough.
+    const linked = await linkElixia(config, configured, 'gym@example.com', 'correct-horse', NOW);
+    // A different class/day/time than the sibling test above — this file
+    // shares one repo across its tests, and identical ones would collide on
+    // the duplicate-subscription index.
+    const sub = await repo.createSubscription({
+      userId: linked.id,
+      className: 'Yoga',
+      center: 'Tapiola',
+      weekday: 'monday',
+      startTime: '17:00',
+      priority: 1,
+    });
+    await repo.appendHistory('alice', {
+      atMs: NOW,
+      subscriptionId: sub.id,
+      className: 'Yoga',
+      classDate: '2026-09-07',
+      startTime: '17:00',
+      outcome: 'booked',
+      attempts: 1,
+      firstAttemptOffsetMs: 0,
+      dryRun: false,
+      // No `center` — exactly what a pre-existing row looks like.
+    });
+
+    const mock = new MockElixiaClient();
+    const gym: BookingBackend = {
+      login: (email, password, at) => mock.login(email, password, at),
+      refresh: (tokens, at) => mock.refresh(tokens, at),
+      listCenters: (tokens) => mock.listCenters(tokens),
+      listClasses: (tokens, center) => mock.listClasses(tokens, center),
+      resolveClassId: (tokens, s, date) => mock.resolveClassId(tokens, s, date),
+      checkAvailability: (tokens, center, checks) => mock.checkAvailability(tokens, center, checks),
+      checkBookedStatus: async (tokens, center, checks) => checks.map(() => 'not-booked'),
+      book: (tokens, id) => mock.book(tokens, id),
+    };
+    const withBackend: AppConfig = { ...config, backend: gym };
+
+    const on = await enableCalendarSync(withBackend, linked);
+    const feed = await calendarFeedFor(withBackend, on.calendarFeedToken!, NOW);
+
+    expect(feed).not.toContain('BEGIN:VEVENT');
+    expect((await repo.listHistory('alice'))[0]?.cancelledAtMs).toBe(NOW);
+  });
 });
