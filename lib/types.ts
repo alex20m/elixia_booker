@@ -474,9 +474,10 @@ export interface BookingHistoryEntry {
   center?: string;
   /**
    * When this booking was found no longer held — cancelled through Elixia's
-   * own app or site, since this app never cancels one itself. Set by the
-   * nightly `reviewBookedOccurrences` sweep, and the reason the calendar feed
-   * stops serving an event for it: see `lib/calendarFeed.ts`.
+   * own app or site, since this app never cancels one itself. Set by
+   * `reviewBookedOccurrences`, run inline whenever the calendar feed is
+   * fetched, and the reason the feed stops serving an event for it: see
+   * `lib/calendarFeed.ts`.
    */
   cancelledAtMs?: number;
 }
