@@ -22,6 +22,7 @@ import {
   runInstructorSync,
   runReindex,
   saveCenterDefaults,
+  sendTestNotification,
   ServiceError,
   unlinkElixia,
   updateElixiaCredentials,
@@ -791,6 +792,53 @@ describe('settings', () => {
 
     // Same release instants, but each now books a class a week further out.
     expect(after[0]!.classDate).not.toBe(before[0]!.classDate);
+  });
+});
+
+describe('sendTestNotification', () => {
+  it('sends to the channel the profile actually chose', async () => {
+    const profile = await linkedProfile();
+    config.resendApiKey = 'resend-key';
+    config.notifyFromEmail = 'Booker <bot@example.com>';
+
+    const sent: Array<{ to: string[]; text: string }> = [];
+    const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      sent.push(JSON.parse(String(init?.body)));
+      return new Response('{}', { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const result = await sendTestNotification(config, profile);
+
+      expect(result).toEqual({ sent: true });
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.to).toEqual(['me@example.com']);
+      expect(sent[0]!.text).toMatch(/test notification/i);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('reports why, rather than throwing, when the deployment cannot deliver it', async () => {
+    // This fixture's config has no Resend key configured — the same state a
+    // real deployment is in before its operator sets one up.
+    const profile = await linkedProfile();
+
+    const result = await sendTestNotification(config, profile);
+
+    expect(result.sent).toBe(false);
+    expect(result.reason).toMatch(/resend/i);
+  });
+
+  it('reports why, rather than throwing, for an account with notifications switched off', async () => {
+    const profile = await linkedProfile();
+    await repo.upsertProfile({ ...profile, notifyChannel: 'none' });
+
+    const result = await sendTestNotification(config, (await repo.getProfile(profile.id))!);
+
+    expect(result.sent).toBe(false);
+    expect(result.reason).toMatch(/off/i);
   });
 });
 

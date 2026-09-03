@@ -41,6 +41,7 @@ export function SettingsPanel({
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
   const [calendarError, setCalendarError] = useState('');
+  const [testResult, setTestResult] = useState<{ sent: boolean; reason?: string } | null>(null);
 
   /**
    * Change a field, and withdraw the "Saved" acknowledgement while doing it.
@@ -53,6 +54,7 @@ export function SettingsPanel({
    */
   const edit = <T,>(set: (value: T) => void, value: T): void => {
     setSaved(false);
+    setTestResult(null);
     set(value);
   };
 
@@ -208,6 +210,40 @@ export function SettingsPanel({
             Bookings still run — you just will not be told about them, including when your Elixia
             session expires and booking stops.
           </p>
+        )}
+
+        {channel !== 'none' && (
+          <div className="mt-s">
+            <ActionButton
+              id="test-notify-btn"
+              className="btn-secondary"
+              pendingLabel="Sending…"
+              onError={(err) => setError(err.message)}
+              onClick={async () => {
+                setError('');
+                setTestResult(null);
+                const result = await api<{ sent: boolean; reason?: string }>('/api/notify/test', {
+                  method: 'POST',
+                });
+                setTestResult(result);
+              }}
+            >
+              Send test notification
+            </ActionButton>
+
+            {testResult && (
+              <div
+                className={`banner ${testResult.sent ? 'banner-info' : 'banner-warn'} mt-s`}
+                id="test-notify-result"
+              >
+                <span>
+                  {testResult.sent
+                    ? 'Sent — check your inbox or chat.'
+                    : `Not sent: ${testResult.reason ?? 'unknown reason'}`}
+                </span>
+              </div>
+            )}
+          </div>
         )}
 
         {error && (

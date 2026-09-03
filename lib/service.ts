@@ -31,7 +31,7 @@ import { DuplicateSubscriptionError } from './db/repo';
 import { releasesFor, releasesInRange } from './planner';
 import { executeBooking, describeReport } from './booking';
 import { Logger } from './logger';
-import { notifyUser } from './notify';
+import { notifyUser, type NotifyResult } from './notify';
 import { qstashTargetFor, scheduleBookingTicks, createTickPublisher } from './qstash';
 import { isMembershipWindow } from './membership';
 import { isOfferedTimeZone } from './timezones';
@@ -380,6 +380,37 @@ async function announce(
     channel: profile.notifyChannel ?? 'unset',
     reason: result.reason ?? 'unknown',
   });
+}
+
+const TEST_NOTIFICATION_TEXT =
+  'Test notification from Elixia Booker — if this reached you, your alerts are set up correctly.';
+
+/**
+ * Send one notification to whichever channel a profile has chosen, purely to
+ * confirm delivery — nothing in the app is waiting on the outcome the way a
+ * real booking alert is.
+ *
+ * Goes through `notifyUser` itself rather than a channel directly, for the
+ * same reason every other alert does: the profile, not the caller, decides
+ * where this goes, so a test send proves the exact path a real one would take
+ * — including "nowhere", for a profile with no channel or an unconnected one.
+ * The result is returned rather than only logged, since the one caller here
+ * is a user waiting on screen to learn whether it arrived.
+ */
+export async function sendTestNotification(
+  config: AppConfig,
+  profile: Profile,
+): Promise<NotifyResult> {
+  const logger = new Logger();
+  const result = await notifyUser(config, profile, TEST_NOTIFICATION_TEXT);
+
+  logger.log(result.sent ? 'notify.test.sent' : 'notify.test.unsent', {
+    userId: profile.id,
+    channel: profile.notifyChannel ?? 'unset',
+    ...(result.sent ? {} : { reason: result.reason ?? 'unknown' }),
+  });
+
+  return result;
 }
 
 /**

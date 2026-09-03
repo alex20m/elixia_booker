@@ -108,7 +108,9 @@ beforeEach(() => {
           ? { enabled: true, token: 'cal-tok' }
           : url === '/api/calendar'
             ? { enabled: false }
-            : { ok: true };
+            : url === '/api/notify/test'
+              ? { sent: true }
+              : { ok: true };
     return new Response(JSON.stringify(payload), { status: 200 });
   }) as unknown as typeof fetch);
 
@@ -273,6 +275,41 @@ describe('Settings notifications', () => {
     render(view({ notifyChannel: 'email' }, true, true));
 
     expect(container.textContent).not.toMatch(/not being delivered/i);
+  });
+
+  it('sends a test alert and reports that it arrived', async () => {
+    render(view());
+
+    await click('test-notify-btn');
+
+    expect(requests).toContainEqual({
+      url: '/api/notify/test',
+      method: 'POST',
+      body: undefined,
+    });
+    expect(byId('test-notify-result')!.textContent).toMatch(/sent/i);
+  });
+
+  it('reports why a test alert did not go through, instead of just saying it failed', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: string) => {
+      requests.push({ url, method: 'POST', body: undefined });
+      return new Response(
+        JSON.stringify({ sent: false, reason: 'no Resend API key configured' }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch);
+
+    render(view());
+
+    await click('test-notify-btn');
+
+    expect(byId('test-notify-result')!.textContent).toMatch(/no Resend API key configured/);
+  });
+
+  it('offers no test button once notifications are switched off', () => {
+    render(view({ notifyChannel: 'none' }));
+
+    expect(byId('test-notify-btn')).toBeNull();
   });
 });
 
