@@ -121,6 +121,19 @@ and a **notification channel** — none of these have a default, because a
 wrong guess means silently missing bookings. Until they're set, the API
 returns `428 Precondition Required`.
 
+Choosing **email** as the channel needs the deployment itself to have
+`RESEND_API_KEY` (a [Resend](https://resend.com) API key) and
+`NOTIFY_FROM_EMAIL` (a sender verified against a domain on that Resend
+account) set — the setup pages offer email regardless, since nothing else in
+the account decides whether the deployment can send it. Without either,
+`sendEmail` (`lib/email.ts`) treats it the same as any other "nobody to
+tell" and drops the alert silently, by design — a notification failure must
+never fail the booking it is reporting. `/api/health`'s `emailConfigured`
+field and the "not being delivered" banner on the Settings and setup pages
+are what surface the gap instead; check the former to confirm the
+deployment itself is configured, and expect the latter if you pick email
+before it is.
+
 ## Two logins, on purpose
 
 Your **Booker account** (Neon Auth) is separate from your **Elixia

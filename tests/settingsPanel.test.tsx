@@ -20,7 +20,11 @@ let root: Root;
 let requests: Array<{ url: string; method: string; body: unknown }>;
 let opened: string[];
 
-const view = (overrides: Partial<DashboardView['account']> = {}, telegramConnect = true): DashboardView =>
+const view = (
+  overrides: Partial<DashboardView['account']> = {},
+  telegramConnect = true,
+  emailConfigured = true,
+): DashboardView =>
   ({
     account: {
       bookingWindowDays: 7,
@@ -35,6 +39,7 @@ const view = (overrides: Partial<DashboardView['account']> = {}, telegramConnect
       ...overrides,
     },
     telegramConnect,
+    emailConfigured,
     subscriptions: [],
     history: [],
     dryRun: false,
@@ -249,6 +254,23 @@ describe('Settings notifications', () => {
 
   it('says nothing of the sort once the chat is connected', async () => {
     render(view({ notifyChannel: 'telegram', telegramChatId: '555' }));
+
+    expect(container.textContent).not.toMatch(/not being delivered/i);
+  });
+
+  it('warns when email is chosen but this deployment cannot send it', async () => {
+    // Nothing gates the email option the way canConnect gates Telegram's
+    // one-tap flow, so a deployment with no Resend key or verified sender
+    // still offers it — and a user who picks it deserves the same "this is
+    // not actually working" the Telegram banner already gives, rather than a
+    // silence indistinguishable from every alert simply not having fired yet.
+    render(view({ notifyChannel: 'email' }, true, false));
+
+    expect(container.textContent).toMatch(/not being delivered/i);
+  });
+
+  it('says nothing of the sort once the deployment can send email', async () => {
+    render(view({ notifyChannel: 'email' }, true, true));
 
     expect(container.textContent).not.toMatch(/not being delivered/i);
   });

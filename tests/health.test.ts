@@ -18,6 +18,8 @@ const VARS = [
   'APP_URL',
   'QSTASH_CURRENT_SIGNING_KEY',
   'QSTASH_NEXT_SIGNING_KEY',
+  'RESEND_API_KEY',
+  'NOTIFY_FROM_EMAIL',
 ] as const;
 
 let saved: Record<string, string | undefined>;
@@ -98,5 +100,42 @@ describe('/api/health and the QStash booking path', () => {
     // whose readiness qstashConfigured already covers.
     live();
     expect(await health()).not.toHaveProperty('cronConfigured');
+  });
+});
+
+/**
+ * Email is the channel offered by default, and unlike every other subsystem
+ * on this page it had no reporting at all: a deployment with no Resend key
+ * and no verified sender answered `ok: true` with an otherwise-green health
+ * check while `sendEmail` (lib/email.ts) silently dropped every alert,
+ * including the one saying booking itself had stopped. That is the exact
+ * trap this file's header describes for ENCRYPTION_KEY and the header above
+ * describes for QStash — reported here for the same reason.
+ */
+describe('/api/health and email notifications', () => {
+  const live = () => {
+    process.env.RESEND_API_KEY = 're_test_key';
+    process.env.NOTIFY_FROM_EMAIL = 'Booker <bot@example.com>';
+  };
+
+  it('reports email as configured when both parts are set', async () => {
+    live();
+    expect(await health()).toMatchObject({ emailConfigured: true });
+  });
+
+  it('reports email as not configured when the Resend key is missing', async () => {
+    live();
+    delete process.env.RESEND_API_KEY;
+    expect(await health()).toMatchObject({ emailConfigured: false });
+  });
+
+  it('reports email as not configured when there is no verified sender', async () => {
+    live();
+    delete process.env.NOTIFY_FROM_EMAIL;
+    expect(await health()).toMatchObject({ emailConfigured: false });
+  });
+
+  it('reports email as not configured when neither is set', async () => {
+    expect(await health()).toMatchObject({ emailConfigured: false });
   });
 });

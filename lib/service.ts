@@ -188,6 +188,16 @@ export interface SetupState {
   suggestedEmail: string;
   /** Whether this deployment can offer the one-tap Telegram connect flow. */
   telegramConnect: boolean;
+  /**
+   * Whether this deployment can actually deliver an email alert.
+   *
+   * Unlike Telegram, the email option is offered unconditionally — there is
+   * no fallback to gate it behind — so a profile that picks it on a
+   * deployment with no Resend key or verified sender needs its own way to
+   * find out, rather than discovering it the way #118 did: silently, after
+   * the first alert that never arrived.
+   */
+  emailConfigured: boolean;
   /** The chat already connected, so the page can show that step as done. */
   telegramChatId: string;
   /** Whether calendar sync is already on, so the step can show that as done. */
@@ -201,6 +211,7 @@ export function setupState(config: AppConfig, profile: Profile, sessionEmail?: s
     needed: !isConfigured(profile),
     suggestedEmail: profile.notifyEmail ?? sessionEmail ?? '',
     telegramConnect: telegramConnectConfigured(config),
+    emailConfigured: emailNotifyConfigured(config),
     telegramChatId: profile.telegramChatId ?? '',
     calendarSyncEnabled: profile.calendarSyncEnabled ?? false,
     calendarFeedToken: profile.calendarFeedToken ?? '',
@@ -267,6 +278,20 @@ export function telegramConnectConfigured(config: AppConfig): boolean {
   return Boolean(
     config.telegramBotToken && config.telegramBotUsername && config.telegramWebhookSecret,
   );
+}
+
+/**
+ * Whether this deployment can actually send an email alert.
+ *
+ * Both parts are load-bearing and fail differently without the other, the
+ * same as `telegramConnectConfigured`'s three: no key and Resend refuses the
+ * call, no verified sender and there is nothing to put in `from`. Mirrors
+ * `emailConfigured` in lib/appConfig.ts (used by /api/health) rather than
+ * reading `process.env` itself, which is what keeps this testable without an
+ * environment.
+ */
+export function emailNotifyConfigured(config: AppConfig): boolean {
+  return Boolean(config.resendApiKey && config.notifyFromEmail);
 }
 
 /**
@@ -705,6 +730,8 @@ export interface DashboardView {
    * the UI back to asking for a chat id by hand.
    */
   telegramConnect: boolean;
+  /** Whether this deployment can actually deliver an email alert. See SetupState. */
+  emailConfigured: boolean;
   subscriptions: Array<Subscription & { nextReleaseAt: string | null; nextClassDate: string | null }>;
   history: BookingHistoryEntry[];
   dryRun: boolean;
@@ -756,6 +783,7 @@ export async function buildDashboard(
       nextClassDate: next ? next.classDate : null,
     })),
     telegramConnect: telegramConnectConfigured(config),
+    emailConfigured: emailNotifyConfigured(config),
     history: await config.repo.listHistory(profile.id),
     dryRun: config.dryRun,
     apiDiscovered: API_DISCOVERED || config.mock,

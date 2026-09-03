@@ -38,6 +38,7 @@ const view = (overrides: Partial<DashboardView['account']> = {}): DashboardView 
       ...overrides,
     },
     telegramConnect: true,
+    emailConfigured: true,
     subscriptions: [],
     history: [],
     dryRun: false,
