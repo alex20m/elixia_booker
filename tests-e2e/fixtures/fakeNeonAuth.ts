@@ -3,10 +3,10 @@ import { TEST_USER } from './testUser';
 
 /**
  * A stand-in for the managed Neon Auth service, implementing just enough of
- * Better Auth's REST surface — `POST /sign-in/email` and `GET /get-session`
- * — for the real app's proxy (app/api/auth/[...path]/route.ts) to drive a
- * real sign-in end to end, with no external credentials and no dependence on
- * the real service's own uptime.
+ * Better Auth's REST surface — `POST /sign-in/email`, `GET /get-session` and
+ * `POST /sign-out` — for the real app's proxy (app/api/auth/[...path]/route.ts)
+ * to drive a real sign-in and sign-out end to end, with no external
+ * credentials and no dependence on the real service's own uptime.
  *
  * The reason this exists rather than pointing e2e tests at the real thing:
  * PR #107 fixed a bug that only shows up when a get-session check a fresh
@@ -121,6 +121,22 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     sendJson(res, 401, { error: { message: 'Invalid email or password' } });
+    return;
+  }
+
+  // The app's own proxy (lib/auth/neonAuth.ts, from @neondatabase/auth)
+  // reads this response's Set-Cookie to decide whether to clear its own local
+  // "session_data" cookie too (see `mintSessionDataFromResponse` in that
+  // package): a deleted session-token cookie — `Max-Age=0` — is what tells it
+  // the sign-out actually happened, mirroring Better Auth's own
+  // `deleteSessionCookie` (its sign-out route does the same thing before
+  // answering `{ success: true }`). Without this, tests-e2e/dashboard.spec.ts's
+  // sign-out test would find the session cookie left in place and the
+  // dashboard still showing after "signing out".
+  if (req.method === 'POST' && url.pathname === '/sign-out') {
+    sendJson(res, 200, { success: true }, {
+      'set-cookie': `${COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`,
+    });
     return;
   }
 

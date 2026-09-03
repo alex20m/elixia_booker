@@ -1,5 +1,6 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import { TEST_USER } from './fixtures/testUser';
+import { expectSignedIn, expectSignedOut, openSignInPage, submitCredentials } from './helpers';
 
 /**
  * Drives the real sign-in form in a real browser, against the real app and
@@ -27,44 +28,6 @@ async function armGetSessionFailures(request: import('@playwright/test').APIRequ
 
 async function setGetSessionOutage(request: import('@playwright/test').APIRequestContext, down: boolean) {
   await request.post(`${FAKE_AUTH_URL}/__test__/set-get-session-outage`, { data: { down } });
-}
-
-/**
- * Loads the sign-in page and waits for it to settle.
- *
- * The page checks its own session on mount — before any credentials are
- * typed — which is a `GET /get-session` call same as any other. Split out so
- * a test that arms scripted failures can arm them *after* this one has
- * already landed, or that call would eat one of the failures meant for the
- * sign-in itself and under-count what the fix actually has to survive.
- */
-async function openSignInPage(page: Page) {
-  await page.goto('/auth/sign-in');
-  await page.waitForLoadState('networkidle');
-}
-
-async function submitCredentials(page: Page, email: string, password: string) {
-  await page.locator('input[name="email"]').fill(email);
-  await page.locator('input[name="password"]').fill(password);
-  await page.locator('button[type="submit"]').click();
-}
-
-/**
- * Reached only once the visitor is genuinely signed in: `#load-error` is
- * `DashboardApp`'s "could not load your account" banner, which only renders
- * once `dashboardScreen()` has resolved `signedIn: true` — this e2e run sets
- * no `ENCRYPTION_KEY`, so a real sign-in always ends up here, deterministically.
- * A weaker check (just "not on the sign-in page") would also pass while stuck
- * on the loading screen or bounced to the signed-out landing page, so it
- * can't tell a real sign-in from one of those.
- */
-async function expectSignedIn(page: Page) {
-  await expect(page.locator('#load-error')).toBeVisible({ timeout: 10_000 });
-}
-
-/** `DashboardApp`'s signed-out landing page — reached once `useSession()` has settled on no user. */
-async function expectSignedOut(page: Page) {
-  await expect(page.locator('#auth-btn')).toBeVisible({ timeout: 10_000 });
 }
 
 test('signs in with the correct email and password', async ({ page }) => {

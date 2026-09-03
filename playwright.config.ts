@@ -68,6 +68,21 @@ export default defineConfig({
         // at the fake server above instead of the real managed instance.
         NEON_AUTH_BASE_URL: FAKE_AUTH_URL,
         NEON_AUTH_COOKIE_SECRET: 'e2e-test-cookie-secret-do-not-use-elsewhere',
+        // Without ENCRYPTION_KEY, loadAppConfig() throws before a signed-in
+        // request can ever resolve, so a real sign-in always dead-ended on
+        // DashboardApp's "could not load your account" banner — fine for
+        // proving sign-in itself, but it means nothing past it (setup,
+        // subscriptions, settings) was ever reachable from this suite. Set
+        // here so tests-e2e/dashboard.spec.ts can drive the real wizard and
+        // dashboard; this key is test-only and decodes to 32 bytes, which is
+        // all loadAppConfig checks. With no DATABASE_URL, the app falls back
+        // to its in-memory repo (see lib/appConfig.ts fallbackRepo) — data
+        // lives only for this process, which is exactly the built app this
+        // webServer starts and tears down per run.
+        ENCRYPTION_KEY: 'JgkL/kBZBdOAGTZlMy0N3CSNphmJ9uI0lTtTFUIaTWo=',
+        // Lets a real sign-in reach a real, bookable dashboard with no
+        // external Elixia account: see lib/mock.ts.
+        MOCK_ELIXIA: '1',
       },
     },
   ],
