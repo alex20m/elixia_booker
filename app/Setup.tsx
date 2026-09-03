@@ -301,6 +301,21 @@ export default function Setup({ onDone }: { onDone: () => void }) {
                 </div>
               )}
 
+              {/* Unlike Telegram's connect flow, nothing gates the email option
+                  itself — it stays offered even where the deployment has no
+                  Resend key or verified sender, and a correct address here
+                  cannot fix that. */}
+              {channel === 'email' && state && !state.emailConfigured && (
+                <div className="banner banner-warn" id="setup-email-broken">
+                  <span>
+                    This deployment has no email sender configured, so alerts are{' '}
+                    <strong>not being delivered</strong>. You can still finish setup — ask whoever
+                    runs this deployment to set RESEND_API_KEY and NOTIFY_FROM_EMAIL, or choose
+                    another channel.
+                  </span>
+                </div>
+              )}
+
               {channel === 'telegram' && state?.telegramConnect && (
                 <div>
                   <TelegramConnect

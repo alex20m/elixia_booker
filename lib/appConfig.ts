@@ -123,6 +123,20 @@ export function encryptionConfigured(): boolean {
  * messages get published and then every delivery 401s, hours later, on a path
  * nobody is watching — while looking entirely healthy from outside.
  */
+/**
+ * Whether this deployment can actually send an email alert.
+ *
+ * Both parts are load-bearing and fail differently without the other: no key
+ * and Resend rejects the call outright, no verified sender and Resend has
+ * nothing to put in `from`. `sendEmail` (lib/email.ts) treats either as an
+ * ordinary "nobody to tell" and never throws, which is correct for the
+ * booking run but means nothing else ever surfaces the gap — reported here
+ * for the same reason `qstashConfigured` is.
+ */
+export function emailConfigured(): boolean {
+  return Boolean(process.env.RESEND_API_KEY && process.env.NOTIFY_FROM_EMAIL);
+}
+
 export function qstashConfigured(): boolean {
   const canPublish =
     qstashTargetFor({

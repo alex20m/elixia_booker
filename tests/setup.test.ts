@@ -82,6 +82,28 @@ describe('a brand new profile', () => {
     expect((await repo.getProfile(USER_ID))?.notifyEmail).toBeUndefined();
   });
 
+  it('says the email channel cannot actually be reached when the deployment has no Resend key', async () => {
+    // Email is offered as a channel regardless of whether the operator ever
+    // set RESEND_API_KEY and NOTIFY_FROM_EMAIL up — see app/Setup.tsx, which
+    // does not gate the option the way it gates Telegram's connect flow. A
+    // profile that picks it anyway must be able to tell it will not work,
+    // the same way telegramConnect tells it when Telegram cannot.
+    const profile = await getOrCreateProfile(config, USER_ID);
+
+    expect(setupState(config, profile, 'me@example.com').emailConfigured).toBe(false);
+  });
+
+  it('says the email channel works once the deployment has a Resend key and a sender', async () => {
+    const profile = await getOrCreateProfile(config, USER_ID);
+    const live: AppConfig = {
+      ...config,
+      resendApiKey: 're_test_key',
+      notifyFromEmail: 'Booker <bot@example.com>',
+    };
+
+    expect(setupState(live, profile, 'me@example.com').emailConfigured).toBe(true);
+  });
+
   it('refuses to show a dashboard until setup is finished', async () => {
     const profile = await getOrCreateProfile(config, USER_ID);
 

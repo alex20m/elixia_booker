@@ -1,5 +1,5 @@
 import { API_DISCOVERED } from '@/lib/elixia';
-import { encryptionConfigured, qstashConfigured } from '@/lib/appConfig';
+import { emailConfigured, encryptionConfigured, qstashConfigured } from '@/lib/appConfig';
 import { authConfigured } from '@/lib/auth/neonAuth';
 import { databaseConfigured } from '@/lib/db/neon';
 import { handle, json } from '@/lib/http';
@@ -24,6 +24,10 @@ export async function GET(): Promise<Response> {
       // means classes are not being booked, however green everything above
       // looks.
       qstashConfigured: qstashConfigured(),
+      // Reported for the same reason as qstashConfigured: a deployment with no
+      // Resend key or no verified sender looks entirely healthy while the
+      // email channel drops every alert it is ever asked to send, silently.
+      emailConfigured: emailConfigured(),
     }),
   );
 }

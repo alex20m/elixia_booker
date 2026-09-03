@@ -23,6 +23,7 @@ const STATE = {
   needed: true,
   suggestedEmail: 'me@example.com',
   telegramConnect: true,
+  emailConfigured: true,
   telegramChatId: '',
   calendarSyncEnabled: false,
   calendarFeedToken: '',
@@ -328,6 +329,28 @@ describe('the notifications page', () => {
 
     expect(disabled('setup-next')).toBe(false);
     expect(container.textContent).toMatch(/will not be told/i);
+  });
+
+  it('warns that email will not work when this deployment has no sender configured', async () => {
+    // The email option is offered unconditionally, unlike Telegram's connect
+    // flow, so a deployment with no Resend key or verified sender still lets
+    // someone finish setup on it — and would otherwise fail exactly the way
+    // #118 did: an address saved, a channel chosen, and nothing ever arrives.
+    state = { ...state, emailConfigured: false };
+    await throughToNotifications();
+    await choose('setup-channel', 'email');
+
+    expect(container.textContent).toMatch(/not being delivered/i);
+    // Still allowed to move on: this is the operator's gap, not something a
+    // correct email address can fix.
+    expect(disabled('setup-next')).toBe(false);
+  });
+
+  it('says nothing of the sort once this deployment can actually send email', async () => {
+    await throughToNotifications();
+    await choose('setup-channel', 'email');
+
+    expect(container.textContent).not.toMatch(/not being delivered/i);
   });
 });
 

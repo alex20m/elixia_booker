@@ -346,6 +346,23 @@ describe('linking a gym account', () => {
     expect(view.account.elixiaStatus).toBe('ok');
   });
 
+  it('tells the dashboard whether this deployment can actually send email', async () => {
+    // Nothing gates the email option the way telegramConnect gates Telegram's
+    // one-tap flow (see app/Setup.tsx), so a profile can pick it on a
+    // deployment with no RESEND_API_KEY or NOTIFY_FROM_EMAIL and never learn
+    // why nothing arrives — see the failure this test exists to prevent.
+    const profile = await linkedProfile();
+
+    expect((await buildDashboard(config, profile, nowMs)).emailConfigured).toBe(false);
+
+    const live: AppConfig = {
+      ...config,
+      resendApiKey: 're_test_key',
+      notifyFromEmail: 'Booker <bot@example.com>',
+    };
+    expect((await buildDashboard(live, profile, nowMs)).emailConfigured).toBe(true);
+  });
+
   it('erases the stored credentials on unlink', async () => {
     const profile = await linkedProfile();
     await addSubscription(config, profile, BODYPUMP, nowMs);
