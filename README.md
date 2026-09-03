@@ -190,20 +190,27 @@ isolation, and CI pipeline shape. Also mutation-tested against dozens of
 deliberately broken variants to confirm the suite actually catches them.
 
 `test:e2e` (Playwright, see `playwright.config.ts` and `tests-e2e/`) drives
-the sign-in flow in a real browser against a real, built instance of the app
-and a small fake Neon Auth server (`tests-e2e/fixtures/fakeNeonAuth.ts`) —
-the layer that catches a bug the unit suite can't, because it only exists in
-what the browser actually shows: a toast nobody sees, a retry that fixes the
-network call but not the screen. No real credentials or services needed; it
-builds and serves the app itself, so the first run takes a bit longer.
+the sign-in flow and the real dashboard in a real browser against a real,
+built instance of the app — with `ENCRYPTION_KEY` and `MOCK_ELIXIA=1` set for
+that build, so a sign-in reaches a real, bookable dashboard (backed by the
+in-memory repo) rather than stopping at "could not load your account" — and a
+small fake Neon Auth server (`tests-e2e/fixtures/fakeNeonAuth.ts`) standing in
+for the managed service. This is the layer that catches a bug the unit suite
+can't, because it only exists in what the browser actually shows: a toast
+nobody sees, a retry that fixes the network call but not the screen, a
+combobox that never wires the "Add class" button up. No real credentials or
+services needed; it builds and serves the app itself, so the first run takes
+a bit longer.
 
 ### CI/CD
 
-Two workflows (`pull-request.yml`, `main.yml`) run
-lint/typecheck/test/build/e2e — neither deploys or migrates. Vercel's Git
-integration deploys every push; `vercel.json` runs migrations as part of the
-build (`npm run migrate && next build`) so a failed migration blocks the
-deploy instead of shipping a broken schema.
+Two workflows (`pull-request.yml`, `main.yml`), each two parallel jobs:
+`verify` runs lint/typecheck/test/build, and `e2e` builds and runs the
+Playwright suite above in a real browser — split out because it is by far the
+slowest part and does not need to wait on the other four. Neither job deploys
+or migrates. Vercel's Git integration deploys every push; `vercel.json` runs
+migrations as part of the build (`npm run migrate && next build`) so a failed
+migration blocks the deploy instead of shipping a broken schema.
 
 ## Design constraints
 

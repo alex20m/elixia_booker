@@ -150,26 +150,46 @@ describe('the verify job', () => {
     }
   });
 
-  it('installs a browser and runs the end-to-end suite, even after an earlier check failed', () => {
+});
+
+describe('the e2e job', () => {
+  // A separate job from `verify` rather than more steps on it: this suite
+  // builds and boots the app itself (see playwright.config.ts's webServer)
+  // on top of installing a browser, which made it by far the slowest part of
+  // a single combined job — and strictly after lint/typecheck/test/build had
+  // already run in sequence. Splitting it out runs both in parallel, so a
+  // pull request's wall-clock wait is however long the slower of the two
+  // takes, not their sum.
+  it('installs from the lockfile rather than resolving fresh versions', () => {
+    for (const [file, workflow] of Object.entries(workflows)) {
+      const commands = commandsOf(workflow, 'e2e');
+      expect(commands, `${file}'s e2e job must install from the lockfile`).toContain('npm ci');
+      expect(commands, `${file}'s e2e job must not resolve fresh versions`).not.toMatch(
+        /npm install\b/,
+      );
+    }
+  });
+
+  it('installs a browser and runs the end-to-end suite', () => {
     // The vitest suite mocks the auth proxy's handler directly, so it cannot
     // catch a bug that only shows up in what the browser does with the
     // response (see tests-e2e/login.spec.ts) — this is what closed that gap,
     // and it is worth just as much protection against being silently dropped
-    // as the four checks above.
+    // as the four checks in `verify`.
     for (const [file, workflow] of Object.entries(workflows)) {
-      const commands = commandsOf(workflow, 'verify');
+      const commands = commandsOf(workflow, 'e2e');
       expect(commands, `${file} must install a Playwright browser`).toMatch(/playwright install/);
       expect(commands, `${file} must run the end-to-end suite`).toContain('npm run test:e2e');
+    }
+  });
 
-      const e2eSteps = (jobOf(file, 'verify').steps ?? []).filter((step) =>
-        /playwright install|npm run test:e2e/.test(step.run ?? ''),
-      );
-      expect(e2eSteps.length, `${file} must have both an install and a run step`).toBe(2);
-      for (const step of e2eSteps) {
-        expect(step.if, `${file}: "${step.name}" must run even after an earlier failure`).toBe(
-          '${{ !cancelled() }}',
-        );
-      }
+  it('runs independently of the verify job, rather than waiting on it', () => {
+    // The whole point of splitting this out: a `needs: verify` here would
+    // silently put the sequencing back, and with it the wait this split
+    // exists to remove — a lint failure would once again delay finding out
+    // whether the browser suite also broke, by however long verify takes.
+    for (const file of Object.keys(workflows)) {
+      expect(jobOf(file, 'e2e').needs, `${file}'s e2e job must not depend on verify`).toBeUndefined();
     }
   });
 });
