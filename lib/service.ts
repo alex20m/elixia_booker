@@ -749,13 +749,14 @@ export interface DashboardView {
     /** Empty until sync has been turned on at least once. */
     calendarFeedToken: string;
     /**
-     * Why the most recent alert could not be delivered, empty when it was (or
-     * nothing has been sent yet). See `Profile['notifyFailedReason']` — this is
-     * only ever set for a request that actually went out and was refused, not
-     * for "no channel chosen" or "switched off", which the other banners on
-     * this page already cover.
+     * Whether the most recent alert could not be delivered. See
+     * `Profile['notifyFailedReason']` — true only for a request that actually
+     * went out and was refused, not for "no channel chosen" or "switched off",
+     * which the other banners on this page already cover. The reason itself
+     * stays server-side: a client-facing message says only that something
+     * failed, never the provider's own error text.
      */
-    notifyFailedReason: string;
+    notifyFailed: boolean;
     /** When that failure happened, or `null` if there isn't one. */
     notifyFailedAtMs: number | null;
   };
@@ -810,7 +811,7 @@ export async function buildDashboard(
       elixiaStatus: profile.elixiaStatus,
       calendarSyncEnabled: profile.calendarSyncEnabled ?? false,
       calendarFeedToken: profile.calendarFeedToken ?? '',
-      notifyFailedReason: profile.notifyFailedReason ?? '',
+      notifyFailed: profile.notifyFailedReason !== undefined,
       notifyFailedAtMs: profile.notifyFailedAtMs ?? null,
     },
     subscriptions: byWhenTheyHappen.map(({ s, next }) => ({

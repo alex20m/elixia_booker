@@ -183,15 +183,17 @@ export function SettingsPanel({
             token Telegram no longer honours) — which used to be visible only
             in server logs. Suppressed when one of the other banners is
             already showing, since a channel that is not even reachable yet is
-            the more useful thing to say. */}
-        {view.account.notifyFailedReason &&
+            the more useful thing to say. Deliberately generic: the provider's
+            own error text is an operator detail, not something to hand a user
+            who cannot act on it and should not have to parse it. */}
+        {view.account.notifyFailed &&
           channel !== 'none' &&
           !(channel === 'telegram' && !connected) &&
           !(channel === 'email' && !view.emailConfigured) && (
             <div className="banner banner-warn mt-s" id="notify-last-failed">
               <span>
-                The last alert could not be delivered: <strong>{view.account.notifyFailedReason}</strong>.
-                This clears itself the next time one gets through.
+                Your last alert could not be delivered. This clears itself the next time one gets
+                through — if it keeps happening, double-check your notification settings below.
               </span>
             </div>
           )}
