@@ -1358,6 +1358,89 @@ describe('classes that Elixia withdraws', () => {
     }
   });
 
+  it('records a delivery that actually reached the channel and was refused', async () => {
+    // The gap this covers: a channel that looks fully configured — a chat is
+    // connected, a bot token is set — but Telegram itself rejects the send
+    // (a revoked token, a user who blocked the bot). Nothing on the settings
+    // page says so today; the reason lives only in a log line nobody reads.
+    const linked = await linkedProfile();
+    await repo.upsertProfile({ ...linked, telegramChatId: '4242', notifyChannel: 'telegram' });
+    const withChat = (await repo.getProfile(USER_ID))!;
+    await addSubscription(config, withChat, BODYPUMP, nowMs);
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('unauthorized', { status: 401 })),
+    );
+    config.telegramBotToken = 'bot-token';
+
+    try {
+      gymWithout('Bodypump');
+      await reviewListedClasses(config, withChat, nowMs);
+
+      const stored = await repo.getProfile(USER_ID);
+      expect(stored?.notifyFailedReason).toBe('telegram returned HTTP 401');
+      expect(stored?.notifyFailedAtMs).toBe(nowMs);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('clears a recorded failure the next time an alert gets through', async () => {
+    const linked = await linkedProfile();
+    await repo.upsertProfile({
+      ...linked,
+      telegramChatId: '4242',
+      notifyChannel: 'telegram',
+      notifyFailedReason: 'telegram returned HTTP 401',
+      notifyFailedAtMs: nowMs - 1000,
+    });
+    const withChat = (await repo.getProfile(USER_ID))!;
+    await addSubscription(config, withChat, BODYPUMP, nowMs);
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('{}', { status: 200 })),
+    );
+    config.telegramBotToken = 'bot-token';
+
+    try {
+      gymWithout('Bodypump');
+      await reviewListedClasses(config, withChat, nowMs);
+
+      const stored = await repo.getProfile(USER_ID);
+      expect(stored?.notifyFailedReason).toBeUndefined();
+      expect(stored?.notifyFailedAtMs).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('never records a failure for a channel that was never dialled — that already has its own banner', async () => {
+    // Telegram chosen but never connected: `notifyChat` refuses before it ever
+    // makes a request. That state is exactly what the settings page's own
+    // "not being delivered" banner already explains, so it must not also
+    // populate this one — two banners disagreeing about the same gap would be
+    // worse than either alone.
+    const profile = await linkedProfile();
+    await repo.upsertProfile({ ...profile, notifyChannel: 'telegram' });
+    const notConnected = (await repo.getProfile(USER_ID))!;
+    await addSubscription(config, notConnected, BODYPUMP, nowMs);
+
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      gymWithout('Bodypump');
+      await reviewListedClasses(config, notConnected, nowMs);
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect((await repo.getProfile(USER_ID))?.notifyFailedReason).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('is run for every linked profile by the nightly job', async () => {
     const profile = await linkedProfile();
     await addSubscription(config, profile, BODYPUMP, nowMs);

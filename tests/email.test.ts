@@ -27,7 +27,7 @@ describe('sendEmail', () => {
       { fetchImpl: fetchImpl as unknown as typeof fetch },
     );
 
-    expect(result).toEqual({ sent: true });
+    expect(result).toEqual({ sent: true, attempted: true });
     const [url, init] = fetchImpl.mock.calls[0]!;
     expect(url).toBe('https://api.resend.com/emails');
     expect(init.method).toBe('POST');

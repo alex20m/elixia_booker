@@ -212,6 +212,27 @@ describe('profiles', () => {
     expect(stored?.calendarFeedToken).toBeUndefined();
   });
 
+  it('round-trips the reason the last alert failed to deliver, and clears it', async () => {
+    await repo.upsertProfile(
+      profile(ALICE, {
+        notifyFailedReason: 'resend returned HTTP 401',
+        notifyFailedAtMs: Date.UTC(2026, 3, 2, 8, 30),
+      }),
+    );
+
+    const stored = await repo.getProfile(ALICE);
+    expect(stored?.notifyFailedReason).toBe('resend returned HTTP 401');
+    expect(stored?.notifyFailedAtMs).toBe(Date.UTC(2026, 3, 2, 8, 30));
+
+    // The same reason `elixia_secret` disappears on an upsert that omits it:
+    // this is a status, not a log, and a later send that succeeds must be able
+    // to make the gap it names go away.
+    await repo.upsertProfile(profile(ALICE));
+    const cleared = await repo.getProfile(ALICE);
+    expect(cleared?.notifyFailedReason).toBeUndefined();
+    expect(cleared?.notifyFailedAtMs).toBeUndefined();
+  });
+
   it('finds a profile by its calendar feed token', async () => {
     await repo.upsertProfile(
       profile(ALICE, { calendarSyncEnabled: true, calendarFeedToken: 'b'.repeat(64) }),

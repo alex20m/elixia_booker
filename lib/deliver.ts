@@ -20,6 +20,16 @@
 export interface NotifyResult {
   sent: boolean;
   reason?: string;
+  /**
+   * Whether a request actually went out to the channel's API, as opposed to
+   * the send being turned away before dialling out — no channel chosen, the
+   * channel switched off, the deployment missing its key, or the user with
+   * nowhere to send. Those are already surfaced their own way (the setup and
+   * settings banners, or are the user's own deliberate choice); an `attempted`
+   * failure is not, which is what lets a caller tell the two apart and record
+   * only the kind nothing else would ever explain.
+   */
+  attempted?: boolean;
 }
 
 /**
@@ -85,7 +95,11 @@ export async function postJson(
   const timeout = new Promise<NotifyResult>((resolve) => {
     timer = setTimeout(() => {
       controller.abort();
-      resolve({ sent: false, reason: `${request.service} did not answer within ${timeoutMs}ms` });
+      resolve({
+        sent: false,
+        reason: `${request.service} did not answer within ${timeoutMs}ms`,
+        attempted: true,
+      });
     }, timeoutMs);
   });
 
@@ -99,12 +113,16 @@ export async function postJson(
       });
 
       if (!response.ok) {
-        return { sent: false, reason: `${request.service} returned HTTP ${response.status}` };
+        return {
+          sent: false,
+          reason: `${request.service} returned HTTP ${response.status}`,
+          attempted: true,
+        };
       }
-      return { sent: true };
+      return { sent: true, attempted: true };
     } catch (err) {
       const message = redact((err as Error).message, request.secrets);
-      return { sent: false, reason: `${request.service} request failed: ${message}` };
+      return { sent: false, reason: `${request.service} request failed: ${message}`, attempted: true };
     }
   };
 
