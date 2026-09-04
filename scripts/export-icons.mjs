@@ -18,7 +18,7 @@
  * or CI: a deploy must not depend on a browser download, and an icon that
  * silently re-renders on every build is an icon nobody notices going wrong.
  *
- * Three shapes come out of it, and they are not the same picture:
+ * Four shapes come out of it, and they are not the same picture:
  *
  * - `icon-192` / `icon-512` are the tile as drawn, rounded corners and all, on
  *   transparency. These are what a browser shows when it wants an icon as-is.
@@ -29,6 +29,13 @@
  *   bounding box that decide the scale, not its width.
  * - `apple-icon` is opaque and square: iOS applies its own mask and composites
  *   over black, so transparent corners come out as black ones.
+ * - `favicon.ico` is the tile again, rendered at 16/32/48px and packed into one
+ *   ICO container. This exists because `app/icon.svg` alone renders fine as a
+ *   browser-tab favicon but isn't enough for tools that look for a favicon by
+ *   fetching `/favicon.ico` directly rather than reading the page's <link>
+ *   tags — the Vercel project dashboard among them. The container just holds
+ *   three raw PNGs (the format modern ICO readers accept since Vista), so no
+ *   ICO-encoding dependency is needed — `buildIco` below does the packing.
  */
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
@@ -49,6 +56,7 @@ const { chromium } = await import('playwright').catch(() => {
 const NAVY = '#0d2134';
 /* Keeps the lockup's corners inside Android's safe circle; see above. */
 const MASKABLE_SCALE = 0.86;
+const FAVICON_SIZES = [16, 32, 48];
 
 const targets = [
   { out: 'public/icons/icon-192.png', size: 192, shape: 'tile' },
@@ -56,6 +64,35 @@ const targets = [
   { out: 'public/icons/maskable-512.png', size: 512, shape: 'maskable' },
   { out: 'app/apple-icon.png', size: 180, shape: 'opaque' },
 ];
+
+/* Packs raw PNGs into an ICO container (PNG-in-ICO, supported since Windows
+   Vista and by every modern favicon reader) — one ICONDIR header, one
+   ICONDIRENTRY per image, then the PNG bytes back to back. */
+function buildIco(pngs) {
+  const headerSize = 6;
+  const entrySize = 16;
+  const dirSize = headerSize + entrySize * pngs.length;
+
+  const header = Buffer.alloc(headerSize);
+  header.writeUInt16LE(1, 2); // type: icon
+  header.writeUInt16LE(pngs.length, 4);
+
+  const entries = [];
+  let offset = dirSize;
+  for (const { size, data } of pngs) {
+    const entry = Buffer.alloc(entrySize);
+    entry.writeUInt8(size >= 256 ? 0 : size, 0); // width (0 means 256)
+    entry.writeUInt8(size >= 256 ? 0 : size, 1); // height
+    entry.writeUInt16LE(1, 4); // color planes
+    entry.writeUInt16LE(32, 6); // bits per pixel
+    entry.writeUInt32LE(data.length, 8);
+    entry.writeUInt32LE(offset, 12);
+    entries.push(entry);
+    offset += data.length;
+  }
+
+  return Buffer.concat([header, ...entries, ...pngs.map((p) => p.data)]);
+}
 
 const page = (svg, { size, shape }) => {
   /* The tile's rounded corners live in the SVG itself, so the maskable and
@@ -99,5 +136,18 @@ for (const target of targets) {
   console.log(`${target.out}  ${target.size}×${target.size}  ${shot.length} bytes`);
   await tab.close();
 }
+
+const faviconPngs = [];
+for (const size of FAVICON_SIZES) {
+  const tab = await browser.newPage({ viewport: { width: size, height: size }, deviceScaleFactor: 1 });
+  await tab.setContent(page(svg, { size, shape: 'tile' }), { waitUntil: 'load' });
+  const shot = await tab.locator('svg').screenshot({ omitBackground: true, type: 'png' });
+  faviconPngs.push({ size, data: shot });
+  await tab.close();
+}
+const favicon = buildIco(faviconPngs);
+const faviconOut = resolve(root, 'app/favicon.ico');
+await writeFile(faviconOut, favicon);
+console.log(`app/favicon.ico  ${FAVICON_SIZES.join('+')}px  ${favicon.length} bytes`);
 
 await browser.close();
