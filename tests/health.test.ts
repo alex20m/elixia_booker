@@ -138,4 +138,14 @@ describe('/api/health and email notifications', () => {
   it('reports email as not configured when neither is set', async () => {
     expect(await health()).toMatchObject({ emailConfigured: false });
   });
+
+  it('reports email as not configured when the sender is missing its closing bracket', async () => {
+    // The reported bug this guards: a NOTIFY_FROM_EMAIL like
+    // "Elixia Booker <noreply@alexmecklin.com" looks set, but Resend rejects
+    // it with a 422 on every send. Treated the same as "not configured" so
+    // the gap shows up here rather than only after every alert has failed.
+    live();
+    process.env.NOTIFY_FROM_EMAIL = 'Elixia Booker <noreply@alexmecklin.com';
+    expect(await health()).toMatchObject({ emailConfigured: false });
+  });
 });

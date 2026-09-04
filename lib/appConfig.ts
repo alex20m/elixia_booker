@@ -6,6 +6,7 @@
  */
 
 import { createMemoryRepo } from './db/memoryRepo';
+import { isValidFromAddress } from './email';
 import { qstashTargetFor, qstashSigningKeysFor } from './qstash';
 import type { BookingBackend } from './elixia';
 import type { Repo } from './db/repo';
@@ -134,7 +135,11 @@ export function encryptionConfigured(): boolean {
  * for the same reason `qstashConfigured` is.
  */
 export function emailConfigured(): boolean {
-  return Boolean(process.env.RESEND_API_KEY && process.env.NOTIFY_FROM_EMAIL);
+  return Boolean(
+    process.env.RESEND_API_KEY &&
+      process.env.NOTIFY_FROM_EMAIL &&
+      isValidFromAddress(process.env.NOTIFY_FROM_EMAIL),
+  );
 }
 
 export function qstashConfigured(): boolean {
