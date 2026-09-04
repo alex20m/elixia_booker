@@ -308,10 +308,9 @@ export default function Setup({ onDone }: { onDone: () => void }) {
               {channel === 'email' && state && !state.emailConfigured && (
                 <div className="banner banner-warn" id="setup-email-broken">
                   <span>
-                    This deployment has no email sender configured, so alerts are{' '}
+                    Email alerts are not set up on this deployment, so they are{' '}
                     <strong>not being delivered</strong>. You can still finish setup — ask whoever
-                    runs this deployment to set RESEND_API_KEY and NOTIFY_FROM_EMAIL, or choose
-                    another channel.
+                    runs this deployment to finish setting up email, or choose another channel.
                   </span>
                 </div>
               )}

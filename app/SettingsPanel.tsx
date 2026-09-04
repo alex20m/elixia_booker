@@ -169,9 +169,9 @@ export function SettingsPanel({
         {channel === 'email' && !view.emailConfigured && (
           <div className="banner banner-warn mt-s" id="notify-broken">
             <span>
-              This deployment has no email sender configured, so alerts are{' '}
-              <strong>not being delivered</strong>. Set RESEND_API_KEY and NOTIFY_FROM_EMAIL, or
-              choose another channel.
+              Email alerts are not set up on this deployment, so they are{' '}
+              <strong>not being delivered</strong>. Choose another channel, or ask whoever runs
+              this deployment to finish setting up email.
             </span>
           </div>
         )}
