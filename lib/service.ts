@@ -31,6 +31,7 @@ import { DuplicateSubscriptionError } from './db/repo';
 import { releasesFor, releasesInRange } from './planner';
 import { executeBooking, describeReport } from './booking';
 import { Logger } from './logger';
+import { isValidFromAddress } from './email';
 import { notifyUser } from './notify';
 import { qstashTargetFor, scheduleBookingTicks, createTickPublisher } from './qstash';
 import { isMembershipWindow } from './membership';
@@ -291,7 +292,9 @@ export function telegramConnectConfigured(config: AppConfig): boolean {
  * environment.
  */
 export function emailNotifyConfigured(config: AppConfig): boolean {
-  return Boolean(config.resendApiKey && config.notifyFromEmail);
+  return Boolean(
+    config.resendApiKey && config.notifyFromEmail && isValidFromAddress(config.notifyFromEmail),
+  );
 }
 
 /**

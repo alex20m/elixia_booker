@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { sendEmail } from '@/lib/email';
+import { isValidFromAddress, sendEmail } from '@/lib/email';
 
 /**
  * Email delivery, which is the default channel and therefore the one most
@@ -76,6 +76,29 @@ describe('sendEmail', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it('is a no-op for a malformed sender address, instead of spending a request on Resend rejecting it every time', async () => {
+    // The reported bug this guards: NOTIFY_FROM_EMAIL set to
+    // "Elixia Booker <noreply@alexmecklin.com" — missing the closing `>` —
+    // which Resend's API rejects with a 422 on every single attempt. Catching
+    // it here means it shows up as "not configured" up front rather than only
+    // after a wasted call that fails the same way forever.
+    const fetchImpl = okFetch();
+
+    const result = await sendEmail(
+      {
+        resendApiKey: 're_k',
+        notifyFromEmail: 'Elixia Booker <noreply@alexmecklin.com',
+        to: 'u@e.com',
+        subject: 's',
+        text: 't',
+      },
+      { fetchImpl: fetchImpl as unknown as typeof fetch },
+    );
+
+    expect(result.sent).toBe(false);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('reports rather than throws when Resend rejects the message', async () => {
     const fetchImpl = vi.fn(async () => new Response('{"message":"domain not verified"}', { status: 403 }));
 
@@ -137,4 +160,33 @@ describe('sendEmail', () => {
 
     expect(result.sent).toBe(false);
   }, 2000);
+});
+
+describe('isValidFromAddress', () => {
+  it('accepts a bare email address', () => {
+    expect(isValidFromAddress('bot@example.com')).toBe(true);
+  });
+
+  it('accepts "Name <email>"', () => {
+    expect(isValidFromAddress('Elixia Booker <noreply@alexmecklin.com>')).toBe(true);
+  });
+
+  it('rejects a "Name <email>" address missing its closing bracket', () => {
+    // Exactly the value NOTIFY_FROM_EMAIL was set to when this shipped: valid
+    // enough to look right at a glance, and rejected by Resend's API on every
+    // single send.
+    expect(isValidFromAddress('Elixia Booker <noreply@alexmecklin.com')).toBe(false);
+  });
+
+  it('rejects an opening bracket with no matching close', () => {
+    expect(isValidFromAddress('<noreply@alexmecklin.com')).toBe(false);
+  });
+
+  it('rejects text with no @ at all', () => {
+    expect(isValidFromAddress('Elixia Booker')).toBe(false);
+  });
+
+  it('tolerates surrounding whitespace', () => {
+    expect(isValidFromAddress('  bot@example.com  ')).toBe(true);
+  });
 });

@@ -363,6 +363,22 @@ describe('linking a gym account', () => {
     expect((await buildDashboard(live, profile, nowMs)).emailConfigured).toBe(true);
   });
 
+  it('tells the dashboard email is not configured when the sender address is malformed', async () => {
+    // The reported bug this guards: NOTIFY_FROM_EMAIL set to
+    // "Elixia Booker <noreply@alexmecklin.com" (missing the closing `>`) looks
+    // set, so the old check called it configured — and every send then failed
+    // Resend's own format validation, forever, with nothing on this page
+    // saying why.
+    const profile = await linkedProfile();
+    const malformed: AppConfig = {
+      ...config,
+      resendApiKey: 're_test_key',
+      notifyFromEmail: 'Elixia Booker <noreply@alexmecklin.com',
+    };
+
+    expect((await buildDashboard(malformed, profile, nowMs)).emailConfigured).toBe(false);
+  });
+
   it('tells the dashboard a delivery failed without handing it the provider\'s own reason', async () => {
     // `notifyFailedReason` (e.g. "resend returned HTTP 401") is an operator
     // detail — the dashboard gets only a boolean, so the UI has no way to
