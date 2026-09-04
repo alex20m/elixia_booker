@@ -176,6 +176,26 @@ export function SettingsPanel({
           </div>
         )}
 
+        {/* Distinct from the two banners above: those cover a send turned away
+            before it ever went out (nowhere to send, deployment not set up).
+            This is the case neither of them can see — a request that *did* go
+            out and was refused (a revoked key, an unverified sender, a bot
+            token Telegram no longer honours) — which used to be visible only
+            in server logs. Suppressed when one of the other banners is
+            already showing, since a channel that is not even reachable yet is
+            the more useful thing to say. */}
+        {view.account.notifyFailedReason &&
+          channel !== 'none' &&
+          !(channel === 'telegram' && !connected) &&
+          !(channel === 'email' && !view.emailConfigured) && (
+            <div className="banner banner-warn mt-s" id="notify-last-failed">
+              <span>
+                The last alert could not be delivered: <strong>{view.account.notifyFailedReason}</strong>.
+                This clears itself the next time one gets through.
+              </span>
+            </div>
+          )}
+
         {channel === 'telegram' && canConnect && (
           <div className="mt-s">
             <TelegramConnect

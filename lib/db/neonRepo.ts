@@ -35,7 +35,8 @@ import type {
 const PROFILE_COLUMNS = `
   id, booking_window_days, time_zone, notify_channel, notify_email, telegram_chat_id,
   elixia_email, elixia_secret, elixia_status, elixia_checked_at, default_center,
-  configured_at, calendar_sync_enabled, calendar_feed_token
+  configured_at, calendar_sync_enabled, calendar_feed_token, notify_failed_reason,
+  notify_failed_at
 `;
 
 const SUBSCRIPTION_COLUMNS = `
@@ -71,6 +72,8 @@ const toProfile = (row: SqlRow): Profile => ({
   // that has actively chosen sync off.
   ...(row.calendar_sync_enabled ? { calendarSyncEnabled: true } : {}),
   ...(row.calendar_feed_token ? { calendarFeedToken: str(row.calendar_feed_token) } : {}),
+  ...(row.notify_failed_reason ? { notifyFailedReason: str(row.notify_failed_reason) } : {}),
+  ...(row.notify_failed_at ? { notifyFailedAtMs: toMs(row.notify_failed_at) } : {}),
 });
 
 const toSubscription = (row: SqlRow): Subscription => ({
@@ -155,9 +158,13 @@ export function createNeonRepo(sql: Sql): Repo {
         `insert into public.profiles (
            id, booking_window_days, time_zone, notify_channel, notify_email, telegram_chat_id,
            elixia_email, elixia_secret, elixia_status, elixia_checked_at, default_center,
-           configured_at, calendar_sync_enabled, calendar_feed_token
+           configured_at, calendar_sync_enabled, calendar_feed_token, notify_failed_reason,
+           notify_failed_at
          )
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::timestamptz, $11, $12::timestamptz, $13, $14)
+         values (
+           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::timestamptz, $11, $12::timestamptz, $13, $14,
+           $15, $16::timestamptz
+         )
          on conflict (id) do update set
            booking_window_days = excluded.booking_window_days,
            time_zone = excluded.time_zone,
@@ -171,7 +178,9 @@ export function createNeonRepo(sql: Sql): Repo {
            default_center = excluded.default_center,
            configured_at = excluded.configured_at,
            calendar_sync_enabled = excluded.calendar_sync_enabled,
-           calendar_feed_token = excluded.calendar_feed_token`,
+           calendar_feed_token = excluded.calendar_feed_token,
+           notify_failed_reason = excluded.notify_failed_reason,
+           notify_failed_at = excluded.notify_failed_at`,
         [
           profile.id,
           // Null where the user has not chosen yet — the columns lost their
@@ -190,6 +199,8 @@ export function createNeonRepo(sql: Sql): Repo {
           profile.configuredAtMs ? iso(profile.configuredAtMs) : null,
           profile.calendarSyncEnabled ?? false,
           profile.calendarFeedToken ?? null,
+          profile.notifyFailedReason ?? null,
+          profile.notifyFailedAtMs ? iso(profile.notifyFailedAtMs) : null,
         ],
       );
     },

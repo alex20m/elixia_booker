@@ -359,6 +359,18 @@ export interface Profile {
    * one may have leaked; there is no other reason to change it.
    */
   calendarFeedToken?: string;
+  /**
+   * Why the most recent alert this account was sent could not be delivered,
+   * if it couldn't. Set only when a request actually went out to the chosen
+   * channel's API and failed — a revoked Resend key, an unverified sender,
+   * a bot token Telegram no longer honours — never for "no channel chosen",
+   * "switched off" or "not configured", which already have their own banners
+   * or are the user's own choice. Cleared the next time a send succeeds, so
+   * its mere presence means the gap is current, not historical.
+   */
+  notifyFailedReason?: string;
+  /** When that failure happened. */
+  notifyFailedAtMs?: number;
 }
 
 /**

@@ -36,6 +36,8 @@ const view = (
       elixiaStatus: 'unlinked',
       calendarSyncEnabled: false,
       calendarFeedToken: '',
+      notifyFailedReason: '',
+      notifyFailedAtMs: null,
       ...overrides,
     },
     telegramConnect,
@@ -273,6 +275,45 @@ describe('Settings notifications', () => {
     render(view({ notifyChannel: 'email' }, true, true));
 
     expect(container.textContent).not.toMatch(/not being delivered/i);
+  });
+
+  it('warns when the last alert failed even though the channel looks fully configured', async () => {
+    // The gap the two banners above cannot cover: a channel with somewhere to
+    // send (a verified sender, a connected chat) whose most recent request
+    // was still refused — a revoked key, a bot token Telegram no longer
+    // honours. Without this, that reason lives only in a server log.
+    render(view({ notifyChannel: 'email', notifyFailedReason: 'resend returned HTTP 401' }, true, true));
+
+    expect(container.textContent).toMatch(/could not be delivered/i);
+    expect(container.textContent).toMatch(/resend returned HTTP 401/);
+  });
+
+  it('says nothing of the sort once nothing has failed', async () => {
+    render(view({ notifyChannel: 'email', notifyFailedReason: '' }, true, true));
+
+    expect(container.textContent).not.toMatch(/could not be delivered/i);
+  });
+
+  it('does not pile a second banner on top of "not being delivered"', async () => {
+    // A channel with nowhere to send yet is the more useful thing to tell the
+    // user about; a stale failure reason from before it was disconnected
+    // would only compete with that message.
+    render(
+      view(
+        { notifyChannel: 'telegram', telegramChatId: '', notifyFailedReason: 'telegram returned HTTP 401' },
+        true,
+        true,
+      ),
+    );
+
+    expect(container.textContent).toMatch(/not being delivered/i);
+    expect(container.textContent).not.toMatch(/could not be delivered/i);
+  });
+
+  it('says nothing of a failure once alerts are switched off', async () => {
+    render(view({ notifyChannel: 'none', notifyFailedReason: 'resend returned HTTP 401' }, true, true));
+
+    expect(container.textContent).not.toMatch(/could not be delivered/i);
   });
 });
 

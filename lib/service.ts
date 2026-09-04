@@ -358,28 +358,52 @@ export async function completeTelegramLink(
 /**
  * Tell a user something, and write down when that did not happen.
  *
- * The send's result used to be discarded. That made every silent failure mode
- * indistinguishable from "nothing to report": a revoked bot token, a user who
- * blocked the bot, an unverified sender domain — each stops every alert
- * permanently, and the first one anybody would have missed is the alert saying
- * booking itself had stopped. The send stays best-effort, because the booking
- * it describes has already happened; what changes is that the reason survives
- * in the log.
+ * The send's result used to be discarded entirely. That made every silent
+ * failure mode indistinguishable from "nothing to report": a revoked bot
+ * token, a user who blocked the bot, an unverified sender domain — each stops
+ * every alert permanently, and the first one anybody would have missed is the
+ * alert saying booking itself had stopped. The reason always survives in the
+ * log now, but a log line nobody is tailing is not much better than nothing,
+ * so a failure where a request actually went out and was refused — as
+ * opposed to being turned away before dialling out, which the setup and
+ * settings banners already explain — is also written to the profile, for the
+ * dashboard to show. The send stays best-effort either way, because the
+ * booking it describes has already happened.
  */
 async function announce(
   config: AppConfig,
   profile: Profile,
   logger: Logger,
   text: string,
+  nowMs: number,
 ): Promise<void> {
   const result = await notifyUser(config, profile, text);
-  if (result.sent) return;
+  if (result.sent) {
+    // Whatever was broken last time evidently isn't now — a stale reason left
+    // in place would outlive the problem it named.
+    if (profile.notifyFailedReason !== undefined) {
+      await config.repo.upsertProfile({
+        ...profile,
+        notifyFailedReason: undefined,
+        notifyFailedAtMs: undefined,
+      });
+    }
+    return;
+  }
 
   logger.log('notify.unsent', {
     userId: profile.id,
     channel: profile.notifyChannel ?? 'unset',
     reason: result.reason ?? 'unknown',
   });
+
+  if (result.attempted) {
+    await config.repo.upsertProfile({
+      ...profile,
+      notifyFailedReason: result.reason ?? 'unknown',
+      notifyFailedAtMs: nowMs,
+    });
+  }
 }
 
 /**
@@ -724,6 +748,16 @@ export interface DashboardView {
     calendarSyncEnabled: boolean;
     /** Empty until sync has been turned on at least once. */
     calendarFeedToken: string;
+    /**
+     * Why the most recent alert could not be delivered, empty when it was (or
+     * nothing has been sent yet). See `Profile['notifyFailedReason']` — this is
+     * only ever set for a request that actually went out and was refused, not
+     * for "no channel chosen" or "switched off", which the other banners on
+     * this page already cover.
+     */
+    notifyFailedReason: string;
+    /** When that failure happened, or `null` if there isn't one. */
+    notifyFailedAtMs: number | null;
   };
   /**
    * Whether this deployment can offer the one-tap connect flow. False falls
@@ -776,6 +810,8 @@ export async function buildDashboard(
       elixiaStatus: profile.elixiaStatus,
       calendarSyncEnabled: profile.calendarSyncEnabled ?? false,
       calendarFeedToken: profile.calendarFeedToken ?? '',
+      notifyFailedReason: profile.notifyFailedReason ?? '',
+      notifyFailedAtMs: profile.notifyFailedAtMs ?? null,
     },
     subscriptions: byWhenTheyHappen.map(({ s, next }) => ({
       ...s,
@@ -1237,6 +1273,7 @@ export async function reviewListedClasses(
         `⚠️ ${subscription.className} · ${subscription.weekday} ${subscription.startTime} ` +
           `at ${subscription.center} is no longer on Elixia's schedule, so it cannot be booked. ` +
           `It may have been renamed, moved or dropped — check the timetable and update it here.`,
+        nowMs,
       );
     }
   }
@@ -1332,6 +1369,7 @@ export async function reviewNextOccurrences(
           `ℹ️ ${subscription.className} · ${next.classDate} at ${subscription.center} is not on ` +
             `Elixia's schedule for that date, so it will not be booked for this occurrence. It may ` +
             `be a one-off change — later dates are checked automatically.`,
+          nowMs,
         );
       } else if (subscription.unavailableClassDate !== undefined) {
         // Either it is listed again, or the checked date has moved on to a
@@ -1453,6 +1491,7 @@ export async function reviewBookedOccurrences(
         logger,
         `ℹ️ ${entry.className} · ${entry.classDate} at ${entry.center} was cancelled through ` +
           `Elixia, so it has been taken off your synced calendar.`,
+        nowMs,
       );
     }
   }
@@ -1749,6 +1788,7 @@ async function prepareUser(
       profile,
       logger,
       '🚨 Elixia rejected your saved credentials and booking is paused. Re-link your account to resume.',
+      nowMs,
     );
     return null;
   }
@@ -1839,7 +1879,7 @@ async function bookEntry(
         center: subscription.center,
       });
 
-      await announce(config, profile, logger, describeReport(report));
+      await announce(config, profile, logger, describeReport(report), nowMs);
     });
 
     return true;
