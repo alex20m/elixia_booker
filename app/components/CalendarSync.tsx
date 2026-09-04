@@ -23,8 +23,11 @@ import { ActionButton } from './ActionButton';
  * hands off to whatever the device registers for `webcal:` — because asking
  * for two taps ("turn on", then "add to calendar") to get one outcome is the
  * kind of friction someone abandons a skippable step over. Everything past
- * that first tap (copying the link by hand, rotating it, turning it back
- * off) is real fallback, not the common path, so it stays small.
+ * that first tap (copying the link by hand, rotating it) is real fallback,
+ * not the common path someone who has never heard of a calendar feed URL
+ * needs to see, so it sits behind a "More options" disclosure rather than
+ * out in the open next to "Open in calendar app" and "Turn off" — the two
+ * things everyone actually wants from this control.
  */
 export function CalendarSync({
   enabled,
@@ -84,15 +87,15 @@ export function CalendarSync({
   if (!enabled) {
     return (
       <div>
-        <p className="hint">Classes you book will appear on your calendar automatically.</p>
+        <p className="hint">Classes you book will show up on your calendar automatically.</p>
         <ActionButton
           id="calendar-enable"
           className="btn-secondary mt-s"
-          pendingLabel="Adding…"
+          pendingLabel="Turning on…"
           onError={(err) => onError(err.message)}
           onClick={enableAndOpen}
         >
-          Add to calendar
+          Turn on calendar sync
         </ActionButton>
       </div>
     );
@@ -101,37 +104,40 @@ export function CalendarSync({
   return (
     <div>
       <p className="hint" id="calendar-status" role="status">
-        Calendar sync is on.
+        Calendar sync is on — booked classes show up on your calendar automatically.
       </p>
       <div className="cluster mt-s">
         <a id="calendar-webcal" className="btn btn-secondary" href={webcalUrl(token)}>
           Open in calendar app
         </a>
-        <button type="button" id="calendar-copy" className="btn-secondary" onClick={() => void copy()}>
-          {copied ? 'Copied' : 'Copy link'}
-        </button>
-      </div>
-      <p className="hint mt-xs">
-        <ActionButton
-          id="calendar-regenerate"
-          className="link"
-          pendingLabel="Getting a new link…"
-          onError={(err) => onError(err.message)}
-          onClick={regenerate}
-        >
-          Get a new link
-        </ActionButton>{' '}
-        ·{' '}
         <ActionButton
           id="calendar-disable"
-          className="link"
+          className="btn-secondary"
           pendingLabel="Turning off…"
           onError={(err) => onError(err.message)}
           onClick={turnOff}
         >
           Turn off
         </ActionButton>
-      </p>
+      </div>
+      <details className="mt-xs">
+        <summary className="hint">Not seeing it in your calendar app? More options</summary>
+        <p className="hint mt-xs">
+          <button type="button" id="calendar-copy" className="link" onClick={() => void copy()}>
+            {copied ? 'Copied' : 'Copy calendar address'}
+          </button>{' '}
+          ·{' '}
+          <ActionButton
+            id="calendar-regenerate"
+            className="link"
+            pendingLabel="Resetting…"
+            onError={(err) => onError(err.message)}
+            onClick={regenerate}
+          >
+            Reset calendar address
+          </ActionButton>
+        </p>
+      </details>
     </div>
   );
 }
