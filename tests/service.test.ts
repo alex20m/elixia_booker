@@ -363,6 +363,33 @@ describe('linking a gym account', () => {
     expect((await buildDashboard(live, profile, nowMs)).emailConfigured).toBe(true);
   });
 
+  it('tells the dashboard a delivery failed without handing it the provider\'s own reason', async () => {
+    // `notifyFailedReason` (e.g. "resend returned HTTP 401") is an operator
+    // detail — the dashboard gets only a boolean, so the UI has no way to
+    // show a user a raw error they cannot act on, by construction rather than
+    // by remembering not to render a field.
+    const profile = await linkedProfile();
+    await repo.upsertProfile({
+      ...profile,
+      notifyFailedReason: 'resend returned HTTP 401',
+      notifyFailedAtMs: nowMs - 1000,
+    });
+    const stored = requireConfigured((await repo.getProfile(USER_ID))!);
+
+    const view = await buildDashboard(config, stored, nowMs);
+    expect(view.account.notifyFailed).toBe(true);
+    expect(view.account.notifyFailedAtMs).toBe(nowMs - 1000);
+    expect(JSON.stringify(view)).not.toContain('resend returned HTTP 401');
+  });
+
+  it('tells the dashboard nothing has failed once nothing has', async () => {
+    const profile = await linkedProfile();
+
+    const view = await buildDashboard(config, profile, nowMs);
+    expect(view.account.notifyFailed).toBe(false);
+    expect(view.account.notifyFailedAtMs).toBeNull();
+  });
+
   it('erases the stored credentials on unlink', async () => {
     const profile = await linkedProfile();
     await addSubscription(config, profile, BODYPUMP, nowMs);

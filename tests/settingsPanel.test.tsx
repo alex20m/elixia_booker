@@ -36,7 +36,7 @@ const view = (
       elixiaStatus: 'unlinked',
       calendarSyncEnabled: false,
       calendarFeedToken: '',
-      notifyFailedReason: '',
+      notifyFailed: false,
       notifyFailedAtMs: null,
       ...overrides,
     },
@@ -282,25 +282,35 @@ describe('Settings notifications', () => {
     // send (a verified sender, a connected chat) whose most recent request
     // was still refused — a revoked key, a bot token Telegram no longer
     // honours. Without this, that reason lives only in a server log.
-    render(view({ notifyChannel: 'email', notifyFailedReason: 'resend returned HTTP 401' }, true, true));
+    render(view({ notifyChannel: 'email', notifyFailed: true }, true, true));
 
     expect(container.textContent).toMatch(/could not be delivered/i);
-    expect(container.textContent).toMatch(/resend returned HTTP 401/);
+  });
+
+  it('never shows the raw provider error text, only that something failed', async () => {
+    // The reason (`Profile.notifyFailedReason`, e.g. "resend returned HTTP
+    // 401") is deliberately not part of `DashboardView` at all — a raw
+    // provider error is an operator detail, not something to hand a user who
+    // has no way to act on it.
+    render(view({ notifyChannel: 'email', notifyFailed: true }, true, true));
+
+    expect(container.textContent).not.toMatch(/http \d{3}/i);
+    expect(container.textContent).not.toMatch(/resend|telegram returned/i);
   });
 
   it('says nothing of the sort once nothing has failed', async () => {
-    render(view({ notifyChannel: 'email', notifyFailedReason: '' }, true, true));
+    render(view({ notifyChannel: 'email', notifyFailed: false }, true, true));
 
     expect(container.textContent).not.toMatch(/could not be delivered/i);
   });
 
   it('does not pile a second banner on top of "not being delivered"', async () => {
     // A channel with nowhere to send yet is the more useful thing to tell the
-    // user about; a stale failure reason from before it was disconnected
-    // would only compete with that message.
+    // user about; a stale failure from before it was disconnected would only
+    // compete with that message.
     render(
       view(
-        { notifyChannel: 'telegram', telegramChatId: '', notifyFailedReason: 'telegram returned HTTP 401' },
+        { notifyChannel: 'telegram', telegramChatId: '', notifyFailed: true },
         true,
         true,
       ),
@@ -311,7 +321,7 @@ describe('Settings notifications', () => {
   });
 
   it('says nothing of a failure once alerts are switched off', async () => {
-    render(view({ notifyChannel: 'none', notifyFailedReason: 'resend returned HTTP 401' }, true, true));
+    render(view({ notifyChannel: 'none', notifyFailed: true }, true, true));
 
     expect(container.textContent).not.toMatch(/could not be delivered/i);
   });
