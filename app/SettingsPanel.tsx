@@ -168,11 +168,7 @@ export function SettingsPanel({
             chosen, and would otherwise fail the exact same way: silently. */}
         {channel === 'email' && !view.emailConfigured && (
           <div className="banner banner-warn mt-s" id="notify-broken">
-            <span>
-              This deployment has no email sender configured, so alerts are{' '}
-              <strong>not being delivered</strong>. Set RESEND_API_KEY and NOTIFY_FROM_EMAIL, or
-              choose another channel.
-            </span>
+            <span>Something&apos;s wrong on our end, so email alerts are not being delivered right now.</span>
           </div>
         )}
 
@@ -191,10 +187,7 @@ export function SettingsPanel({
           !(channel === 'telegram' && !connected) &&
           !(channel === 'email' && !view.emailConfigured) && (
             <div className="banner banner-warn mt-s" id="notify-last-failed">
-              <span>
-                Your last alert could not be delivered. This clears itself the next time one gets
-                through — if it keeps happening, double-check your notification settings below.
-              </span>
+              <span>Something went wrong sending your last alert.</span>
             </div>
           )}
 

@@ -284,7 +284,7 @@ describe('Settings notifications', () => {
     // honours. Without this, that reason lives only in a server log.
     render(view({ notifyChannel: 'email', notifyFailed: true }, true, true));
 
-    expect(container.textContent).toMatch(/could not be delivered/i);
+    expect(container.textContent).toMatch(/something went wrong/i);
   });
 
   it('never shows the raw provider error text, only that something failed', async () => {
@@ -301,7 +301,7 @@ describe('Settings notifications', () => {
   it('says nothing of the sort once nothing has failed', async () => {
     render(view({ notifyChannel: 'email', notifyFailed: false }, true, true));
 
-    expect(container.textContent).not.toMatch(/could not be delivered/i);
+    expect(container.textContent).not.toMatch(/something went wrong/i);
   });
 
   it('does not pile a second banner on top of "not being delivered"', async () => {
@@ -317,13 +317,13 @@ describe('Settings notifications', () => {
     );
 
     expect(container.textContent).toMatch(/not being delivered/i);
-    expect(container.textContent).not.toMatch(/could not be delivered/i);
+    expect(container.textContent).not.toMatch(/something went wrong/i);
   });
 
   it('says nothing of a failure once alerts are switched off', async () => {
     render(view({ notifyChannel: 'none', notifyFailed: true }, true, true));
 
-    expect(container.textContent).not.toMatch(/could not be delivered/i);
+    expect(container.textContent).not.toMatch(/something went wrong/i);
   });
 });
 
