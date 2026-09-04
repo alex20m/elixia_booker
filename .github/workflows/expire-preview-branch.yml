@@ -1,0 +1,61 @@
+name: Expire preview branch
+
+# Vercel's Neon integration creates a branch named `preview/<git-branch>` for
+# every PR's preview deployment, with no expiration and no automatic cleanup
+# tied to Vercel's own deployment retention (which defaults to 6 months) — see
+# https://neon.com/docs/guides/vercel-native-integration. This workflow is the
+# event that actually fires once per PR, whether merged or abandoned, so it
+# gives the matching Neon branch a 1-hour expiration instead of leaving it to
+# accumulate. It does not delete anything itself; Neon does that once
+# expires_at passes.
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  expire:
+    name: Set 1-hour expiration
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Find and expire the PR's Neon branch
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          NEON_PROJECT_ID: ${{ vars.NEON_PROJECT_ID }}
+          BRANCH_NAME: preview/${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+
+          branch=$(curl -sf --request GET \
+            --url "https://console.neon.tech/api/v2/projects/${NEON_PROJECT_ID}/branches" \
+            --header "Authorization: Bearer ${NEON_API_KEY}" \
+            | jq --arg name "$BRANCH_NAME" '.branches[] | select(.name == $name)')
+
+          if [ -z "$branch" ]; then
+            echo "No Neon branch named '${BRANCH_NAME}' — nothing to expire."
+            exit 0
+          fi
+
+          branch_id=$(echo "$branch" | jq -r '.id')
+          is_default=$(echo "$branch" | jq -r '.default')
+          is_protected=$(echo "$branch" | jq -r '.protected')
+
+          # Never true for a `preview/*` name, but a name collision must not
+          # touch the default or a protected branch.
+          if [ "$is_default" = "true" ] || [ "$is_protected" = "true" ]; then
+            echo "Matched branch '${BRANCH_NAME}' ($branch_id) is default or protected — refusing to expire it."
+            exit 1
+          fi
+
+          expires_at=$(date -u -d '+1 hour' +%Y-%m-%dT%H:%M:%SZ)
+          echo "Setting expires_at=${expires_at} on ${branch_id} (${BRANCH_NAME})"
+
+          curl -sf --request PATCH \
+            --url "https://console.neon.tech/api/v2/projects/${NEON_PROJECT_ID}/branches/${branch_id}" \
+            --header "Authorization: Bearer ${NEON_API_KEY}" \
+            --header "Content-Type: application/json" \
+            --data "{\"branch\": {\"expires_at\": \"${expires_at}\"}}" \
+            > /dev/null
