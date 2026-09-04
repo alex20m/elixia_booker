@@ -320,8 +320,9 @@ cheap:
   branches also started failing, and when. A per-branch cause cannot explain a
   project-wide onset.
 
-The fix is to delete the branches belonging to merged or abandoned work — never
-the default branch, which is the parent everything else is seeded from:
+The immediate fix is to delete the branches belonging to merged or abandoned
+work — never the default branch, which is the parent everything else is seeded
+from:
 
 ```bash
 <provider-cli> branches list  --project-id "$PROJECT_ID" --output json
@@ -330,11 +331,55 @@ the default branch, which is the parent everything else is seeded from:
 
 Then re-trigger the failed deployment; it will provision and build normally.
 
-Worth doing once as housekeeping and then *not* relying on memory: the quota
-refills silently and fails the same confusing way next time. If the integration
-offers automatic cleanup on branch deletion, turn it on. Otherwise put the
-delete command in SETUP.md next to the preview-database note, so the person who
-meets the 0ms build has somewhere to find it.
+#### Automate the cleanup instead of relying on memory
+
+The quota refills silently and fails the same confusing way next time, so this
+is worth doing once as CI automation rather than as housekeeping someone has to
+remember. Neon has no project-wide "default expiration" setting for a project —
+expiration (`expires_at`) is a field on each individual branch, set at creation
+or by a later update, so something has to set it per branch. Verified against
+the Neon API v2 (`console.neon.tech/api/v2`) and the Vercel-Neon native
+integration docs, 2026-09-04.
+
+Set it from a workflow triggered by the pull request's own **close** event, not
+from a step added to the checks workflow that runs on open/synchronize:
+
+- **The integration provisions the preview branch asynchronously**, from its
+  own webhook, independent of your CI run. A step inside the PR checks workflow
+  races it — the branch may not exist yet when your step looks for it, and
+  there is no event in your own repo that tells you it now does. This is the
+  attractive wrong path, because it is where the rest of the PR automation
+  already lives: it typechecks and runs, and then intermittently does nothing,
+  because the branch it went looking for had not been provisioned yet.
+- **The close event has no such race.** By the time a PR closes, its preview
+  branch — if one was ever built — has had the PR's entire lifetime to be
+  created. Trigger on the equivalent of `pull_request: types: [closed]` (fires
+  for both merged *and* abandoned PRs, which is what you want: an abandoned
+  PR's branch is exactly as dead as a merged one's) and look the branch up by
+  the name the integration would have used — for the Vercel-Neon native
+  integration this is `preview/<git-branch>`, though the docs do not commit to
+  that staying stable across every branch-name shape (slashes, special
+  characters) or every project layout, so match on it defensively rather than
+  assuming it back.
+- **Set an expiration; don't call delete from the workflow.** Update the field
+  (a provider CLI's `branches set-expiration`, or an API `PATCH` on the branch
+  with `{"branch": {"expires_at": "<RFC3339 timestamp>"}}`) instead of deleting
+  outright. The provider deletes the branch itself once the timestamp passes —
+  that gives a short grace window instead of an instant, hard-to-recover cut,
+  so a lookup that matched slightly wrong fails safe: an expiration a few
+  minutes later than intended, not data gone immediately.
+- **Guard the match before writing anything.** Resolve the branch by exact
+  name, then refuse to act if the match is the default or a protected branch,
+  *before* patching it — a naming collision must never be able to touch the
+  branch everything else is seeded from.
+- **The API key has to be readable to get into CI's own secret store.** A
+  Vercel **Sensitive** environment variable is permanently write-only — no CLI
+  or API call ever reads it back, in any environment, forever, and this has
+  nothing to do with which environment the workflow will use it in later. If
+  the key you have is stored that way, either read the same value from a
+  non-Sensitive environment that also has it (e.g. `development`, if it is
+  unmarked there), or mint a fresh key for this purpose — there is no way to
+  promote a Sensitive value back out once it is set that way.
 
 ### Neon Auth is managed Better Auth now
 
