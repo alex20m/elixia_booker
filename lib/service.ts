@@ -1489,14 +1489,6 @@ export async function reviewBookedOccurrences(
         className: entry.className,
         classDate: entry.classDate,
       });
-      await announce(
-        config,
-        profile,
-        logger,
-        `ℹ️ ${entry.className} · ${entry.classDate} at ${entry.center} was cancelled through ` +
-          `Elixia, so it has been taken off your synced calendar.`,
-        nowMs,
-      );
     }
   }
 }
