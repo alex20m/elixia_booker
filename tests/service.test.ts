@@ -1852,7 +1852,13 @@ describe('cancelled bookings', () => {
     expect((await onlyHistory()).cancelledAtMs).toBeUndefined();
   });
 
-  it('tells the owner once a cancellation is found', async () => {
+  it('records a cancellation without notifying the owner', async () => {
+    // This used to send an "it has been taken off your synced calendar"
+    // message on every cancellation found here. The calendar feed itself
+    // (lib/calendarFeed.ts) already reflects a cancelled booking the moment
+    // it is marked below, so the message was telling the owner something
+    // their calendar app was already going to show them — deliberately
+    // dropped rather than left to fire on every future cancellation.
     const linked = await linkedProfile();
     await repo.upsertProfile({ ...linked, telegramChatId: '4242', notifyChannel: 'telegram' });
     const withChat = (await repo.getProfile(USER_ID))!;
@@ -1873,8 +1879,8 @@ describe('cancelled bookings', () => {
       });
       await reviewBookedOccurrences(config, withChat, nowMs);
 
-      expect(sent).toHaveLength(1);
-      expect(sent[0]).toMatch(/Bodypump/);
+      expect(sent).toHaveLength(0);
+      expect((await onlyHistory(withChat.id)).cancelledAtMs).toBe(nowMs);
     } finally {
       vi.unstubAllGlobals();
     }
