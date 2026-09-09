@@ -190,6 +190,27 @@ export async function executeBooking(
   };
 }
 
+const SHORT_MONTHS = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+
+/** "2026-09-06" -> "Sep 6". Read as a string, not a Date, to sidestep timezones. */
+function friendlyDate(classDate: string): string {
+  const [, month, day] = classDate.split('-');
+  return `${SHORT_MONTHS[Number(month) - 1]} ${Number(day)}`;
+}
+
 /** One-line human summary for Telegram. */
 export function describeReport(report: BookingReport): string {
   const { planned, outcome } = report;
@@ -198,6 +219,16 @@ export function describeReport(report: BookingReport): string {
     report.firstAttemptOffsetMs === null
       ? ''
       : ` (fired ${report.firstAttemptOffsetMs >= 0 ? '+' : ''}${report.firstAttemptOffsetMs}ms from T-0)`;
+  // Same facts as `what`/`timing` above, but spelled out in words instead of
+  // "@"/sign shorthand and ISO-ish date/time — for the message a user
+  // actually reads, not the debug log.
+  const friendlyWhat = `${planned.desired.className} at ${planned.desired.center} on ${friendlyDate(planned.classDate)} at ${planned.desired.startTime.replace(':', '.')}`;
+  const friendlyTiming =
+    report.firstAttemptOffsetMs === null
+      ? ''
+      : report.firstAttemptOffsetMs >= 0
+        ? ` (booked ${report.firstAttemptOffsetMs}ms after booking opened)`
+        : ` (booked ${Math.abs(report.firstAttemptOffsetMs)}ms before booking opened)`;
   const prefix = report.dryRun ? '[DRY RUN] ' : '';
 
   switch (outcome.kind) {
@@ -205,8 +236,8 @@ export function describeReport(report: BookingReport): string {
       return `${prefix}✅ Booked ${what}${timing}`;
     case 'waitlisted':
       return outcome.position === undefined
-        ? `${prefix}🕒 Waitlisted ${what}${timing}`
-        : `${prefix}🕒 Waitlisted (#${outcome.position}) ${what}${timing}`;
+        ? `${prefix}🕒 You're on the waitlist for ${friendlyWhat}${friendlyTiming}`
+        : `${prefix}🕒 You're number ${outcome.position} on the waitlist for ${friendlyWhat}${friendlyTiming}`;
     // Elixia cannot tell "you already booked this" apart from "you hold a
     // different class at the same time", so neither can this message.
     case 'already-booked':
