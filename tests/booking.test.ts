@@ -387,7 +387,12 @@ describe('describeReport', () => {
     // Timing is still there, but in plain language, not dev jargon.
     expect(text).not.toContain('fired');
     expect(text).not.toContain('T-0');
-    expect(text).toContain('42ms after booking opened');
+    expect(text).not.toContain('requested');
+    expect(text).toContain('booked 42ms after booking opened');
+    // Date/time read as a sentence, not an ISO stamp: no year, dot for time.
+    expect(text).toContain('on Aug 18 at 09.00');
+    expect(text).not.toContain('2026');
+    expect(text).not.toContain('09:00');
   });
 
   it('still names the class when Elixia reports no position for the waitlist', () => {
@@ -396,7 +401,9 @@ describe('describeReport', () => {
     expect(text).toContain('Bodypump');
     expect(text).not.toMatch(/#undefined/);
     expect(text).not.toContain('@');
-    expect(text).toContain('42ms after booking opened');
+    expect(text).toContain('booked 42ms after booking opened');
+    expect(text).toContain('on Aug 18 at 09.00');
+    expect(text).not.toContain('2026');
   });
 
   it('describes an early waitlist request in plain language', () => {
@@ -405,7 +412,8 @@ describe('describeReport', () => {
       firstAttemptOffsetMs: -300,
       outcome: { kind: 'waitlisted', position: 2 },
     });
-    expect(text).toContain('300ms before booking opened');
+    expect(text).toContain('booked 300ms before booking opened');
     expect(text).not.toContain('-300');
+    expect(text).not.toContain('requested');
   });
 });
