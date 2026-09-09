@@ -378,12 +378,16 @@ describe('describeReport', () => {
 
   it('tells the user their waitlist spot in plain language, not jargon', () => {
     const text = describeReport({ ...base, outcome: { kind: 'waitlisted', position: 7 } });
-    expect(text).toContain('#7');
+    expect(text).toContain('number 7');
     expect(text).toContain('waitlist');
     expect(text).toContain('Bodypump');
-    // No implementation-detail timing noise on a waitlist message.
+    // Spelled-out words instead of symbol shorthand.
+    expect(text).not.toContain('#');
+    expect(text).not.toContain('@');
+    // Timing is still there, but in plain language, not dev jargon.
     expect(text).not.toContain('fired');
     expect(text).not.toContain('T-0');
+    expect(text).toContain('42ms after booking opened');
   });
 
   it('still names the class when Elixia reports no position for the waitlist', () => {
@@ -391,5 +395,17 @@ describe('describeReport', () => {
     expect(text).toContain('waitlist');
     expect(text).toContain('Bodypump');
     expect(text).not.toMatch(/#undefined/);
+    expect(text).not.toContain('@');
+    expect(text).toContain('42ms after booking opened');
+  });
+
+  it('describes an early waitlist request in plain language', () => {
+    const text = describeReport({
+      ...base,
+      firstAttemptOffsetMs: -300,
+      outcome: { kind: 'waitlisted', position: 2 },
+    });
+    expect(text).toContain('300ms before booking opened');
+    expect(text).not.toContain('-300');
   });
 });

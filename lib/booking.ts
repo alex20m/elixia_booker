@@ -198,19 +198,25 @@ export function describeReport(report: BookingReport): string {
     report.firstAttemptOffsetMs === null
       ? ''
       : ` (fired ${report.firstAttemptOffsetMs >= 0 ? '+' : ''}${report.firstAttemptOffsetMs}ms from T-0)`;
+  // Same facts as `what`/`timing` above, but spelled out in words instead of
+  // "@"/sign shorthand — for the message a user actually reads, not the
+  // debug log.
+  const friendlyWhat = `${planned.desired.className} at ${planned.desired.center}, ${planned.classDate} ${planned.desired.startTime}`;
+  const friendlyTiming =
+    report.firstAttemptOffsetMs === null
+      ? ''
+      : report.firstAttemptOffsetMs >= 0
+        ? ` (requested ${report.firstAttemptOffsetMs}ms after booking opened)`
+        : ` (requested ${Math.abs(report.firstAttemptOffsetMs)}ms before booking opened)`;
   const prefix = report.dryRun ? '[DRY RUN] ' : '';
 
   switch (outcome.kind) {
     case 'booked':
       return `${prefix}✅ Booked ${what}${timing}`;
-    // No timing suffix here: how many milliseconds the request fired from
-    // T-0 is meaningless to someone reading "am I getting into this class",
-    // and the waitlist position already answers the question they actually
-    // have.
     case 'waitlisted':
       return outcome.position === undefined
-        ? `${prefix}🕒 You're on the waitlist for ${what}`
-        : `${prefix}🕒 You're #${outcome.position} on the waitlist for ${what}`;
+        ? `${prefix}🕒 You're on the waitlist for ${friendlyWhat}${friendlyTiming}`
+        : `${prefix}🕒 You're number ${outcome.position} on the waitlist for ${friendlyWhat}${friendlyTiming}`;
     // Elixia cannot tell "you already booked this" apart from "you hold a
     // different class at the same time", so neither can this message.
     case 'already-booked':
