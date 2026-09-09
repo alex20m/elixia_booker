@@ -203,10 +203,14 @@ export function describeReport(report: BookingReport): string {
   switch (outcome.kind) {
     case 'booked':
       return `${prefix}✅ Booked ${what}${timing}`;
+    // No timing suffix here: how many milliseconds the request fired from
+    // T-0 is meaningless to someone reading "am I getting into this class",
+    // and the waitlist position already answers the question they actually
+    // have.
     case 'waitlisted':
       return outcome.position === undefined
-        ? `${prefix}🕒 Waitlisted ${what}${timing}`
-        : `${prefix}🕒 Waitlisted (#${outcome.position}) ${what}${timing}`;
+        ? `${prefix}🕒 You're on the waitlist for ${what}`
+        : `${prefix}🕒 You're #${outcome.position} on the waitlist for ${what}`;
     // Elixia cannot tell "you already booked this" apart from "you hold a
     // different class at the same time", so neither can this message.
     case 'already-booked':

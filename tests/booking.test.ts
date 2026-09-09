@@ -375,4 +375,21 @@ describe('describeReport', () => {
     });
     expect(text).toContain('-300ms');
   });
+
+  it('tells the user their waitlist spot in plain language, not jargon', () => {
+    const text = describeReport({ ...base, outcome: { kind: 'waitlisted', position: 7 } });
+    expect(text).toContain('#7');
+    expect(text).toContain('waitlist');
+    expect(text).toContain('Bodypump');
+    // No implementation-detail timing noise on a waitlist message.
+    expect(text).not.toContain('fired');
+    expect(text).not.toContain('T-0');
+  });
+
+  it('still names the class when Elixia reports no position for the waitlist', () => {
+    const text = describeReport({ ...base, outcome: { kind: 'waitlisted' } });
+    expect(text).toContain('waitlist');
+    expect(text).toContain('Bodypump');
+    expect(text).not.toMatch(/#undefined/);
+  });
 });
