@@ -34,6 +34,7 @@ import type {
   ClassAvailabilityStatus,
   ClassBookedStatus,
   ClassOption,
+  ResolvedClass,
   StoredTokens,
   Subscription,
   Weekday,
@@ -58,11 +59,17 @@ export interface BookingBackend {
   listCenters(tokens: StoredTokens): Promise<CenterOption[]>;
   /** The weekly classes published for one centre — the chooser's class list. */
   listClasses(tokens: StoredTokens, center: string): Promise<ClassOption[]>;
+  /**
+   * Returns the duration alongside the id (both come off the same matched
+   * event, docs/api.md §4) so a caller that goes on to record the booking —
+   * `bookEntry` in lib/service.ts — can write down how long the class
+   * actually runs instead of a guessed default (see lib/calendarFeed.ts).
+   */
   resolveClassId(
     tokens: StoredTokens,
     subscription: Subscription,
     classDate: string,
-  ): Promise<string>;
+  ): Promise<ResolvedClass>;
   /**
    * Whether specific class occurrences are on Elixia's published schedule
    * right now, one schedule read for the whole batch rather than one per
@@ -586,7 +593,10 @@ export function collectClassOptions(props: SchedulePageProps): ClassOption[] {
 }
 
 /**
- * Picks the class matching a subscription out of a parsed schedule page.
+ * Picks the class matching a subscription out of a parsed schedule page, as
+ * the full event — so callers that need more than the id (`findClassId`
+ * wants only that; `ElixiaClient.resolveClassId` also wants the duration) can
+ * read it off the same match rather than searching the page twice.
  *
  * Matched on date + start time + class name, because that triple is what the
  * user actually chose and what stays stable week to week. The class *id* does
@@ -594,11 +604,11 @@ export function collectClassOptions(props: SchedulePageProps): ClassOption[] {
  * `741p70111` and `741p70095` for the same class on different days), so an id
  * can only ever be resolved for one concrete date.
  */
-export function findClassId(
+function matchScheduleEvent(
   props: SchedulePageProps,
   subscription: Pick<Subscription, 'className' | 'startTime'>,
   classDate: string,
-): string {
+): ScheduleEvent {
   // This check comes first because a date beyond the published range is still
   // *present* in both the picker and the events array — just marked disabled
   // and carrying zero classes. Diagnosing that as "the class is not listed"
@@ -639,7 +649,16 @@ export function findClassId(
     );
   }
 
-  return match.id;
+  return match;
+}
+
+/** Just the id — what the booking call needs. See `matchScheduleEvent`. */
+export function findClassId(
+  props: SchedulePageProps,
+  subscription: Pick<Subscription, 'className' | 'startTime'>,
+  classDate: string,
+): string {
+  return matchScheduleEvent(props, subscription, classDate).id;
 }
 
 /**
@@ -937,10 +956,11 @@ export class ElixiaClient implements BookingBackend {
     tokens: StoredTokens,
     subscription: Subscription,
     classDate: string,
-  ): Promise<string> {
+  ): Promise<ResolvedClass> {
     const clubId = await this.resolveClubId(tokens, subscription.center);
     const url = `${this.baseUrl}${ENDPOINTS.schedule}?clubIds=${encodeURIComponent(clubId)}`;
-    return findClassId(await this.fetchPage(tokens, url), subscription, classDate);
+    const match = matchScheduleEvent(await this.fetchPage(tokens, url), subscription, classDate);
+    return { classId: match.id, durationMin: match.metadata.duration };
   }
 
   /**

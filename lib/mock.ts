@@ -21,6 +21,7 @@ import type {
   ClassAvailabilityStatus,
   ClassBookedStatus,
   ClassOption,
+  ResolvedClass,
   StoredTokens,
   Subscription,
   Weekday,
@@ -65,6 +66,20 @@ const MOCK_TIMETABLE: ClassOption[] = [
   ...slots('Busy Bootcamp', '07:00', ['monday', 'wednesday', 'friday']),
   ...slots('Cancelled Spin', '19:00', ['wednesday']),
 ];
+
+/**
+ * How long each mock class runs, the way the real schedule page carries a
+ * `duration` alongside every listing (docs/api.md §4). Bodypump deliberately
+ * shorter than the 60-minute default `lib/calendarFeed.ts` falls back to, so
+ * mock mode exercises a real class whose calendar event would otherwise run
+ * long if this were not threaded through.
+ */
+const MOCK_DURATION_MIN: Record<string, number> = {
+  Bodypump: 45,
+  'Full House Spin': 50,
+  'Busy Bootcamp': 30,
+};
+const DEFAULT_MOCK_DURATION_MIN = 60;
 
 /** Access tokens are short-lived so the refresh path actually gets exercised. */
 const MOCK_TOKEN_TTL_MS = 10 * 60 * 1000;
@@ -116,8 +131,11 @@ export class MockElixiaClient implements BookingBackend {
     _tokens: StoredTokens,
     subscription: Subscription,
     classDate: string,
-  ): Promise<string> {
-    return `mock-${subscription.className.toLowerCase().replace(/\s+/g, '-')}-${classDate}`;
+  ): Promise<ResolvedClass> {
+    return {
+      classId: `mock-${subscription.className.toLowerCase().replace(/\s+/g, '-')}-${classDate}`,
+      durationMin: MOCK_DURATION_MIN[subscription.className] ?? DEFAULT_MOCK_DURATION_MIN,
+    };
   }
 
   /**

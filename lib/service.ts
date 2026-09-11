@@ -1873,6 +1873,7 @@ async function bookEntry(
         firstAttemptOffsetMs: report.firstAttemptOffsetMs,
         dryRun: report.dryRun,
         center: subscription.center,
+        ...(report.durationMin !== undefined ? { durationMin: report.durationMin } : {}),
       });
 
       await announce(config, profile, logger, describeReport(report), nowMs);

@@ -10,7 +10,13 @@
 import { retryWithBackoff, defaultSleep, type RetryResult } from './retry';
 import type { Logger } from './logger';
 import { ClassNotListedError } from './types';
-import type { AttemptOutcome, BookingConfig, PlannedBooking, StoredTokens } from './types';
+import type {
+  AttemptOutcome,
+  BookingConfig,
+  PlannedBooking,
+  ResolvedClass,
+  StoredTokens,
+} from './types';
 
 export interface BookingDeps {
   /** Issues the actual request. Injected so tests never touch the network. */
@@ -27,7 +33,7 @@ export interface BookingDeps {
    * That is why this is attempted twice — once early, once at T-0 — rather
    * than treated as a fatal error the first time.
    */
-  resolveClassId: (planned: PlannedBooking) => Promise<string>;
+  resolveClassId: (planned: PlannedBooking) => Promise<ResolvedClass>;
   tokens: StoredTokens;
   logger: Logger;
   config: BookingConfig;
@@ -55,6 +61,12 @@ export interface BookingReport {
   /** How far from T-0 the first request went out. Negative is early. */
   firstAttemptOffsetMs: number | null;
   dryRun: boolean;
+  /**
+   * How long the class actually runs, read off the same schedule match that
+   * resolved its id. Absent when the class never resolved at all — nothing
+   * with a duration to record was ever found.
+   */
+  durationMin?: number;
 }
 
 /** Outcomes that mean the slot is secured; everything else is a miss. */
@@ -95,9 +107,10 @@ export async function executeBooking(
   // critical path to a single request in the common case, without depending on
   // an answer nobody has.
   let classId: string | null = null;
+  let durationMin: number | undefined;
   try {
-    classId = await deps.resolveClassId(planned);
-    logger.log('class.resolved', { classId, when: 'before-sleep' });
+    ({ classId, durationMin } = await deps.resolveClassId(planned));
+    logger.log('class.resolved', { classId, durationMin, when: 'before-sleep' });
   } catch (err) {
     logger.log('class.unresolved', {
       when: 'before-sleep',
@@ -130,8 +143,8 @@ export async function executeBooking(
     // send someone hunting a race that never happened.
     if (classId === null) {
       try {
-        classId = await deps.resolveClassId(planned);
-        logger.log('class.resolved', { classId, when: 'at-release' });
+        ({ classId, durationMin } = await deps.resolveClassId(planned));
+        logger.log('class.resolved', { classId, durationMin, when: 'at-release' });
       } catch (err) {
         const reason = (err as Error).message;
         logger.log('class.unresolved', { when: 'at-release', reason });
@@ -187,6 +200,7 @@ export async function executeBooking(
     exhausted: result.exhausted,
     firstAttemptOffsetMs,
     dryRun: deps.dryRun,
+    ...(durationMin !== undefined ? { durationMin } : {}),
   };
 }
 

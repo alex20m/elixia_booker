@@ -58,6 +58,19 @@ describe('buildCalendarFeed', () => {
     expect(ics).toContain('DTEND;TZID=Europe/Helsinki:20260908T100000');
   });
 
+  it("ends the event after the class's real duration, not the 60-minute default", () => {
+    const ics = buildCalendarFeed(profile, [entry({ durationMin: 45 })], NOW);
+
+    expect(ics).toContain('DTSTART;TZID=Europe/Helsinki:20260908T090000');
+    expect(ics).toContain('DTEND;TZID=Europe/Helsinki:20260908T094500');
+  });
+
+  it('falls back to a 60-minute default for a row written before duration was recorded', () => {
+    const ics = buildCalendarFeed(profile, [entry({ durationMin: undefined })], NOW);
+
+    expect(ics).toContain('DTEND;TZID=Europe/Helsinki:20260908T100000');
+  });
+
   it('includes a waitlisted class too, with the same description as a booked one', () => {
     // Deliberately not distinguished: a waitlist position can change after
     // this is written (Elixia moves people up on its own), and a synced

@@ -119,6 +119,9 @@ const toHistoryEntry = (row: SqlRow): BookingHistoryEntry => ({
   dryRun: Boolean(row.dry_run),
   ...(row.center ? { center: str(row.center) } : {}),
   ...(row.cancelled_at ? { cancelledAtMs: toMs(row.cancelled_at) } : {}),
+  ...(row.duration_min !== null && row.duration_min !== undefined
+    ? { durationMin: num(row.duration_min) }
+    : {}),
 });
 
 const iso = (epochMs: number): string => new Date(epochMs).toISOString();
@@ -432,9 +435,10 @@ export function createNeonRepo(sql: Sql): Repo {
       await sql.query(
         `insert into public.booking_history (
            user_id, subscription_id, class_name, class_date, start_time,
-           outcome, detail, attempts, first_attempt_offset_ms, dry_run, created_at, center
+           outcome, detail, attempts, first_attempt_offset_ms, dry_run, created_at, center,
+           duration_min
          )
-         values ($1, $2::uuid, $3, $4::date, $5, $6, $7, $8, $9, $10, $11::timestamptz, $12)`,
+         values ($1, $2::uuid, $3, $4::date, $5, $6, $7, $8, $9, $10, $11::timestamptz, $12, $13)`,
         [
           userId,
           entry.subscriptionId,
@@ -448,6 +452,7 @@ export function createNeonRepo(sql: Sql): Repo {
           entry.dryRun,
           iso(entry.atMs),
           entry.center ?? null,
+          entry.durationMin ?? null,
         ],
       );
     },
@@ -456,7 +461,7 @@ export function createNeonRepo(sql: Sql): Repo {
       const rows = await sql.query(
         `select subscription_id, class_name, to_char(class_date, 'YYYY-MM-DD') as class_date,
                 start_time, outcome, detail, attempts, first_attempt_offset_ms, dry_run, created_at,
-                center, cancelled_at
+                center, cancelled_at, duration_min
          from public.booking_history
          where user_id = $1
          order by created_at desc
