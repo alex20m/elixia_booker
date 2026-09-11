@@ -849,6 +849,21 @@ describe('the booking tick', () => {
     expect(history[0]).toMatchObject({ outcome: 'booked', className: 'Bodypump' });
   });
 
+  it("records the class's real duration, not the calendar feed's 60-minute default", async () => {
+    // The mock backend reports Bodypump as 45 minutes (lib/mock.ts) — a value
+    // that would only ever show up here if the duration Elixia's own schedule
+    // reported actually made it into the history row, rather than the row
+    // simply carrying nothing and the calendar feed's fallback masking that.
+    const profile = await linkedProfile();
+    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+
+    setNow(firstRelease(sub) - 30_000);
+    expect(await runDueBookings(config, nowMs, instantClock())).toBe(1);
+
+    const history = await repo.listHistory(profile.id);
+    expect(history[0]).toMatchObject({ outcome: 'booked', durationMin: 45 });
+  });
+
   it('skips a booking attempt for an occurrence already confirmed unavailable', async () => {
     // Set by `reviewNextOccurrences` the night before — the class should
     // never be attempted, and never cost a lookup, once it is confirmed

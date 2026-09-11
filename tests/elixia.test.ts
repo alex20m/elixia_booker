@@ -536,16 +536,17 @@ describe('matchClassBookedStatus', () => {
 });
 
 describe('ElixiaClient.resolveClassId', () => {
-  it('fetches the schedule filtered by club id and returns the class id', async () => {
+  it('fetches the schedule filtered by club id and returns the class id and its duration', async () => {
     const fetchImpl = vi.fn(async (url: string | URL) => {
       expect(url.toString()).toBe(`${BASE}/varaukset?clubIds=741`);
       return new Response(pageHtml(scheduleFixture()), { status: 200 });
     }) as unknown as typeof fetch;
 
     const client = new ElixiaClient({ fetchImpl, baseUrl: BASE });
-    await expect(client.resolveClassId(tokens, subscription(), '2026-08-21')).resolves.toBe(
-      '741p70111',
-    );
+    await expect(client.resolveClassId(tokens, subscription(), '2026-08-21')).resolves.toEqual({
+      classId: '741p70111',
+      durationMin: 60,
+    });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
@@ -576,9 +577,25 @@ describe('ElixiaClient.resolveClassId', () => {
     const client = new ElixiaClient({ fetchImpl, baseUrl: BASE });
     await expect(
       client.resolveClassId(tokens, subscription({ center: 'Circus' }), '2026-08-21'),
-    ).resolves.toBe('741p70111');
+    ).resolves.toEqual({ classId: '741p70111', durationMin: 60 });
 
     expect(urls).toEqual([`${BASE}/varaukset`, `${BASE}/varaukset?clubIds=741`]);
+  });
+
+  it('reads the duration off the matched class, not a fixed number', async () => {
+    // "HIIT Run & Box" (the default fixture subscription) happens to run 60
+    // minutes, which is also the fallback lib/calendarFeed.ts uses for a row
+    // with no recorded duration — so that case alone couldn't tell a real
+    // value from a hardcoded one. Cycling runs 75.
+    const fetchImpl = (async () =>
+      new Response(pageHtml(scheduleFixture()), { status: 200 })) as typeof fetch;
+    const cycling = subscription({ className: 'Cycling The Journey', startTime: '17:00' });
+
+    const client = new ElixiaClient({ fetchImpl, baseUrl: BASE });
+    await expect(client.resolveClassId(tokens, cycling, '2026-08-21')).resolves.toEqual({
+      classId: '741p75627',
+      durationMin: 75,
+    });
   });
 
   it('names the unknown centre rather than failing as "class not listed"', async () => {

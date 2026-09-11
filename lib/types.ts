@@ -47,6 +47,12 @@ export interface ClassOption {
   instructorName?: string;
 }
 
+/** What `BookingBackend.resolveClassId` hands back: the id to book, and how long that occurrence runs. */
+export interface ResolvedClass {
+  classId: string;
+  durationMin: number;
+}
+
 /** One class you want booked, every week. */
 export interface DesiredClass {
   /** Stable local identifier, used in logs and notifications. */
@@ -492,4 +498,11 @@ export interface BookingHistoryEntry {
    * `lib/calendarFeed.ts`.
    */
   cancelledAtMs?: number;
+  /**
+   * How long the class actually runs, in minutes, as Elixia's own schedule
+   * page reported it (`ScheduleEvent.metadata.duration`, docs/api.md §4) at
+   * the moment this row was written. Absent on rows written before this field
+   * existed — `lib/calendarFeed.ts` falls back to a fixed default for those.
+   */
+  durationMin?: number;
 }

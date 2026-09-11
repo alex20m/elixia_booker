@@ -2,7 +2,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { describeReport, executeBooking, isSuccess } from '../lib/booking';
 import { Logger } from '../lib/logger';
 import { ClassNotListedError } from '../lib/types';
-import type { AttemptOutcome, BookingConfig, PlannedBooking, StoredTokens } from '../lib/types';
+import type {
+  AttemptOutcome,
+  BookingConfig,
+  PlannedBooking,
+  ResolvedClass,
+  StoredTokens,
+} from '../lib/types';
 
 const RELEASE = Date.parse('2026-08-11T06:00:00Z');
 
@@ -60,7 +66,7 @@ function deps(overrides: Partial<Parameters<typeof executeBooking>[1]> = {}) {
     clock,
     built: {
       book: vi.fn(async (): Promise<AttemptOutcome> => ({ kind: 'booked', bookingId: '1' })),
-      resolveClassId: vi.fn(async () => 'class-77'),
+      resolveClassId: vi.fn(async () => ({ classId: 'class-77', durationMin: 55 })),
       tokens,
       logger: new Logger(clock.now),
       config,
@@ -84,6 +90,27 @@ describe('executeBooking', () => {
     expect(report.firstAttemptOffsetMs).toBe(0);
   });
 
+  it('records the duration the schedule reported alongside the resolved id', async () => {
+    const { built } = deps({
+      resolveClassId: vi.fn(async () => ({ classId: 'class-77', durationMin: 45 })),
+    });
+
+    const report = await executeBooking(planned, built);
+
+    expect(report.durationMin).toBe(45);
+  });
+
+  it('reports no duration when the class was never resolved', async () => {
+    const resolveClassId = vi.fn(async () => {
+      throw new ClassNotListedError('not listed yet');
+    });
+    const { built } = deps({ resolveClassId });
+
+    const report = await executeBooking(planned, built);
+
+    expect(report.durationMin).toBeUndefined();
+  });
+
   it('resolves the class id before sleeping, not at T-0', async () => {
     // Anything left until after the sleep is time spent losing the race.
     const order: string[] = [];
@@ -95,7 +122,7 @@ describe('executeBooking', () => {
       }),
       resolveClassId: vi.fn(async () => {
         order.push('resolve');
-        return 'class-77';
+        return { classId: 'class-77', durationMin: 55 };
       }),
       tokens,
       logger: new Logger(clock.now),
@@ -152,9 +179,9 @@ describe('executeBooking', () => {
     // (docs/api.md §4), so the pre-sleep resolve legitimately fails. Giving up
     // there would miss every booking whose window opens at the release instant.
     const resolveClassId = vi
-      .fn<() => Promise<string>>()
+      .fn<() => Promise<ResolvedClass>>()
       .mockRejectedValueOnce(new ClassNotListedError('not listed yet'))
-      .mockResolvedValueOnce('class-77');
+      .mockResolvedValueOnce({ classId: 'class-77', durationMin: 55 });
     const { built } = deps({ resolveClassId });
 
     const report = await executeBooking(planned, built);
@@ -193,7 +220,7 @@ describe('executeBooking', () => {
 
   it('does not re-resolve once it has an id, so retries cost one request each', async () => {
     const outcomes: AttemptOutcome[] = [{ kind: 'too-early' }, { kind: 'booked' }];
-    const resolveClassId = vi.fn(async () => 'class-77');
+    const resolveClassId = vi.fn(async () => ({ classId: 'class-77', durationMin: 55 }));
     const { built } = deps({ resolveClassId, book: vi.fn(async () => outcomes.shift()!) });
 
     await executeBooking(planned, built);

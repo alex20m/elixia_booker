@@ -17,12 +17,11 @@
  * through (Google, Apple, Outlook) removes an event that is no longer in the
  * source on its own next poll, the same way it added it.
  *
- * Every class gets a fixed duration, because neither `Subscription` nor
- * `BookingHistoryEntry` records how long one runs — Elixia's schedule page
- * exposes it (`ScheduleEvent.metadata.duration`, docs/api.md §4) but nothing
- * persists it today. Getting an end time approximately right is enough for a
- * calendar entry; wiring the real duration through is a job of its own if it
- * turns out to matter.
+ * A class gets its real duration when the history row that booked it recorded
+ * one (`BookingHistoryEntry.durationMin`, read from Elixia's own schedule page
+ * at booking time — `ScheduleEvent.metadata.duration`, docs/api.md §4) and
+ * falls back to a fixed default otherwise, for rows written before that field
+ * existed.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -130,7 +129,7 @@ export function buildCalendarFeed(
   ];
 
   for (const { entry, startWall } of events) {
-    const endWall = addMinutes(startWall, DEFAULT_CLASS_DURATION_MIN);
+    const endWall = addMinutes(startWall, entry.durationMin ?? DEFAULT_CLASS_DURATION_MIN);
     // Stable across refetches of the same occurrence, so a calendar app can
     // tell "still the same class" from "a new one" rather than duplicating
     // every event on every poll. Falls back to a class/date/time key when the
