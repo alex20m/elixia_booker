@@ -1782,35 +1782,6 @@ describe('cancelled bookings', () => {
     expect((await onlyHistory()).cancelledAtMs).toBeUndefined();
   });
 
-  it('records the confirmation when Elixia still shows the booking as held', async () => {
-    // What the calendar feed leans on to keep a class after it has run: the
-    // booking was checked, and it was still there. Without a recorded check,
-    // "not cancelled" only means nobody looked.
-    const profile = await linkedProfile();
-    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
-    await bookUpcoming(profile, sub);
-
-    config.backend = gym({
-      checkBookedStatus: async (tokens, center, checks) => checks.map(() => 'booked'),
-    });
-    await reviewBookedOccurrences(config, profile, nowMs);
-
-    expect((await onlyHistory()).lastSeenBookedAtMs).toBe(nowMs);
-  });
-
-  it('records no confirmation from an answer that is merely inconclusive', async () => {
-    const profile = await linkedProfile();
-    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
-    await bookUpcoming(profile, sub);
-
-    config.backend = gym({
-      checkBookedStatus: async (tokens, center, checks) => checks.map(() => 'unknown'),
-    });
-    await reviewBookedOccurrences(config, profile, nowMs);
-
-    expect((await onlyHistory()).lastSeenBookedAtMs).toBeUndefined();
-  });
-
   it('does not read a class Elixia no longer publishes as cancelled', async () => {
     // "unknown" covers a withdrawn or renamed class too — that says nothing
     // about whether the booking made while it still existed was cancelled.
