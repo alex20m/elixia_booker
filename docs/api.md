@@ -450,7 +450,11 @@ building.
       capture so far read a fresh, unbooked listing; none re-fetched the
       listing while genuinely on a waiting list. If `isBooked` turns out false
       for a waitlisted place too, that function currently reads it as
-      cancelled the first time it runs.
+      cancelled the first time it runs. It now decides one more thing: a
+      positive reading is also what lets the feed keep a class *after* it has
+      run (`lastSeenBookedAtMs`, `lib/calendarFeed.ts`), so a waitlisted place
+      this never reads as booked would both be cancelled wrongly and, failing
+      that, never be recorded as attended.
 
 ---
 

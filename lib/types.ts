@@ -499,6 +499,18 @@ export interface BookingHistoryEntry {
    */
   cancelledAtMs?: number;
   /**
+   * When Elixia last confirmed the user was still booked into this class.
+   *
+   * Set by the same `reviewBookedOccurrences` pass that sets `cancelledAtMs`,
+   * from the opposite answer. It is what lets the calendar feed keep a class
+   * that has already run without asserting something nobody checked: Elixia
+   * publishes its schedule from today forward, so a class can only be
+   * confirmed while it is still upcoming, and a row that never was cannot be
+   * told apart from one quietly cancelled. Absent on those, and on rows
+   * written before this field existed.
+   */
+  lastSeenBookedAtMs?: number;
+  /**
    * How long the class actually runs, in minutes, as Elixia's own schedule
    * page reported it (`ScheduleEvent.metadata.duration`, docs/api.md §4) at
    * the moment this row was written. Absent on rows written before this field

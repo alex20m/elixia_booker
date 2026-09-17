@@ -119,6 +119,7 @@ const toHistoryEntry = (row: SqlRow): BookingHistoryEntry => ({
   dryRun: Boolean(row.dry_run),
   ...(row.center ? { center: str(row.center) } : {}),
   ...(row.cancelled_at ? { cancelledAtMs: toMs(row.cancelled_at) } : {}),
+  ...(row.last_seen_booked_at ? { lastSeenBookedAtMs: toMs(row.last_seen_booked_at) } : {}),
   ...(row.duration_min !== null && row.duration_min !== undefined
     ? { durationMin: num(row.duration_min) }
     : {}),
@@ -461,7 +462,7 @@ export function createNeonRepo(sql: Sql): Repo {
       const rows = await sql.query(
         `select subscription_id, class_name, to_char(class_date, 'YYYY-MM-DD') as class_date,
                 start_time, outcome, detail, attempts, first_attempt_offset_ms, dry_run, created_at,
-                center, cancelled_at, duration_min
+                center, cancelled_at, duration_min, last_seen_booked_at
          from public.booking_history
          where user_id = $1
          order by created_at desc
@@ -488,6 +489,23 @@ export function createNeonRepo(sql: Sql): Repo {
         ),
       );
       return rows.length > 0;
+    },
+
+    async markHistorySeenBooked(userId, subscriptionId, classDate, nowMs) {
+      await rowsOrNoneForBadId(() =>
+        sql.query(
+          `update public.booking_history
+           set last_seen_booked_at = $4::timestamptz
+           where id = (
+             select id from public.booking_history
+             where user_id = $1 and subscription_id = $2::uuid and class_date = $3::date
+               and outcome in ('booked', 'waitlisted') and cancelled_at is null
+             order by created_at desc
+             limit 1
+           )`,
+          [userId, subscriptionId, classDate, iso(nowMs)],
+        ),
+      );
     },
   };
 }

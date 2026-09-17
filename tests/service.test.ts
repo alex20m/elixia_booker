@@ -1782,6 +1782,35 @@ describe('cancelled bookings', () => {
     expect((await onlyHistory()).cancelledAtMs).toBeUndefined();
   });
 
+  it('records the confirmation when Elixia still shows the booking as held', async () => {
+    // What the calendar feed leans on to keep a class after it has run: the
+    // booking was checked, and it was still there. Without a recorded check,
+    // "not cancelled" only means nobody looked.
+    const profile = await linkedProfile();
+    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+    await bookUpcoming(profile, sub);
+
+    config.backend = gym({
+      checkBookedStatus: async (tokens, center, checks) => checks.map(() => 'booked'),
+    });
+    await reviewBookedOccurrences(config, profile, nowMs);
+
+    expect((await onlyHistory()).lastSeenBookedAtMs).toBe(nowMs);
+  });
+
+  it('records no confirmation from an answer that is merely inconclusive', async () => {
+    const profile = await linkedProfile();
+    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+    await bookUpcoming(profile, sub);
+
+    config.backend = gym({
+      checkBookedStatus: async (tokens, center, checks) => checks.map(() => 'unknown'),
+    });
+    await reviewBookedOccurrences(config, profile, nowMs);
+
+    expect((await onlyHistory()).lastSeenBookedAtMs).toBeUndefined();
+  });
+
   it('does not read a class Elixia no longer publishes as cancelled', async () => {
     // "unknown" covers a withdrawn or renamed class too — that says nothing
     // about whether the booking made while it still existed was cancelled.
@@ -1928,14 +1957,31 @@ describe('cancelled bookings', () => {
     expect(centers).toEqual(['Tapiola']);
   });
 
-  it('is not run by the nightly job — only inline, whenever the calendar feed is actually fetched', async () => {
-    // Deliberately not part of runReindex: it would cost a schedule read for
-    // every account with an upcoming booking, every night, whether or not
-    // anyone's calendar app was ever going to ask. `calendarFeedFor` already
-    // runs this same check inline on every fetch, and a subscribed calendar
-    // polls its source on its own schedule regardless — so a nightly pass
-    // would only ever save the wait until the *next* poll, at the cost of
-    // running it for accounts that never turned calendar sync on at all.
+  it('is run by the nightly job too, so noticing a cancellation does not wait on a calendar app to poll', async () => {
+    // The bug this pins: detection used to happen only on a feed fetch, which
+    // made it hostage to one device's refresh setting. A calendar that polls
+    // rarely — iOS subscriptions can be set to refresh weekly — left the
+    // cancellation unseen until after the class had run, by which point
+    // Elixia no longer publishes it and nothing can ever establish what
+    // happened. A nightly check runs while the answer is still available.
+    const profile = await linkedProfile();
+    await repo.upsertProfile({ ...profile, calendarSyncEnabled: true });
+    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+    await bookUpcoming(profile, sub);
+
+    config.backend = gym({
+      checkBookedStatus: async (tokens, center, checks) => checks.map(() => 'not-booked'),
+    });
+    await runReindex(config, nowMs);
+
+    expect((await onlyHistory()).cancelledAtMs).toBe(nowMs);
+  });
+
+  it('is skipped by the nightly job for an account with calendar sync switched off', async () => {
+    // The check exists to keep a feed honest, so an account without one has
+    // nothing to gain from it — and it costs a ~1.5MB schedule read per
+    // centre, every night, which is not worth spending on a calendar nobody
+    // subscribed to.
     const profile = await linkedProfile();
     const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
     await bookUpcoming(profile, sub);

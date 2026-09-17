@@ -105,7 +105,11 @@ describe('buildCalendarFeed', () => {
   });
 
   it('keeps a class the user already attended, so it stays in the calendar as a record', () => {
-    const attended = entry({ classDate: '2026-08-01', startTime: '09:00' });
+    const attended = entry({
+      classDate: '2026-08-01',
+      startTime: '09:00',
+      lastSeenBookedAtMs: Date.UTC(2026, 7, 1, 5, 0),
+    });
 
     const ics = buildCalendarFeed(profile, [attended], NOW);
 
@@ -113,19 +117,49 @@ describe('buildCalendarFeed', () => {
     expect(ics).toContain('DTSTART;TZID=Europe/Helsinki:20260801T090000');
   });
 
-  it('keeps a class from earlier today', () => {
-    const today = entry({ classDate: '2026-09-01', startTime: '08:00' });
+  it('keeps a class from earlier today that was confirmed still booked', () => {
+    const today = entry({
+      classDate: '2026-09-01',
+      startTime: '08:00',
+      lastSeenBookedAtMs: NOW - 60_000,
+    });
 
     const ics = buildCalendarFeed(profile, [today], NOW);
 
     expect(ics).toContain('BEGIN:VEVENT');
   });
 
+  it('drops a class that has run without Elixia ever confirming the booking still held', () => {
+    // The bug this pins: an unbooking nobody observed before the class
+    // started can never be observed afterwards — Elixia publishes its
+    // schedule from today forward, so a finished class has no status left to
+    // read. Keeping it regardless would claim she turned up on the strength
+    // of nobody having looked. The upcoming half of this is unchanged: a
+    // class still to come is shown whether or not it has been confirmed yet.
+    const unconfirmed = entry({ classDate: '2026-08-01', startTime: '09:00' });
+
+    const ics = buildCalendarFeed(profile, [unconfirmed], NOW);
+
+    expect(ics).not.toContain('BEGIN:VEVENT');
+  });
+
+  it('shows a class still to come that has not been confirmed yet', () => {
+    const upcoming = entry({ classDate: '2026-09-08', startTime: '09:00' });
+
+    const ics = buildCalendarFeed(profile, [upcoming], NOW);
+
+    expect(ics).toContain('BEGIN:VEVENT');
+  });
+
   it('still drops a class that was unbooked before it ran, however long ago that was', () => {
-    // Attending is what earns a past class its permanent place. A booking
-    // given up beforehand was never attended, so it goes the same way a
-    // cancelled upcoming one does — the past is not an amnesty.
-    const unbooked = entry({ classDate: '2026-08-01', startTime: '09:00', cancelledAtMs: NOW });
+    // Being confirmed booked at some earlier point does not outrank a later
+    // cancellation — the past is not an amnesty.
+    const unbooked = entry({
+      classDate: '2026-08-01',
+      startTime: '09:00',
+      lastSeenBookedAtMs: Date.UTC(2026, 6, 30, 9, 0),
+      cancelledAtMs: Date.UTC(2026, 6, 31, 9, 0),
+    });
 
     const ics = buildCalendarFeed(profile, [unbooked], NOW);
 
