@@ -1478,22 +1478,6 @@ export async function reviewBookedOccurrences(
 
     for (let i = 0; i < inCenter.length; i++) {
       const { entry } = inCenter[i]!;
-
-      // Only a positive sighting counts. `unknown` — a class Elixia has
-      // withdrawn, renamed, or stopped publishing — is no more evidence that
-      // the booking still holds than that it was cancelled, and recording it
-      // as confirmation would let the calendar feed keep a class on the
-      // strength of an answer that said nothing.
-      if (statuses[i] === 'booked') {
-        await config.repo.markHistorySeenBooked(
-          profile.id,
-          entry.subscriptionId,
-          entry.classDate,
-          nowMs,
-        );
-        continue;
-      }
-
       if (statuses[i] !== 'not-booked') continue;
 
       const marked = await config.repo.markHistoryCancelled(

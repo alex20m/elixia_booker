@@ -153,19 +153,4 @@ export interface Repo {
     classDate: string,
     nowMs: number,
   ): Promise<boolean>;
-  /**
-   * Record that Elixia still showed this booking as held — see
-   * `BookingHistoryEntry.lastSeenBookedAtMs`.
-   *
-   * Matched exactly as `markHistoryCancelled` matches, and equally a no-op
-   * when nothing matches. Returns nothing because no caller has a decision to
-   * make either way: this is a note about a check that has already happened,
-   * not a state transition anyone reacts to.
-   */
-  markHistorySeenBooked(
-    userId: string,
-    subscriptionId: string,
-    classDate: string,
-    nowMs: number,
-  ): Promise<void>;
 }

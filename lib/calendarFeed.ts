@@ -17,27 +17,19 @@
  * through (Google, Apple, Outlook) removes an event that is no longer in the
  * source on its own next poll, the same way it added it.
  *
- * Nothing is dropped merely for being over: a class the user turned up to is
- * a record worth keeping, and taking it off the calendar afterwards erases
- * it. But a class is only kept once Elixia has confirmed the booking still
- * held (`lastSeenBookedAtMs`), and that condition is not bureaucracy — it is
- * the whole difference between "she went" and "nobody ever looked".
+ * Nothing is dropped merely for being over. A class that ran stays, and no
+ * check is asked of it: it is a record of a session, and the point of keeping
+ * it is that it survives without anyone maintaining it.
  *
- * Elixia publishes its schedule from today forward, so a booking can only be
- * checked while its class is still upcoming; `matchClassBookedStatus`
- * (lib/elixia.ts) answers `unknown` for anything it cannot find, which is
- * deliberately not read as a cancellation. An unbooking nobody observed
- * before the class started therefore can never be observed at all. Treating
- * the absence of `cancelledAtMs` as attendance would turn that blind spot
- * into a permanent wrong entry: a class someone cancelled, sitting on their
- * calendar forever, with nothing left that could ever remove it. So the claim
- * rests on a check that actually happened, and an unconfirmed class leaves
- * the feed once it has started.
- *
- * The other half of making that work is that checks happen often enough to be
- * there when they are needed: `reviewBookedOccurrences` runs both inline on
- * every feed fetch and on the nightly sweep (lib/service.ts), so confirmation
- * does not depend on how often one person's calendar app happens to poll.
+ * That does mean a cancellation nobody caught in time is kept as though it
+ * had been attended, and permanently — Elixia publishes its schedule from
+ * today forward, so once a class is over `matchClassBookedStatus`
+ * (lib/elixia.ts) can only answer `unknown`, which is deliberately not read
+ * as a cancellation. A wrong entry in the past is the accepted cost of not
+ * losing the right ones; the mitigation is to catch cancellations *before*
+ * the class runs, which is why `reviewBookedOccurrences` (lib/service.ts)
+ * runs on the nightly sweep as well as inline on every feed fetch, rather
+ * than depending on how often one person's calendar app happens to poll.
  *
  * How far back the feed reaches is otherwise whatever `listHistory` hands it
  * — the most recent attempts, bounded by that query's own limit — on both
@@ -131,7 +123,6 @@ export function buildCalendarFeed(
       const { epochMs: startEpochMs } = zonedWallClockToInstant(startWall, profile.timeZone);
       return { entry, startWall, startEpochMs };
     })
-    .filter((x) => x.startEpochMs > nowMs || x.entry.lastSeenBookedAtMs !== undefined)
     .sort((a, b) => a.startEpochMs - b.startEpochMs);
 
   const lines: string[] = [
