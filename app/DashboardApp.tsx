@@ -184,8 +184,8 @@ export function SignedOut() {
         <div className="hero">
           <h1>Never miss a class again.</h1>
           <p className="hero-sub">
-            Pick the classes you want. Booker books them the second Elixia opens the window —
-            while you are asleep.
+            Pick the classes you want. Booker books them automatically for you the second the
+            booking window opens.
           </p>
         </div>
 
