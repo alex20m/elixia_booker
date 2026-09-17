@@ -1436,8 +1436,10 @@ export async function reviewBookedOccurrences(
       const { epochMs: classEpochMs } = zonedWallClockToInstant(startWall, profile.timeZone);
       return { entry, classEpochMs };
     })
-    // Already happened: whether it was cancelled in the meantime no longer
-    // changes anything a calendar needs to show.
+    // Already started, so Elixia's schedule page — which publishes only what
+    // is still to come — has nothing to say about it. Asking anyway would read
+    // back as "not booked" and cancel a class the user actually attended,
+    // which the calendar feed now keeps on purpose (lib/calendarFeed.ts).
     .filter((x) => x.classEpochMs > nowMs);
 
   if (pending.length === 0) return;

@@ -1815,8 +1815,10 @@ describe('cancelled bookings', () => {
   it('never checks a class that has already happened', async () => {
     const profile = await linkedProfile();
     const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
-    // A class dated well before "now" — already over, so cancellation no
-    // longer changes anything a calendar needs to show.
+    // A class dated well before "now". Elixia's schedule page only publishes
+    // what is still to come, so asking about a finished class reads back as
+    // "not booked" — and the calendar feed deliberately keeps attended
+    // classes, so acting on that answer would erase them.
     await bookUpcoming(profile, sub, { classDate: '2026-01-01' });
 
     let called = false;

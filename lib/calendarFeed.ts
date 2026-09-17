@@ -17,6 +17,21 @@
  * through (Google, Apple, Outlook) removes an event that is no longer in the
  * source on its own next poll, the same way it added it.
  *
+ * Nothing is dropped merely for being over. A class that ran is a class the
+ * user turned up to, and taking it off their calendar afterwards erases a
+ * record they may well want to keep — so only an unbooking removes an event,
+ * never the passage of time. That makes `reviewBookedOccurrences`'s refusal
+ * to inspect a class that has already started load-bearing rather than merely
+ * thrifty: Elixia's schedule page only publishes what is still to come, so
+ * asking it about a finished class would read back as "not booked" and erase
+ * exactly the attended sessions this is keeping.
+ *
+ * How far back the feed reaches is therefore whatever `listHistory` hands it
+ * — the most recent attempts, bounded by that query's own limit — on both
+ * sides, past and future alike. An attended class eventually ages out of that
+ * window and leaves the calendar with it; that is the same bound the future
+ * side has always had, not a second expiry rule.
+ *
  * A class gets its real duration when the history row that booked it recorded
  * one (`BookingHistoryEntry.durationMin`, read from Elixia's own schedule page
  * at booking time — `ScheduleEvent.metadata.duration`, docs/api.md §4) and
@@ -38,17 +53,6 @@ export function newCalendarFeedToken(): string {
 
 /** Assumed length of every class, in the absence of a real one. */
 const DEFAULT_CLASS_DURATION_MIN = 60;
-
-/**
- * How far into the past a class may have started and still appear.
- *
- * Long enough that a class earlier today does not vanish from the feed while
- * it is still running or just after; short enough that the feed does not
- * accumulate months of finished classes nobody is looking at. There is no
- * upper bound on the future side — `listHistory`'s own limit already caps how
- * far ahead this can reach.
- */
-const PAST_GRACE_MS = 24 * 60 * 60 * 1000;
 
 /** Also used by `reviewBookedOccurrences` (lib/service.ts) to place the same occurrence in time. */
 export function parseClassStart(classDate: string, startTime: string): WallClock {
@@ -114,7 +118,6 @@ export function buildCalendarFeed(
       const { epochMs: startEpochMs } = zonedWallClockToInstant(startWall, profile.timeZone);
       return { entry, startWall, startEpochMs };
     })
-    .filter((x) => x.startEpochMs >= nowMs - PAST_GRACE_MS)
     .sort((a, b) => a.startEpochMs - b.startEpochMs);
 
   const lines: string[] = [

@@ -104,12 +104,13 @@ describe('buildCalendarFeed', () => {
     expect(ics).not.toContain('BEGIN:VEVENT');
   });
 
-  it('drops a class that finished more than a day ago', () => {
-    const longGone = entry({ classDate: '2026-08-01', startTime: '09:00' });
+  it('keeps a class the user already attended, so it stays in the calendar as a record', () => {
+    const attended = entry({ classDate: '2026-08-01', startTime: '09:00' });
 
-    const ics = buildCalendarFeed(profile, [longGone], NOW);
+    const ics = buildCalendarFeed(profile, [attended], NOW);
 
-    expect(ics).not.toContain('BEGIN:VEVENT');
+    expect(ics).toContain('BEGIN:VEVENT');
+    expect(ics).toContain('DTSTART;TZID=Europe/Helsinki:20260801T090000');
   });
 
   it('keeps a class from earlier today', () => {
@@ -118,6 +119,17 @@ describe('buildCalendarFeed', () => {
     const ics = buildCalendarFeed(profile, [today], NOW);
 
     expect(ics).toContain('BEGIN:VEVENT');
+  });
+
+  it('still drops a class that was unbooked before it ran, however long ago that was', () => {
+    // Attending is what earns a past class its permanent place. A booking
+    // given up beforehand was never attended, so it goes the same way a
+    // cancelled upcoming one does — the past is not an amnesty.
+    const unbooked = entry({ classDate: '2026-08-01', startTime: '09:00', cancelledAtMs: NOW });
+
+    const ics = buildCalendarFeed(profile, [unbooked], NOW);
+
+    expect(ics).not.toContain('BEGIN:VEVENT');
   });
 
   it('gives the same occurrence the same UID across refetches', () => {
