@@ -486,12 +486,12 @@ export async function calendarFeedFor(
   // Checked here, not only by the nightly job: a calendar app's very first
   // fetch — the moment someone subscribes — has to be accurate immediately,
   // not "accurate once tonight's reindex has had a chance to run". The
-  // nightly pass still exists, both as a backstop for a feed nobody has
-  // fetched since a cancellation happened and to send the "this was
-  // cancelled" notification even when nobody is looking. `pending` inside it
-  // is normally empty or a handful of rows, so an ordinary fetch costs
-  // nothing extra; only an account with a class booked and not yet run adds
-  // a schedule read here, and only for that one centre.
+  // nightly pass (`runReindex`) is the backstop for the opposite case, a feed
+  // whose calendar app polls too rarely to notice a cancellation before the
+  // class runs. `pending` inside this is normally empty or a handful of rows,
+  // so an ordinary fetch costs nothing extra; only an account with a class
+  // booked and not yet run adds a schedule read here, and only for that one
+  // centre.
   await reviewBookedOccurrences(config, profile, nowMs);
 
   const history = await config.repo.listHistory(profile.id);
@@ -1396,11 +1396,11 @@ export async function reviewNextOccurrences(
  * (lib/calendarFeed.ts) forever, since nothing else ever looks at that row
  * again.
  *
- * Called from `calendarFeedFor` alone, inline on every feed fetch — there is
- * deliberately no nightly pass. A subscribed calendar app polls its source on
- * its own schedule regardless of what this app does, so a fetch is never far
- * away, and running this only when something is actually about to be served
- * means an account with calendar sync switched off never pays for it at all.
+ * Called from two places: inline from `calendarFeedFor` on every feed fetch,
+ * so a newly subscribed calendar is right immediately, and from `runReindex`
+ * nightly for every account with sync on, so the check does not depend on how
+ * often a particular device polls. Both matter, because the answer expires —
+ * see the past-class filter below.
  *
  * Scoped tightly on purpose. Only a booking's own most recent success can
  * plausibly still be upcoming — anything earlier has already happened — so
@@ -1436,10 +1436,13 @@ export async function reviewBookedOccurrences(
       const { epochMs: classEpochMs } = zonedWallClockToInstant(startWall, profile.timeZone);
       return { entry, classEpochMs };
     })
-    // Already started, so Elixia's schedule page — which publishes only what
-    // is still to come — has nothing to say about it. Asking anyway would read
-    // back as "not booked" and cancel a class the user actually attended,
-    // which the calendar feed now keeps on purpose (lib/calendarFeed.ts).
+    // Already started, so there is nothing left to ask. Elixia publishes its
+    // schedule from today forward, and `matchClassBookedStatus` answers
+    // `unknown` for a class it cannot find — the same answer for one that was
+    // cancelled and one that was attended, which is why neither can be told
+    // apart afterwards. That is what makes checking *before* the class the
+    // only chance there is, and why the calendar feed refuses to call a class
+    // attended unless a check actually happened (lib/calendarFeed.ts).
     .filter((x) => x.classEpochMs > nowMs);
 
   if (pending.length === 0) return;
@@ -1475,6 +1478,22 @@ export async function reviewBookedOccurrences(
 
     for (let i = 0; i < inCenter.length; i++) {
       const { entry } = inCenter[i]!;
+
+      // Only a positive sighting counts. `unknown` — a class Elixia has
+      // withdrawn, renamed, or stopped publishing — is no more evidence that
+      // the booking still holds than that it was cancelled, and recording it
+      // as confirmation would let the calendar feed keep a class on the
+      // strength of an answer that said nothing.
+      if (statuses[i] === 'booked') {
+        await config.repo.markHistorySeenBooked(
+          profile.id,
+          entry.subscriptionId,
+          entry.classDate,
+          nowMs,
+        );
+        continue;
+      }
+
       if (statuses[i] !== 'not-booked') continue;
 
       const marked = await config.repo.markHistoryCancelled(
@@ -1938,11 +1957,27 @@ export async function runReindex(
     occurrencesReviewed += 1;
   }
 
-  // No pass here for `reviewBookedOccurrences`, on purpose: `calendarFeedFor`
-  // already runs it inline on every feed fetch (see its own doc comment), so
-  // a nightly pass would only ever catch a cancellation for an account whose
-  // calendar app has gone this long without polling at all — the same "once
-  // in a while" a subscribed calendar is expected to do on its own.
+  // Fourth pass, and the only one that skips most accounts outright: a
+  // cancellation is only worth chasing for a profile that has a feed to keep
+  // honest.
+  //
+  // This used to be left entirely to `calendarFeedFor`'s inline run, on the
+  // reasoning that a subscribed calendar polls often enough on its own. It
+  // does not, reliably: an iOS subscription can be set to refresh weekly, and
+  // a check that only happens when someone's phone asks is hostage to that
+  // setting. What made that gamble untenable is that the answer expires —
+  // Elixia publishes its schedule from today forward, so once a class has
+  // run, whether it was cancelled first can no longer be established at all
+  // (see lib/calendarFeed.ts). A poll that arrives after the class is too
+  // late to be worth anything. A nightly pass bounds the delay to a day
+  // regardless of any device.
+  let bookingsReviewed = 0;
+  for (const profile of profiles) {
+    if (!profile.calendarSyncEnabled) continue;
+    if (options.deadlineMs !== undefined && Date.now() >= options.deadlineMs) break;
+    await reviewBookedOccurrences(config, profile, nowMs);
+    bookingsReviewed += 1;
+  }
 
   const pruned = await config.repo.pruneDueEntries(nowMs - 24 * 60 * 60 * 1000);
   logger.log('cron.reindex', {
@@ -1955,6 +1990,7 @@ export async function runReindex(
     reviewSkipped: profiles.length - reviewed,
     occurrencesReviewed,
     occurrencesReviewSkipped: profiles.length - occurrencesReviewed,
+    bookingsReviewed,
   });
   return indexed;
 }

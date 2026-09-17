@@ -222,6 +222,17 @@ export function createMemoryRepo(): MemoryRepo {
       return true;
     },
 
+    async markHistorySeenBooked(userId, subscriptionId, classDate, nowMs) {
+      const entry = (history.get(userId) ?? []).find(
+        (e) =>
+          e.subscriptionId === subscriptionId &&
+          e.classDate === classDate &&
+          (e.outcome === 'booked' || e.outcome === 'waitlisted') &&
+          e.cancelledAtMs === undefined,
+      );
+      if (entry) entry.lastSeenBookedAtMs = nowMs;
+    },
+
     dump() {
       return JSON.stringify({
         profiles: [...profiles.values()],

@@ -746,6 +746,56 @@ describe('booking history', () => {
     expect((await repo.listHistory(ALICE))[0]?.cancelledAtMs).toBeUndefined();
   });
 
+  it('records a confirmation that the booking still held, round-tripping when it was', async () => {
+    const alices = await addClass(ALICE, 'Bodypump');
+    await repo.appendHistory(ALICE, attempt(Date.UTC(2026, 3, 1, 5, 0), alices.id));
+
+    await repo.markHistorySeenBooked(ALICE, alices.id, '2026-04-08', Date.UTC(2026, 3, 2, 6, 0));
+
+    expect((await repo.listHistory(ALICE))[0]?.lastSeenBookedAtMs).toBe(Date.UTC(2026, 3, 2, 6, 0));
+  });
+
+  it('leaves lastSeenBookedAtMs out until a booking is actually confirmed', async () => {
+    const alices = await addClass(ALICE, 'Bodypump');
+    await repo.appendHistory(ALICE, attempt(Date.UTC(2026, 3, 1, 5, 0), alices.id));
+
+    expect((await repo.listHistory(ALICE))[0]?.lastSeenBookedAtMs).toBeUndefined();
+  });
+
+  it('moves the confirmation forward on a later check', async () => {
+    // Each sighting supersedes the last, so the value answers "when was this
+    // last known good", not "when was it first seen".
+    const alices = await addClass(ALICE, 'Bodypump');
+    await repo.appendHistory(ALICE, attempt(Date.UTC(2026, 3, 1, 5, 0), alices.id));
+
+    await repo.markHistorySeenBooked(ALICE, alices.id, '2026-04-08', Date.UTC(2026, 3, 2, 6, 0));
+    await repo.markHistorySeenBooked(ALICE, alices.id, '2026-04-08', Date.UTC(2026, 3, 5, 6, 0));
+
+    expect((await repo.listHistory(ALICE))[0]?.lastSeenBookedAtMs).toBe(Date.UTC(2026, 3, 5, 6, 0));
+  });
+
+  it('never confirms a booking already found cancelled', async () => {
+    // Otherwise a stale check racing a cancellation could vouch for a class
+    // the user has given up, and the calendar feed reads that as attendance.
+    const alices = await addClass(ALICE, 'Bodypump');
+    await repo.appendHistory(ALICE, attempt(Date.UTC(2026, 3, 1, 5, 0), alices.id));
+    await repo.markHistoryCancelled(ALICE, alices.id, '2026-04-08', Date.UTC(2026, 3, 2, 6, 0));
+
+    await repo.markHistorySeenBooked(ALICE, alices.id, '2026-04-08', Date.UTC(2026, 3, 3, 6, 0));
+
+    expect((await repo.listHistory(ALICE))[0]?.lastSeenBookedAtMs).toBeUndefined();
+  });
+
+  it('does not confirm a row belonging to a different user, subscription or date', async () => {
+    const alices = await addClass(ALICE, 'Bodypump');
+    await repo.appendHistory(ALICE, attempt(Date.UTC(2026, 3, 1, 5, 0), alices.id));
+
+    await repo.markHistorySeenBooked(ALICE, alices.id, '2026-04-15', Date.UTC(2026, 3, 2, 6, 0));
+    await repo.markHistorySeenBooked(BOB, alices.id, '2026-04-08', Date.UTC(2026, 3, 2, 6, 0));
+
+    expect((await repo.listHistory(ALICE))[0]?.lastSeenBookedAtMs).toBeUndefined();
+  });
+
   it('does not mark an outcome that could never have held a place', async () => {
     const alices = await addClass(ALICE, 'Bodypump');
     await repo.appendHistory(ALICE, attempt(Date.UTC(2026, 3, 1, 5, 0), alices.id, 'too-early'));
