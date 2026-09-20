@@ -886,6 +886,23 @@ export interface ElixiaClientOptions {
 export class ElixiaClient implements BookingBackend {
   private readonly fetchImpl: typeof fetch;
   private readonly baseUrl: string;
+  /**
+   * Club name -> numeric club id, for the life of this client.
+   *
+   * The mapping belongs to Elixia's group-wide filter tree, not to any one
+   * account (docs/api.md §4), so one lookup answers it for every user this
+   * client serves. Caching it is not a general-purpose speed-up — it exists
+   * to keep a request off the booking critical path. Without it, every single
+   * attempt for a subscription whose centre is stored as a *name* refetches
+   * and reparses the unfiltered schedule page — the biggest one on the site,
+   * carrying all 226 clubs — before it can even ask for the club's own page.
+   * That doubles both the latency of each probe and the synchronous parsing
+   * that every booking sharing the invocation is queued behind.
+   *
+   * Scoped to the instance on purpose. A tick builds one client and drops it,
+   * so the entry cannot outlive the run and go stale against a renamed club.
+   */
+  private readonly clubIdByName = new Map<string, string>();
 
   constructor(options: ElixiaClientOptions = {}) {
     this.fetchImpl = options.fetchImpl ?? fetch;
@@ -916,15 +933,24 @@ export class ElixiaClient implements BookingBackend {
    * A centre may be stored either as the numeric club id the API uses, or as
    * the name a human recognises. A name costs one extra request — the club
    * list only exists on the schedule page — which is why the booking engine
-   * resolves the class id ahead of T-0 wherever it can.
+   * resolves the class id ahead of T-0 wherever it can, and why the answer is
+   * remembered for the life of this client rather than re-fetched on every
+   * attempt (see `clubIdByName`).
    */
   private async resolveClubId(tokens: StoredTokens, center: string): Promise<string> {
     const trimmed = center.trim();
     if (/^\d+$/.test(trimmed)) return trimmed;
 
+    const cached = this.clubIdByName.get(trimmed);
+    if (cached !== undefined) return cached;
+
     const props = await this.fetchPage(tokens, `${this.baseUrl}${ENDPOINTS.schedule}`);
     const id = findClubIdByName(props, trimmed);
+    // Only a hit is remembered. A miss may well be this account not being able
+    // to see the club, and caching that would turn one bad read into a run
+    // that refuses the centre without looking again.
     if (!id) throw new UnknownCenterError(center);
+    this.clubIdByName.set(trimmed, id);
     return id;
   }
 

@@ -598,6 +598,54 @@ describe('ElixiaClient.resolveClassId', () => {
     });
   });
 
+  it('looks a centre name up once, so later attempts cost one request each', async () => {
+    // The critical path, not general tidiness. Booking probes the schedule
+    // repeatedly while a class is still unlisted, and each probe used to
+    // refetch and reparse the whole-group page just to turn "Circus" back
+    // into 741 — doubling the latency of every probe at the one moment it
+    // matters.
+    const urls: string[] = [];
+    const fetchImpl = vi.fn(async (url: string | URL) => {
+      const u = url.toString();
+      urls.push(u);
+      return new Response(
+        pageHtml(u.includes('clubIds') ? scheduleFixture() : unfilteredFixture()),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+
+    const client = new ElixiaClient({ fetchImpl, baseUrl: BASE });
+    const named = subscription({ center: 'Circus' });
+    await client.resolveClassId(tokens, named, '2026-08-21');
+    await client.resolveClassId(tokens, named, '2026-08-21');
+    await client.resolveClassId(tokens, named, '2026-08-21');
+
+    expect(urls).toEqual([
+      `${BASE}/varaukset`,
+      `${BASE}/varaukset?clubIds=741`,
+      `${BASE}/varaukset?clubIds=741`,
+      `${BASE}/varaukset?clubIds=741`,
+    ]);
+  });
+
+  it('looks an unresolved centre name up again rather than remembering the miss', async () => {
+    // A name that does not resolve may be this account not seeing the club,
+    // or a page read that came back wrong. Remembering that would turn one
+    // bad read into a run that refuses the centre without ever looking again.
+    const urls: string[] = [];
+    const fetchImpl = vi.fn(async (url: string | URL) => {
+      urls.push(url.toString());
+      return new Response(pageHtml(unfilteredFixture()), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const client = new ElixiaClient({ fetchImpl, baseUrl: BASE });
+    const unknown = subscription({ center: 'Atlantis' });
+    await expect(client.resolveClassId(tokens, unknown, '2026-08-21')).rejects.toThrow();
+    await expect(client.resolveClassId(tokens, unknown, '2026-08-21')).rejects.toThrow();
+
+    expect(urls).toEqual([`${BASE}/varaukset`, `${BASE}/varaukset`]);
+  });
+
   it('names the unknown centre rather than failing as "class not listed"', async () => {
     const fetchImpl = (async () =>
       new Response(pageHtml(unfilteredFixture()), { status: 200 })) as typeof fetch;
