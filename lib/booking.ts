@@ -318,65 +318,83 @@ const SHORT_MONTHS = [
   'Dec',
 ];
 
-/** "2026-09-06" -> "Sep 6". Read as a string, not a Date, to sidestep timezones. */
+const SHORT_WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/**
+ * "2026-09-13" -> "Sat 13 Sep".
+ *
+ * Day before month, because these messages are read in Finland. The weekday
+ * is not decoration: a booking is made a week or two ahead, and the weekday
+ * is what tells someone at a glance that it is the class they meant rather
+ * than the same class on another day.
+ *
+ * Parsed as UTC midnight and read back in UTC, so the calendar day that comes
+ * out is the one in the string. Anything zone-aware here can land a day off,
+ * and a message naming the wrong day is worse than one naming no day at all.
+ */
 function friendlyDate(classDate: string): string {
-  const [, month, day] = classDate.split('-');
-  return `${SHORT_MONTHS[Number(month) - 1]} ${Number(day)}`;
+  const [year, month, day] = classDate.split('-').map(Number);
+  const weekday = SHORT_WEEKDAYS[new Date(Date.UTC(year!, month! - 1, day!)).getUTCDay()];
+  return `${weekday} ${day} ${SHORT_MONTHS[month! - 1]}`;
 }
 
-/** One-line human summary for Telegram. */
+/** "09:30" -> "9.30", and "14:00" -> "14.00". */
+function friendlyTime(startTime: string): string {
+  const [hour, minute] = startTime.split(':');
+  return `${Number(hour)}.${minute}`;
+}
+
+/**
+ * The message a person actually reads, on Telegram or in an email.
+ *
+ * Deliberately carries no timings, attempt counts, offsets or provider error
+ * text. All of that is recorded and shown on the Activity page, which is
+ * where someone goes to ask *why* an attempt went the way it did; a
+ * notification only has to say what happened and, where there is one, what to
+ * do about it. Mixing the two made the one line most people ever see read as
+ * machine output — and, worse, the offset it quoted was measured before the
+ * booking request was even sent, so it was a technical number that was also
+ * wrong.
+ *
+ * Where there is advice, it goes on a second line rather than a second
+ * sentence. `subjectFor` in lib/notify.ts takes the first line as the email
+ * subject, so this keeps the headline short enough to survive a subject line
+ * while the body still carries both.
+ */
 export function describeReport(report: BookingReport): string {
   const { planned, outcome } = report;
-  const what = `${planned.desired.className} @ ${planned.desired.center}, ${planned.classDate} ${planned.desired.startTime}`;
-  const signed = (ms: number): string => `${ms >= 0 ? '+' : ''}${ms}ms`;
-  // Both numbers, because the gap between them is the diagnosis. "woke" is
-  // how well the sleep hit T-0; "sent" is when Elixia was actually asked, and
-  // the difference is the schedule fetch and any rounds spent waiting for the
-  // class to be listed.
-  const timing =
-    report.firstAttemptOffsetMs === null
-      ? ''
-      : report.bookRequestOffsetMs === null
-        ? ` (woke ${signed(report.firstAttemptOffsetMs)} from T-0)`
-        : ` (woke ${signed(report.firstAttemptOffsetMs)}, sent ${signed(report.bookRequestOffsetMs)} from T-0)`;
-  // Same facts as `what`/`timing` above, but spelled out in words instead of
-  // "@"/sign shorthand and ISO-ish date/time — for the message a user
-  // actually reads, not the debug log.
-  const friendlyWhat = `${planned.desired.className} at ${planned.desired.center} on ${friendlyDate(planned.classDate)} at ${planned.desired.startTime.replace(':', '.')}`;
-  // The *request*, deliberately, not the wake-up this used to quote. Saying
-  // "booked 1ms after booking opened" about a run that woke at 1ms and then
-  // spent a second fetching the schedule is not a rounding error — it hides
-  // exactly the delay that decides a waitlist place, and it makes two people
-  // seconds apart read as identical.
-  const sentOffsetMs = report.bookRequestOffsetMs;
-  const friendlyTiming =
-    sentOffsetMs === null
-      ? ''
-      : sentOffsetMs >= 0
-        ? ` (booked ${sentOffsetMs}ms after booking opened)`
-        : ` (booked ${Math.abs(sentOffsetMs)}ms before booking opened)`;
+  const what = `${planned.desired.className} at ${planned.desired.center} on ${friendlyDate(
+    planned.classDate,
+  )} at ${friendlyTime(planned.desired.startTime)}`;
   const prefix = report.dryRun ? '[DRY RUN] ' : '';
 
   switch (outcome.kind) {
     case 'booked':
-      return `${prefix}✅ Booked ${what}${timing}`;
+      return `${prefix}✅ Booked ${what}`;
     case 'waitlisted':
       return outcome.position === undefined
-        ? `${prefix}🕒 You're on the waitlist for ${friendlyWhat}${friendlyTiming}`
-        : `${prefix}🕒 You're number ${outcome.position} on the waitlist for ${friendlyWhat}${friendlyTiming}`;
+        ? `${prefix}🕒 You're on the waitlist for ${what}`
+        : `${prefix}🕒 You're number ${outcome.position} on the waitlist for ${what}`;
     // Elixia cannot tell "you already booked this" apart from "you hold a
     // different class at the same time", so neither can this message.
     case 'already-booked':
-      return `${prefix}ℹ️ Skipped ${what} — you already have an overlapping booking${
-        outcome.detail ? ` (${outcome.detail})` : ''
-      }`;
+      return `${prefix}ℹ️ Didn't book ${what} — you already have a booking at that time.`;
     case 'unauthorized':
-      return `${prefix}🚨 Elixia refused to book ${what} — ${outcome.detail}`;
+      return (
+        `${prefix}🚨 Elixia wouldn't accept your saved login, so ${what} wasn't booked.\n` +
+        `Re-link your Elixia account in the app to start booking again.`
+      );
     case 'too-early':
-      return `${prefix}❌ Never appeared on the schedule in time: ${what}${timing} after ${report.attempts} attempts`;
+      return (
+        `${prefix}❌ ${what} never opened for booking, so nothing was booked.\n` +
+        `It's worth checking the Elixia app in case the class has moved.`
+      );
     case 'rate-limited':
-      return `${prefix}❌ Rate limited booking ${what} after ${report.attempts} attempts`;
+      return `${prefix}❌ Elixia was turning requests away, so ${what} wasn't booked.`;
     case 'error':
-      return `${prefix}❌ Failed ${what}: ${outcome.detail}`;
+      return (
+        `${prefix}❌ Something went wrong booking ${what}.\n` +
+        `The Activity page in the app has the details.`
+      );
   }
 }

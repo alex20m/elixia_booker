@@ -554,92 +554,95 @@ describe('describeReport', () => {
     attempts: 1,
     exhausted: false,
     firstAttemptOffsetMs: 42,
-    bookRequestOffsetMs: 42,
+    bookRequestOffsetMs: 910,
     dryRun: false,
   };
 
-  it('names the class, date and timing on success', () => {
-    const text = describeReport({ ...base, outcome: { kind: 'booked' } });
-    expect(text).toContain('Bodypump');
-    expect(text).toContain('2026-08-18');
-    expect(text).toContain('+42ms');
+  const line = (outcome: AttemptOutcome, over: Partial<BookingReport> = {}): string =>
+    describeReport({ ...base, outcome, ...over });
+
+  // 2026-08-18 is a Tuesday. Spelled out here rather than derived, so the
+  // test cannot agree with a wrong implementation of the same arithmetic.
+  const WHEN = 'Tue 18 Aug at 9.00';
+
+  it('names the class, the centre and when it runs, in words', () => {
+    expect(line({ kind: 'booked' })).toBe(`✅ Booked Bodypump at tapiola on ${WHEN}`);
   });
 
-  it('marks a dry run so it cannot be mistaken for a real booking', () => {
-    const text = describeReport({ ...base, dryRun: true, outcome: { kind: 'booked' } });
-    expect(text).toContain('[DRY RUN]');
-  });
-
-  it('surfaces the detail of an auth failure', () => {
-    const text = describeReport({
-      ...base,
-      outcome: { kind: 'unauthorized', detail: 'HTTP 401 token expired' },
-    });
-    expect(text).toContain('HTTP 401 token expired');
-  });
-
-  it('shows a negative offset when the request went out early', () => {
-    const text = describeReport({
-      ...base,
-      firstAttemptOffsetMs: -300,
-      outcome: { kind: 'booked' },
-    });
-    expect(text).toContain('-300ms');
-  });
-
-  it('times a waitlist place by when the request went out, not when the run woke', () => {
-    // The message used to quote the wake-up offset and call it "booked",
-    // which reads as 1ms even when the request went out a second later.
-    const line = describeReport({
-      ...base,
-      outcome: { kind: 'waitlisted', position: 5 },
-      firstAttemptOffsetMs: 1,
-      bookRequestOffsetMs: 910,
-    });
-
-    expect(line).toContain('910ms after booking opened');
-    expect(line).not.toContain('1ms after booking opened');
-  });
-
-  it('tells the user their waitlist spot in plain language, not jargon', () => {
-    const text = describeReport({ ...base, outcome: { kind: 'waitlisted', position: 7 } });
-    expect(text).toContain('number 7');
-    expect(text).toContain('waitlist');
-    expect(text).toContain('Bodypump');
-    // Spelled-out words instead of symbol shorthand.
-    expect(text).not.toContain('#');
-    expect(text).not.toContain('@');
-    // Timing is still there, but in plain language, not dev jargon.
-    expect(text).not.toContain('fired');
-    expect(text).not.toContain('T-0');
-    expect(text).not.toContain('requested');
-    expect(text).toContain('booked 42ms after booking opened');
-    // Date/time read as a sentence, not an ISO stamp: no year, dot for time.
-    expect(text).toContain('on Aug 18 at 09.00');
-    expect(text).not.toContain('2026');
-    expect(text).not.toContain('09:00');
+  it('gives a waitlist place its number', () => {
+    expect(line({ kind: 'waitlisted', position: 7 })).toBe(
+      `🕒 You're number 7 on the waitlist for Bodypump at tapiola on ${WHEN}`,
+    );
   });
 
   it('still names the class when Elixia reports no position for the waitlist', () => {
-    const text = describeReport({ ...base, outcome: { kind: 'waitlisted' } });
-    expect(text).toContain('waitlist');
-    expect(text).toContain('Bodypump');
-    expect(text).not.toMatch(/#undefined/);
-    expect(text).not.toContain('@');
-    expect(text).toContain('booked 42ms after booking opened');
-    expect(text).toContain('on Aug 18 at 09.00');
-    expect(text).not.toContain('2026');
+    expect(line({ kind: 'waitlisted' })).toBe(
+      `🕒 You're on the waitlist for Bodypump at tapiola on ${WHEN}`,
+    );
   });
 
-  it('describes an early waitlist request in plain language', () => {
-    const text = describeReport({
-      ...base,
-      firstAttemptOffsetMs: -300,
-      bookRequestOffsetMs: -300,
-      outcome: { kind: 'waitlisted', position: 2 },
-    });
-    expect(text).toContain('booked 300ms before booking opened');
-    expect(text).not.toContain('-300');
-    expect(text).not.toContain('requested');
+  it('explains an overlapping booking without repeating itself', () => {
+    // Elixia cannot tell "you already booked this" apart from "you hold a
+    // different class at the same time", so neither can this message. It used
+    // to print the reason twice — once in words, once as the raw detail.
+    expect(line({ kind: 'already-booked', detail: 'overlapping booking' })).toBe(
+      `ℹ️ Didn't book Bodypump at tapiola on ${WHEN} — you already have a booking at that time.`,
+    );
+  });
+
+  it('tells the user what to do about a rejected login, not what Elixia said', () => {
+    const text = line({ kind: 'unauthorized', detail: 'HTTP 401 token expired' });
+    expect(text).toContain('Re-link your Elixia account');
+    expect(text).not.toContain('HTTP 401');
+  });
+
+  it('says a class never opened without counting the tries at the reader', () => {
+    const text = line({ kind: 'too-early' }, { attempts: 12, bookRequestOffsetMs: null });
+    expect(text).toContain('never opened for booking');
+    expect(text).not.toContain('12');
+  });
+
+  it('keeps the provider\'s own error text out of a failure message', () => {
+    const text = line({ kind: 'error', detail: 'could not look up the class: fetch failed' });
+    expect(text).toContain('Something went wrong');
+    expect(text).not.toContain('fetch failed');
+  });
+
+  it('marks a dry run so it cannot be mistaken for a real booking', () => {
+    expect(line({ kind: 'booked' }, { dryRun: true })).toContain('[DRY RUN]');
+  });
+
+  it('puts what to do next on its own line, so it can be an email subject', () => {
+    // `subjectFor` takes the first line. A message whose advice is a second
+    // sentence on the same line makes a subject that is either too long or
+    // truncated mid-word; on its own line the headline stands alone and the
+    // email body still carries both.
+    const text = line({ kind: 'unauthorized', detail: 'HTTP 401' });
+    const [headline, advice] = text.split('\n');
+    expect(headline!.length).toBeLessThanOrEqual(120);
+    expect(headline).toContain("wasn't booked");
+    expect(advice).toContain('Re-link');
+  });
+
+  it.each([
+    ['booked', { kind: 'booked' } as AttemptOutcome],
+    ['waitlisted', { kind: 'waitlisted', position: 5 } as AttemptOutcome],
+    ['already-booked', { kind: 'already-booked', detail: 'overlap' } as AttemptOutcome],
+    ['unauthorized', { kind: 'unauthorized', detail: 'HTTP 401' } as AttemptOutcome],
+    ['too-early', { kind: 'too-early' } as AttemptOutcome],
+    ['rate-limited', { kind: 'rate-limited' } as AttemptOutcome],
+    ['error', { kind: 'error', detail: 'fetch failed' } as AttemptOutcome],
+  ])('says nothing technical in the %s message', (_name, outcome) => {
+    // The split this depends on: every millisecond, offset, attempt count and
+    // raw provider string belongs on the Activity page, not in a message
+    // someone reads on their phone. One escape and the whole notification
+    // reads as machine output again.
+    const text = line(outcome);
+    expect(text).not.toMatch(/\d+\s?ms\b/);
+    expect(text).not.toMatch(/T-0/);
+    expect(text).not.toMatch(/HTTP/);
+    expect(text).not.toMatch(/\d{4}-\d{2}-\d{2}/); // an ISO date
+    expect(text).not.toMatch(/@/);
+    expect(text).not.toMatch(/attempts?\b/);
   });
 });
