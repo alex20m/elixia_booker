@@ -9,8 +9,9 @@ description: >-
   whenever someone reports that the same operation was fast for one person and
   slow for another. Covers why the compounding is invisible in logs and metrics,
   which parts of the run may be throttled and which must never be, isolating one
-  item's failure from the rest, and the fake-clock trap that makes the test for
-  it pass no matter what the code does.
+  item's failure from the rest, how retry and warm-up pacing on one item's own
+  critical path re-creates the same spread once the queue is gone, and the
+  fake-clock trap that makes the test for it pass no matter what the code does.
 ---
 
 # Fair batches: everyone races, nobody queues
@@ -227,6 +228,98 @@ You cannot show absence by running once. Reproduce first, then show it gone:
    bugs and one test does not necessarily catch both. A fix that makes a flaky
    test *unable to fail* looks exactly like a fix that worked.
 
+## After the queue: the spread that comes back on one item's own path
+
+Splitting the phases gets every item to the instant together. It does not get
+them *through* it together, and the user-visible symptom is identical — same
+operation, wildly different outcomes, nothing errored. So when the report
+persists after the batch is fair, stop reading the loop and read one item's
+path from the instant to its request. Two things on it re-create the spread.
+
+### Polling is not backing off
+
+Exponential backoff with jitter is the reflex for any retry, and for one of the
+two waits on this path it is actively wrong.
+
+- **The other side pushed back** — a rate limit, a transport error. It is
+  asking to be asked less often, so the delay should grow, and a
+  server-supplied retry hint outranks your own schedule.
+- **The thing does not exist yet** — the listing is unpublished, the window has
+  not flipped, the record has not propagated. Nobody is pushing back. The only
+  quantity that matters is how soon after it appears you notice.
+
+Backing off from the second is self-defeating in three compounding ways, and
+the third is the one that produces the report:
+
+1. **Lateness grows without bound**, up to the backoff cap. The longer the
+   thing takes to appear, the less often you are looking for it.
+2. **You are slowest exactly when it is most contested.** Something that takes
+   seconds to appear is something many clients are waiting on.
+3. **Two clients diverge.** Each jitters independently and the growth is
+   multiplicative, so within a handful of attempts their probe schedules are
+   unrelated. The gap between the luckiest and the unluckiest is roughly the
+   cap itself — and that gap, not the average, is what someone notices when
+   their colleague's request landed and theirs did not.
+
+So give the two waits separate caps: keep the exponential band for push-back,
+and cap the "not there yet" band tight. Do not simply lower the one shared cap.
+That turns polite retrying into hammering the moment something is genuinely
+overloaded, which is the failure the backoff existed to prevent — and it is the
+change most likely to be made by someone tuning for politeness who has not read
+this.
+
+Pick the tight cap by naming what it buys and what it costs, because it is
+directly both:
+
+- it **is** the worst-case lateness once the thing appears;
+- it **is** the worst-case spread between two clients on the same instant;
+- `budget / cap` **is** the worst-case request count, paid only in the run
+  where the thing never appears at all. In a normal run it shows up within a
+  probe or two and the volume is unchanged.
+
+Write the chosen number down with that arithmetic beside it. Without it the
+value reads as arbitrary, and the next person lowers the frequency for
+politeness without knowing they are also raising the spread.
+
+### The connection you prepared with is already gone
+
+Preparing early is the whole point of the split — but a run that prepares and
+then waits tens of seconds for its instant is idle far longer than any HTTP
+keep-alive. The socket is closed by the time it matters, so the first request
+at the instant silently pays for a fresh TCP and TLS handshake: tens to
+hundreds of milliseconds, varying per client and per run. Unpredictable
+per-item cost on the hot path is exactly what the fair batch exists to remove.
+
+Make one last **real** request shortly before the instant. Real, not a
+synthetic ping: a request to someone else's service whose only purpose is
+warming is rude, and is the first thing deleted by whoever reads it later.
+Reuse the preparation step you already have — retry the lookup or resolution
+that came back empty earlier. It warms the connection as a side effect, and it
+may simply succeed, which removes a whole round trip from the critical path.
+
+Three things this has to get right:
+
+- **Never await it.** A probe that stalls on a dead connection would delay the
+  one request it exists to speed up, turning the optimisation into the bug.
+  Fire it, let the remaining wait run, and use its answer only if it arrived.
+  Attach the rejection handler at the call site, or an unhandled rejection
+  takes the process down.
+- **First writer wins.** Once a probe and the race can both produce the same
+  value, a straggler landing mid-request must not swap it out underneath.
+  Guard the assignment, and have the race read the value once into a local
+  rather than re-reading a field that can change beneath it.
+- **Place it close, but not too close.** Far enough out that a probe on a slow
+  connection can still land before the instant; near enough that the connection
+  it opens is still alive when the real request needs it.
+
+Both of these are testable with no network and no real clock. For the pacing,
+drive the retry loop with a jitter source pinned to its maximum and assert the
+*sequence* of waits, so the failure prints the grid rather than a boolean — and
+assert separately that a genuine push-back still gets the exponential band, or
+the "cap everything" mutation ships unnoticed. For the probe, assert the order
+of sleeps and lookups, and assert that a probe which never settles still leaves
+the request going out at offset ~0.
+
 ## What to check before calling it fixed
 
 - A test that fails on the old code with the *lateness* number, not just a
@@ -236,3 +329,8 @@ You cannot show absence by running once. Reproduce first, then show it gone:
 - Per-item state actually per-item — mutate it back to shared and watch a test
   go red, since nothing else will tell you.
 - The limiter's comment says why the hot path is deliberately ungated.
+- "Not there yet" and "please slow down" have separate delay caps, with a test
+  pinning each band, so capping both cannot ship as a politeness fix.
+- The tight cap is written down with what it costs in request volume.
+- A pre-instant probe, if there is one, is unawaited, its rejection handled,
+  and proven not to delay the request when it never settles.
