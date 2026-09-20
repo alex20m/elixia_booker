@@ -67,8 +67,26 @@ export interface BookingReport {
   outcome: AttemptOutcome;
   attempts: number;
   exhausted: boolean;
-  /** How far from T-0 the first request went out. Negative is early. */
+  /**
+   * How far from T-0 the run *woke up and began work*. Negative is early.
+   *
+   * Not when anything was asked of Elixia. It is stamped at the top of the
+   * first attempt, before the class is looked up, so it measures the sleep's
+   * accuracy and nothing else. Two runs that both wake at +1ms can still
+   * reach the booking endpoint a second apart — see `bookRequestOffsetMs`,
+   * which is the number that decides who gets the place.
+   */
   firstAttemptOffsetMs: number | null;
+  /**
+   * How far from T-0 the booking request that produced this outcome was
+   * issued. Negative is early, null when no request was ever sent.
+   *
+   * This is the one that matters. Everything between waking and here — the
+   * schedule fetch that resolves the class id, its parse, any retry rounds
+   * spent waiting for the class to be listed — is time other people are
+   * using to book, and none of it shows up in `firstAttemptOffsetMs`.
+   */
+  bookRequestOffsetMs: number | null;
   dryRun: boolean;
   /**
    * How long the class actually runs, read off the same schedule match that
@@ -196,6 +214,9 @@ export async function executeBooking(
   }
 
   let firstAttemptOffsetMs: number | null = null;
+  // Overwritten by each request, so it ends up holding the one whose outcome
+  // was final — the request that actually won or lost the place.
+  let bookRequestOffsetMs: number | null = null;
 
   const runAttempt = async (signal: AbortSignal): Promise<AttemptOutcome> => {
     if (firstAttemptOffsetMs === null) {
@@ -224,8 +245,13 @@ export async function executeBooking(
       }
     }
 
+    // Stamped here, not after the call returns: the question is when the
+    // request went out relative to everyone else's, not how long Elixia took
+    // to answer it.
+    bookRequestOffsetMs = now() - planned.releaseEpochMs;
+
     if (deps.dryRun) {
-      logger.log('attempt.dry-run', { classId: id });
+      logger.log('attempt.dry-run', { classId: id, bookRequestOffsetMs });
       return { kind: 'booked', bookingId: 'DRY-RUN' };
     }
 
@@ -262,6 +288,7 @@ export async function executeBooking(
     attempts: result.attempts,
     exhausted: result.exhausted,
     firstAttemptOffsetMs,
+    bookRequestOffsetMs,
   });
 
   return {
@@ -270,6 +297,7 @@ export async function executeBooking(
     attempts: result.attempts,
     exhausted: result.exhausted,
     firstAttemptOffsetMs,
+    bookRequestOffsetMs,
     dryRun: deps.dryRun,
     ...(durationMin !== undefined ? { durationMin } : {}),
   };
@@ -300,20 +328,33 @@ function friendlyDate(classDate: string): string {
 export function describeReport(report: BookingReport): string {
   const { planned, outcome } = report;
   const what = `${planned.desired.className} @ ${planned.desired.center}, ${planned.classDate} ${planned.desired.startTime}`;
+  const signed = (ms: number): string => `${ms >= 0 ? '+' : ''}${ms}ms`;
+  // Both numbers, because the gap between them is the diagnosis. "woke" is
+  // how well the sleep hit T-0; "sent" is when Elixia was actually asked, and
+  // the difference is the schedule fetch and any rounds spent waiting for the
+  // class to be listed.
   const timing =
     report.firstAttemptOffsetMs === null
       ? ''
-      : ` (fired ${report.firstAttemptOffsetMs >= 0 ? '+' : ''}${report.firstAttemptOffsetMs}ms from T-0)`;
+      : report.bookRequestOffsetMs === null
+        ? ` (woke ${signed(report.firstAttemptOffsetMs)} from T-0)`
+        : ` (woke ${signed(report.firstAttemptOffsetMs)}, sent ${signed(report.bookRequestOffsetMs)} from T-0)`;
   // Same facts as `what`/`timing` above, but spelled out in words instead of
   // "@"/sign shorthand and ISO-ish date/time — for the message a user
   // actually reads, not the debug log.
   const friendlyWhat = `${planned.desired.className} at ${planned.desired.center} on ${friendlyDate(planned.classDate)} at ${planned.desired.startTime.replace(':', '.')}`;
+  // The *request*, deliberately, not the wake-up this used to quote. Saying
+  // "booked 1ms after booking opened" about a run that woke at 1ms and then
+  // spent a second fetching the schedule is not a rounding error — it hides
+  // exactly the delay that decides a waitlist place, and it makes two people
+  // seconds apart read as identical.
+  const sentOffsetMs = report.bookRequestOffsetMs;
   const friendlyTiming =
-    report.firstAttemptOffsetMs === null
+    sentOffsetMs === null
       ? ''
-      : report.firstAttemptOffsetMs >= 0
-        ? ` (booked ${report.firstAttemptOffsetMs}ms after booking opened)`
-        : ` (booked ${Math.abs(report.firstAttemptOffsetMs)}ms before booking opened)`;
+      : sentOffsetMs >= 0
+        ? ` (booked ${sentOffsetMs}ms after booking opened)`
+        : ` (booked ${Math.abs(sentOffsetMs)}ms before booking opened)`;
   const prefix = report.dryRun ? '[DRY RUN] ' : '';
 
   switch (outcome.kind) {

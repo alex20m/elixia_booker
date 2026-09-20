@@ -672,9 +672,36 @@ describe('booking history', () => {
         detail: 'waitlist position 3',
         attempts: 2,
         firstAttemptOffsetMs: -40,
+        bookRequestOffsetMs: null,
         dryRun: true,
       },
     ]);
+  });
+
+  it('round-trips when the booking request went out, not just when the run woke', async () => {
+    // The two are different numbers and only the second decides a waitlist
+    // place, so a row that drops it cannot answer "why was mine slower".
+    const alices = await addClass(ALICE, 'Bodypump');
+    await repo.appendHistory(ALICE, {
+      ...attempt(Date.UTC(2026, 3, 1, 5, 0), alices.id, 'waitlisted'),
+      firstAttemptOffsetMs: 1,
+      bookRequestOffsetMs: 910,
+    });
+
+    const [row] = await repo.listHistory(ALICE);
+    expect(row?.firstAttemptOffsetMs).toBe(1);
+    expect(row?.bookRequestOffsetMs).toBe(910);
+  });
+
+  it('records no booking request for a class that never listed', async () => {
+    // Distinct from "this row predates the column": nothing was ever sent.
+    const alices = await addClass(ALICE, 'Bodypump');
+    await repo.appendHistory(ALICE, {
+      ...attempt(Date.UTC(2026, 3, 1, 5, 0), alices.id, 'too-early'),
+      bookRequestOffsetMs: null,
+    });
+
+    expect((await repo.listHistory(ALICE))[0]?.bookRequestOffsetMs).toBeNull();
   });
 
   it('round-trips the centre a class was booked at, for the calendar feed', async () => {

@@ -381,6 +381,74 @@ describe('executeBooking', () => {
     expect(report.outcome.kind).toBe('unauthorized');
   });
 
+  it('records when the booking request went out, not just when the run woke up', async () => {
+    // These are different numbers and the gap between them is the whole race.
+    // `firstAttemptOffsetMs` is stamped before the class is even looked up, so
+    // a run that woke punctually and then spent a second fetching the
+    // schedule reports the same "1ms" as one that booked instantly. Two people
+    // on the same class can both read 1ms and still be a second apart.
+    const clock = harness(RELEASE - 60_000);
+    const built = {
+      book: vi.fn(async (): Promise<AttemptOutcome> => ({ kind: 'waitlisted', position: 5 })),
+      resolveClassId: vi.fn(async () => {
+        clock.advance(900); // the schedule fetch and parse, on the critical path
+        return { classId: 'class-77', durationMin: 55 };
+      }),
+      tokens,
+      logger: new Logger(clock.now),
+      config,
+      dryRun: false,
+      now: clock.now,
+      sleep: clock.sleep,
+      random: () => 0.5,
+    };
+
+    // The class only lists at the instant itself, so both the early resolve
+    // and the pre-flight probe come back empty and it is the resolve at T-0
+    // that costs the 900ms.
+    const unlisted = async (): Promise<ResolvedClass> => {
+      throw new ClassNotListedError('not listed yet');
+    };
+    built.resolveClassId.mockImplementationOnce(unlisted).mockImplementationOnce(unlisted);
+
+    const report = await executeBooking(planned, built);
+
+    expect(report.firstAttemptOffsetMs).toBe(0);
+    expect(report.bookRequestOffsetMs).toBe(900);
+  });
+
+  it('counts the request that won, not the first one attempted', async () => {
+    const outcomes: AttemptOutcome[] = [
+      { kind: 'too-early' },
+      { kind: 'waitlisted', position: 5 },
+    ];
+    const { clock, built } = deps({
+      book: vi.fn(async () => {
+        clock.advance(100);
+        return outcomes.shift()!;
+      }),
+    });
+
+    const report = await executeBooking(planned, built);
+
+    // First request at +0, backoff of 188ms (250 capped, half-jittered at
+    // random()=0.5), second request after that.
+    expect(report.firstAttemptOffsetMs).toBe(0);
+    expect(report.bookRequestOffsetMs).toBe(288);
+  });
+
+  it('reports no booking request when the class never resolved', async () => {
+    const { built } = deps({
+      resolveClassId: vi.fn(async () => {
+        throw new ClassNotListedError('not listed yet');
+      }),
+    });
+
+    const report = await executeBooking(planned, built);
+
+    expect(report.bookRequestOffsetMs).toBeNull();
+  });
+
   it('logs every attempt with an offset from T-0', async () => {
     const outcomes: AttemptOutcome[] = [{ kind: 'too-early' }, { kind: 'booked' }];
     const { built } = deps({ book: vi.fn(async () => outcomes.shift()!) });
@@ -486,6 +554,7 @@ describe('describeReport', () => {
     attempts: 1,
     exhausted: false,
     firstAttemptOffsetMs: 42,
+    bookRequestOffsetMs: 42,
     dryRun: false,
   };
 
@@ -516,6 +585,20 @@ describe('describeReport', () => {
       outcome: { kind: 'booked' },
     });
     expect(text).toContain('-300ms');
+  });
+
+  it('times a waitlist place by when the request went out, not when the run woke', () => {
+    // The message used to quote the wake-up offset and call it "booked",
+    // which reads as 1ms even when the request went out a second later.
+    const line = describeReport({
+      ...base,
+      outcome: { kind: 'waitlisted', position: 5 },
+      firstAttemptOffsetMs: 1,
+      bookRequestOffsetMs: 910,
+    });
+
+    expect(line).toContain('910ms after booking opened');
+    expect(line).not.toContain('1ms after booking opened');
   });
 
   it('tells the user their waitlist spot in plain language, not jargon', () => {
@@ -552,6 +635,7 @@ describe('describeReport', () => {
     const text = describeReport({
       ...base,
       firstAttemptOffsetMs: -300,
+      bookRequestOffsetMs: -300,
       outcome: { kind: 'waitlisted', position: 2 },
     });
     expect(text).toContain('booked 300ms before booking opened');

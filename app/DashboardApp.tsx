@@ -458,10 +458,18 @@ function ActivityTab({ view }: { view: DashboardView }) {
         <div className="list" id="history-list">
           {view.history.map((h, i) => {
             const [cls, label] = OUTCOME_LABELS[h.outcome] ?? ['pill-err', h.outcome];
+            // Two numbers, because one of them alone is misleading: "woke"
+            // is how well the sleep hit T-0, "sent" is when Elixia was
+            // actually asked, and the gap is the schedule fetch plus any
+            // rounds spent waiting for the class to be listed. Older rows
+            // carry only the first.
+            const signed = (ms: number) => `${ms >= 0 ? '+' : ''}${ms}ms`;
             const timing =
               h.firstAttemptOffsetMs === null
                 ? ''
-                : ` · fired ${h.firstAttemptOffsetMs >= 0 ? '+' : ''}${h.firstAttemptOffsetMs}ms from T-0`;
+                : h.bookRequestOffsetMs === null || h.bookRequestOffsetMs === undefined
+                  ? ` · woke ${signed(h.firstAttemptOffsetMs)} from T-0`
+                  : ` · woke ${signed(h.firstAttemptOffsetMs)}, sent ${signed(h.bookRequestOffsetMs)} from T-0`;
             return (
               <div className="row" key={`${h.subscriptionId ?? 'gone'}-${h.atMs}-${i}`}>
                 <div className="row-main">

@@ -511,7 +511,14 @@ export interface BookingHistoryEntry {
   outcome: AttemptOutcome['kind'];
   detail?: string;
   attempts: number;
+  /** How far from T-0 the run woke up. Says nothing about when it asked. */
   firstAttemptOffsetMs: number | null;
+  /**
+   * How far from T-0 the booking request went out — the number that decides
+   * a waitlist place. Absent on rows written before this field existed, and
+   * null when the class never listed so no request was ever sent.
+   */
+  bookRequestOffsetMs?: number | null;
   dryRun: boolean;
   /**
    * The centre this class was at, for the calendar feed's event location.
