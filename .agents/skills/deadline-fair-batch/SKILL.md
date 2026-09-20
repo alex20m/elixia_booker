@@ -306,6 +306,27 @@ overloaded, which is the failure the backoff existed to prevent — and it is th
 change most likely to be made by someone tuning for politeness who has not read
 this.
 
+**Find the signal before you pace it, because it moves.** The obvious place to
+look is the lookup that resolves what you are waiting for — and that is the
+wrong place as soon as the lookup starts succeeding early. If the identifier
+becomes readable before the instant (published ahead, cached, predictable),
+the lookup no longer fails, and the "not yet" rejection reappears one step
+later: on the *action* itself, the request you fire at the instant. It arrives
+as whatever generic failure that endpoint produces — very often a plain 4xx,
+because APIs rarely publish a "too early" code — which is already sitting in
+the exponential band under a name like `error`. Pacing only the outcome named
+for earliness then fixes nothing, and looks like it worked.
+
+So split on what the failure *means*, not on the one name you first noticed it
+under. A rejection from the server before the resource is live is "not there
+yet" wherever it surfaces. A rate limit, a 5xx, and a request that never
+reached the server are not, and must keep backing off — a limiter honouring
+`Retry-After` and a struggling server left alone are the reasons the backoff
+exists. Where the API's own error taxonomy has no code for earliness, say so in
+the comment and treat the ambiguous class as early: the bet is asymmetric,
+since guessing wrong costs a bounded number of extra requests and the same
+eventual failure, while guessing the other way costs the deadline.
+
 Pick the tight cap by naming what it buys and what it costs, because it is
 directly both:
 
@@ -371,6 +392,8 @@ the request going out at offset ~0.
   and anything that renders it says which one it means.
 - "Not there yet" and "please slow down" have separate delay caps, with a test
   pinning each band, so capping both cannot ship as a politeness fix.
+- The "not there yet" band covers the failure as it arrives *now* — including
+  from the action, not only from the lookup, once the lookup resolves early.
 - The tight cap is written down with what it costs in request volume.
 - A pre-instant probe, if there is one, is unawaited, its rejection handled,
   and proven not to delay the request when it never settles.

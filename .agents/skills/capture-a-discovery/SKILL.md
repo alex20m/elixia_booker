@@ -159,3 +159,17 @@ specifically:
 - **Name the wrong path you took**, briefly, when the wrong path is the
   attractive one. "Pinning v7 from memory typechecks as an unknown property" is
   worth a sentence, because that is the mistake the reader is about to make.
+- **Say what your sample could not have distinguished.** A fact read off one
+  account, one tenant, one plan or one environment records whatever was true
+  *there* — and where two different rules would have produced the same
+  observation, a single sample cannot tell you which one you saw. Two
+  thresholds that coincide on the account you captured with (a plan limit that
+  happens to equal the system default, a publication horizon that happens to
+  equal that tier's entitlement) read as one boundary, and the write-up
+  confidently names the wrong cause. It is a nasty one because nothing later
+  looks like evidence: the code, the docs and every subsequent capture on the
+  same account all agree, and the mistake only surfaces when someone on a
+  different plan says "but I can see more than that". So when a finding rests
+  on a threshold, name the account or plan it came from, and say which rival
+  explanation the sample could not rule out. One line is enough, and it turns
+  a future contradiction from a mystery into a confirmation.
