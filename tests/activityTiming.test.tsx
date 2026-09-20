@@ -36,6 +36,7 @@ const attempt = (over: Partial<BookingHistoryEntry> = {}): BookingHistoryEntry =
   startTime: '09:00',
   outcome: 'waitlisted',
   attempts: 1,
+  firstAttemptOutcome: null,
   firstAttemptOffsetMs: 1,
   bookRequestOffsetMs: 910,
   dryRun: false,
@@ -178,6 +179,22 @@ describe('the Activity tab', () => {
     expect(timing).toContain('no request sent');
     expect(timing).not.toContain('request time not recorded');
     expect(timing).not.toMatch(/sent \+\d/);
+  });
+
+  it('says how the first try was refused, so the tries count means something', async () => {
+    // Without it, "4 tries" is a number with no cause attached — and the two
+    // causes want opposite responses: a 4xx is the window not quite open, a
+    // rejected session is a broken account.
+    const { timing } = await renderRow(
+      attempt({ attempts: 4, firstAttemptOutcome: 'error 400' }),
+    );
+    expect(timing).toContain('first: error 400');
+  });
+
+  it('says nothing about the first try when it was also the last', async () => {
+    const { timing } = await renderRow(attempt({ attempts: 1, firstAttemptOutcome: null }));
+    expect(timing).toMatch(/\b1 try\b/);
+    expect(timing).not.toContain('first:');
   });
 
   it('keeps the technical timings off the line a person reads first', async () => {

@@ -6,14 +6,18 @@
  * thing standing between the release instant and the POST is one network hop.
  * Any work left until after the sleep is time spent losing the race.
  *
- * "Early" is two moments, not one. A class is absent from the schedule until
- * its window opens (docs/api.md §4), so the resolve at the top of the run
- * usually finds nothing; a second, unawaited probe fires a moment before T-0,
- * where it can both catch a window that opened during the wait and warm a
- * connection that has long since been closed for idleness. Whatever is still
- * unresolved when the race starts is resolved inside it — and that probing is
- * paced tightly on purpose, because the gap between two probes is the lateness
- * everyone pays once the class does appear. See `listingPollMaxDelayMs`.
+ * "Early" is three moments, and the first one usually wins. Elixia lists a
+ * class about a week before a 7-day member may book it (docs/api.md §4), so
+ * the resolve at the top of the run is expected to *succeed* and leave T-0
+ * holding nothing but the POST. It is retried when it fails for a reason a
+ * retry could fix; an unawaited probe 1.5s out catches a listing that only
+ * appeared during the wait and reopens a connection long since closed for
+ * idleness; and anything still unresolved is resolved inside the race.
+ *
+ * Because the id is usually in hand, "the window has not opened yet" arrives
+ * as a *rejected booking* rather than a lookup that found nothing — and
+ * Elixia publishes no code for it. See `isNotThereYet` in lib/retry.ts for
+ * how that is paced, and why the pacing is not the ordinary backoff.
  */
 
 import { retryWithBackoff, defaultSleep, type RetryResult } from './retry';
@@ -37,10 +41,12 @@ export interface BookingDeps {
   /**
    * Resolves the desired class to Elixia's own id, by fetching the schedule.
    *
-   * Expected to fail with `ClassNotListedError` until the booking window
-   * opens: Elixia does not list a class at all before then (docs/api.md §4).
-   * That is why this is attempted twice — once early, once at T-0 — rather
-   * than treated as a fatal error the first time.
+   * Throws `ClassNotListedError` when the class is not on the published
+   * schedule. For most memberships that is unusual rather than expected —
+   * publication runs ~14 days ahead of a 7-day booking window (docs/api.md
+   * §4) — but it is still not fatal on the first try: a class right at the
+   * edge of the published range appears only as the release nears, so this
+   * is attempted early, again before the race, and once more inside it.
    */
   resolveClassId: (planned: PlannedBooking) => Promise<ResolvedClass>;
   tokens: StoredTokens;
@@ -87,6 +93,19 @@ export interface BookingReport {
    * using to book, and none of it shows up in `firstAttemptOffsetMs`.
    */
   bookRequestOffsetMs: number | null;
+  /**
+   * How the first attempt was refused, when the run went on to try again —
+   * `"too-early"`, `"error 400"`, `"unauthorized 403"` and so on. Null when
+   * the first attempt was also the last, since a row repeating its own
+   * outcome explains nothing.
+   *
+   * "Three tries" says something went wrong three times and nothing about
+   * what, which is the difference between a window that had not quite opened
+   * and Elixia refusing the session outright. Those want opposite responses,
+   * and without this the only way to tell them apart is to be watching the
+   * platform's logs at the moment it happens.
+   */
+  firstAttemptOutcome: string | null;
   dryRun: boolean;
   /**
    * How long the class actually runs, read off the same schedule match that
@@ -94,6 +113,16 @@ export interface BookingReport {
    * with a duration to record was ever found.
    */
   durationMin?: number;
+}
+
+/**
+ * A refusal in a few characters: the kind, plus the HTTP status where there
+ * was one. Short because it is read on one line beside the timings.
+ */
+function attemptLabel(outcome: AttemptOutcome): string {
+  return 'status' in outcome && outcome.status !== undefined
+    ? `${outcome.kind} ${outcome.status}`
+    : outcome.kind;
 }
 
 /** Outcomes that mean the slot is secured; everything else is a miss. */
@@ -126,13 +155,11 @@ export async function executeBooking(
 
   // --- Everything below the sleep must be as thin as possible. -------------
   //
-  // Resolving early is an optimisation, not a precondition. A class outside
-  // its booking window is absent from the schedule entirely (docs/api.md §4),
-  // so this attempt legitimately fails whenever the window has not opened yet
-  // — and whether it has depends on a release granularity Elixia does not
-  // publish. Failing softly here and resolving again after the sleep keeps the
-  // critical path to a single request in the common case, without depending on
-  // an answer nobody has.
+  // Resolving early is still an optimisation rather than a precondition, even
+  // though it is now expected to succeed: a class at the very edge of the
+  // published range, or a centre that cannot be read this minute, has to fall
+  // through to the race rather than fail the booking outright. So every
+  // resolve below fails softly, and the race carries the last resort.
   let classId: string | null = null;
   let durationMin: number | undefined;
 
@@ -239,18 +266,21 @@ export async function executeBooking(
   // Overwritten by each request, so it ends up holding the one whose outcome
   // was final — the request that actually won or lost the place.
   let bookRequestOffsetMs: number | null = null;
+  let firstAttemptOutcome: string | null = null;
 
   const runAttempt = async (signal: AbortSignal): Promise<AttemptOutcome> => {
     if (firstAttemptOffsetMs === null) {
       firstAttemptOffsetMs = now() - planned.releaseEpochMs;
     }
 
-    // The class appears on the schedule the moment booking opens, so *not being
-    // listed* is "not open yet" rather than a failure — retryable, with the
-    // budget bounding how long we keep looking. Any other lookup failure (an
-    // unknown centre, a changed page, a dead connection) is reported as the
-    // error it is: retrying those for 30s and then blaming the timing would
-    // send someone hunting a race that never happened.
+    // A class that is still not listed here is treated as "not open yet" —
+    // retryable, with the budget bounding how long we keep looking. Any other
+    // lookup failure (an unknown centre, a changed page, a dead connection) is
+    // reported as the error it is: retrying those for 30s and then blaming the
+    // timing would send someone hunting a race that never happened. Note the
+    // error carries no status, which is what keeps it on the slow backoff band
+    // rather than the fast one — a dead connection is not a window about to
+    // open.
     // Read once: the preflight probe may still be in flight and can fill
     // `classId` mid-attempt, and an attempt that resolved its own id must
     // book *that* id rather than re-reading a field that changed underneath.
@@ -299,7 +329,10 @@ export async function executeBooking(
     now,
     sleep,
     ...(deps.random ? { random: deps.random } : {}),
-    onAttempt: (attempt, outcome) => logger.log('attempt.result', { attempt, ...outcome }),
+    onAttempt: (attempt, outcome) => {
+      if (attempt === 1) firstAttemptOutcome = attemptLabel(outcome);
+      logger.log('attempt.result', { attempt, ...outcome });
+    },
     onWait: (attempt, delayMs) => logger.log('attempt.backoff', { attempt, delayMs }),
   });
 
@@ -312,6 +345,7 @@ export async function executeBooking(
     exhausted: result.exhausted,
     firstAttemptOffsetMs,
     bookRequestOffsetMs,
+    firstAttemptOutcome,
   });
 
   return {
@@ -321,6 +355,8 @@ export async function executeBooking(
     exhausted: result.exhausted,
     firstAttemptOffsetMs,
     bookRequestOffsetMs,
+    // Only when it explains something the final outcome does not.
+    firstAttemptOutcome: result.attempts > 1 ? firstAttemptOutcome : null,
     dryRun: deps.dryRun,
     ...(durationMin !== undefined ? { durationMin } : {}),
   };

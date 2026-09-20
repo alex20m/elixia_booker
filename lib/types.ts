@@ -542,6 +542,12 @@ export interface BookingHistoryEntry {
    * null when the class never listed so no request was ever sent.
    */
   bookRequestOffsetMs?: number | null;
+  /**
+   * How the first attempt was refused, when the run retried — e.g.
+   * `"error 400"`. Null when it went through first time, absent on rows
+   * written before this field existed.
+   */
+  firstAttemptOutcome?: string | null;
   dryRun: boolean;
   /**
    * The centre this class was at, for the calendar feed's event location.

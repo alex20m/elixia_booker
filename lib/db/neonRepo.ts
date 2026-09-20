@@ -122,6 +122,12 @@ const toHistoryEntry = (row: SqlRow): BookingHistoryEntry => ({
         bookRequestOffsetMs:
           row.book_request_offset_ms === null ? null : num(row.book_request_offset_ms),
       }),
+  ...(row.first_attempt_outcome === undefined
+    ? {}
+    : {
+        firstAttemptOutcome:
+          row.first_attempt_outcome === null ? null : str(row.first_attempt_outcome),
+      }),
   dryRun: Boolean(row.dry_run),
   ...(row.center ? { center: str(row.center) } : {}),
   ...(row.cancelled_at ? { cancelledAtMs: toMs(row.cancelled_at) } : {}),
@@ -442,10 +448,10 @@ export function createNeonRepo(sql: Sql): Repo {
         `insert into public.booking_history (
            user_id, subscription_id, class_name, class_date, start_time,
            outcome, detail, attempts, first_attempt_offset_ms, dry_run, created_at, center,
-           duration_min, book_request_offset_ms
+           duration_min, book_request_offset_ms, first_attempt_outcome
          )
          values ($1, $2::uuid, $3, $4::date, $5, $6, $7, $8, $9, $10, $11::timestamptz, $12, $13,
-                 $14)`,
+                 $14, $15)`,
         [
           userId,
           entry.subscriptionId,
@@ -461,6 +467,7 @@ export function createNeonRepo(sql: Sql): Repo {
           entry.center ?? null,
           entry.durationMin ?? null,
           entry.bookRequestOffsetMs ?? null,
+          entry.firstAttemptOutcome ?? null,
         ],
       );
     },
@@ -469,7 +476,8 @@ export function createNeonRepo(sql: Sql): Repo {
       const rows = await sql.query(
         `select subscription_id, class_name, to_char(class_date, 'YYYY-MM-DD') as class_date,
                 start_time, outcome, detail, attempts, first_attempt_offset_ms, dry_run, created_at,
-                center, cancelled_at, duration_min, book_request_offset_ms
+                center, cancelled_at, duration_min, book_request_offset_ms,
+                first_attempt_outcome
          from public.booking_history
          where user_id = $1
          order by created_at desc

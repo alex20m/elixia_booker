@@ -491,6 +491,42 @@ describe('executeBooking', () => {
     expect(report.outcome.kind).toBe('unauthorized');
   });
 
+  it('records how the first attempt was refused, not only that it was retried', async () => {
+    // "4 tries" says something went wrong four times and nothing about what.
+    // The status on the first refusal is the whole diagnosis: a 4xx is the
+    // window not open yet, a 401 or 403 would be Elixia rejecting the session
+    // outright — and those want completely different fixes.
+    const outcomes: AttemptOutcome[] = [
+      { kind: 'error', detail: 'liian aikaisin', status: 400 },
+      { kind: 'waitlisted', position: 5 },
+    ];
+    const { built } = deps({ book: vi.fn(async () => outcomes.shift()!) });
+
+    const report = await executeBooking(planned, built);
+
+    expect(report.attempts).toBe(2);
+    expect(report.firstAttemptOutcome).toBe('error 400');
+  });
+
+  it('names a refusal that carried no status at all', async () => {
+    const outcomes: AttemptOutcome[] = [{ kind: 'too-early' }, { kind: 'booked' }];
+    const { built } = deps({ book: vi.fn(async () => outcomes.shift()!) });
+
+    expect((await executeBooking(planned, built)).firstAttemptOutcome).toBe('too-early');
+  });
+
+  it('leaves the first attempt unrecorded when it was also the last', async () => {
+    // Nothing to explain about a booking that went through first time, and a
+    // row repeating its own outcome is noise on the one line meant to carry
+    // the diagnosis.
+    const { built } = deps();
+
+    const report = await executeBooking(planned, built);
+
+    expect(report.attempts).toBe(1);
+    expect(report.firstAttemptOutcome).toBeNull();
+  });
+
   it('records when the booking request went out, not just when the run woke up', async () => {
     // These are different numbers and the gap between them is the whole race.
     // `firstAttemptOffsetMs` is stamped before the class is even looked up, so
@@ -665,6 +701,7 @@ describe('describeReport', () => {
     exhausted: false,
     firstAttemptOffsetMs: 42,
     bookRequestOffsetMs: 910,
+    firstAttemptOutcome: null,
     dryRun: false,
   };
 

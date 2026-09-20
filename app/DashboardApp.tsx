@@ -488,9 +488,15 @@ function ActivityTab({ view }: { view: DashboardView }) {
             // between a slow lookup and rounds spent waiting for the class to
             // be listed, which is the first fork in diagnosing a late booking.
             const tries = `${h.attempts} ${h.attempts === 1 ? 'try' : 'tries'}`;
+            // What refused the first try, when there was more than one. The
+            // count alone says something went wrong N times and nothing about
+            // what — and a 4xx from the booking call (the window not quite
+            // open) and a rejected session want opposite responses.
+            const refusal = h.firstAttemptOutcome ? [`first: ${h.firstAttemptOutcome}`] : [];
             const timing = [
               ...timingParts(h.firstAttemptOffsetMs, h.bookRequestOffsetMs),
               tries,
+              ...refusal,
             ].join(' · ');
             return (
               <div className="row" key={`${h.subscriptionId ?? 'gone'}-${h.atMs}-${i}`}>
