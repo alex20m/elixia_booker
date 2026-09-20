@@ -151,16 +151,39 @@ export async function executeBooking(
     return resolved.classId;
   };
 
-  try {
-    void adopt(await deps.resolveClassId(planned), 'before-sleep');
-  } catch (err) {
-    logger.log('class.unresolved', {
-      when: 'before-sleep',
-      reason: (err as Error).message,
-    });
-  }
-
   const fireAt = planned.releaseEpochMs - config.leadMs;
+  const preflightAt = fireAt - config.preflightMs;
+
+  // Retried, because for most memberships this attempt is expected to
+  // *succeed*: Elixia lists a class about a week before a 7-day member may
+  // book it (docs/api.md §4), so the id is usually there for the taking long
+  // before the race. That makes a dropped connection here expensive — it
+  // costs the whole point of resolving early — and worth another go.
+  //
+  // Only a failure a retry could fix. A class that is merely not listed yet
+  // is left alone: no amount of asking again makes a booking window open
+  // sooner, each attempt is a full schedule page, and the pre-flight probe
+  // below already covers a window that opens during the wait. The loop also
+  // stops rather than running into the pre-flight, because a lookup still
+  // failing after several seconds has already cost the optimisation and must
+  // not also cost the booking.
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      void adopt(await deps.resolveClassId(planned), 'before-sleep');
+      break;
+    } catch (err) {
+      const retryable = !(err instanceof ClassNotListedError);
+      logger.log('class.unresolved', {
+        when: 'before-sleep',
+        attempt,
+        retryable,
+        reason: (err as Error).message,
+      });
+      if (!retryable || attempt >= config.preResolveAttempts) break;
+      if (now() + config.preResolveRetryMs >= preflightAt) break;
+      await sleep(config.preResolveRetryMs);
+    }
+  }
 
   // --- One last look, moments before firing. -------------------------------
   //
@@ -182,7 +205,6 @@ export async function executeBooking(
   // booking request past the instant it exists to hit. It is fire-and-forget
   // with its rejection handled, and whatever it finds is picked up by
   // `adopt`, or not, before the attempt below reads `classId`.
-  const preflightAt = fireAt - config.preflightMs;
   if (classId === null && preflightAt > now()) {
     const preflightWaitMs = preflightAt - now();
     logger.log('sleep.begin', {
@@ -273,6 +295,7 @@ export async function executeBooking(
     baseDelayMs: config.retryBaseDelayMs,
     maxDelayMs: config.retryMaxDelayMs,
     pollMaxDelayMs: config.listingPollMaxDelayMs,
+    pollBaseDelayMs: config.listingPollBaseDelayMs,
     now,
     sleep,
     ...(deps.random ? { random: deps.random } : {}),

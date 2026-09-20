@@ -323,6 +323,44 @@ describe('retryWithBackoff', () => {
     expect(waits.slice(0, 6)).toEqual([250, 500, 1_000, 1_000, 1_000, 1_000]);
   });
 
+  it('probes within tens of milliseconds at first, not hundreds', async () => {
+    // The first rejection at the instant is usually a few ms of clock
+    // disagreement, so the useful answer is to ask again almost immediately.
+    // Starting the ramp at the ordinary backoff base spends a quarter of a
+    // second doing nothing at the one moment that decides the place.
+    const clock = fakeClock();
+    const waits: number[] = [];
+
+    await retryWithBackoff(async () => ({ kind: 'too-early' }), {
+      ...opts,
+      ...clock,
+      pollBaseDelayMs: 50,
+      pollMaxDelayMs: 1_000,
+      random: () => 1,
+      onWait: (_attempt, delayMs) => waits.push(delayMs),
+    });
+
+    expect(waits.slice(0, 6)).toEqual([50, 100, 200, 400, 800, 1_000]);
+  });
+
+  it('keeps the ordinary base for a server that is pushing back', async () => {
+    // The fast base belongs to "not there yet" alone. Applied to a rate limit
+    // it would quadruple the rate at which we hit a server already saying no.
+    const clock = fakeClock();
+    const waits: number[] = [];
+
+    await retryWithBackoff(async () => ({ kind: 'rate-limited' }), {
+      ...opts,
+      ...clock,
+      pollBaseDelayMs: 50,
+      pollMaxDelayMs: 1_000,
+      random: () => 1,
+      onWait: (_attempt, delayMs) => waits.push(delayMs),
+    });
+
+    expect(waits.slice(0, 4)).toEqual([250, 500, 1_000, 2_000]);
+  });
+
   it('still backs off from a server error, which is the server in trouble', async () => {
     // A 5xx is not "the window has not opened", it is Elixia struggling, and
     // probing it every second is how a struggling server stays struggling.

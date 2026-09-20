@@ -21,7 +21,10 @@ const config: BookingConfig = {
   retryBaseDelayMs: 250,
   retryMaxDelayMs: 5_000,
   listingPollMaxDelayMs: 1_000,
+  listingPollBaseDelayMs: 50,
   preflightMs: 1_500,
+  preResolveAttempts: 3,
+  preResolveRetryMs: 2_000,
   claimHorizonMs: 90_000,
   claimGraceMs: 120_000,
   classes: [],
@@ -205,6 +208,113 @@ describe('executeBooking', () => {
     expect(built.book).not.toHaveBeenCalled();
     expect(report.outcome.kind).toBe('too-early');
     expect(report.attempts).toBeGreaterThan(1);
+  });
+
+  it('tries the early resolve again when the lookup itself failed', async () => {
+    // A class is listed about a week before a 7-day member may book it, so
+    // the early resolve is expected to succeed and leave T-0 holding only the
+    // POST. A dropped connection on that one attempt used to cost the whole
+    // benefit: nothing tried again until the pre-flight probe.
+    const order: string[] = [];
+    const clock = harness(RELEASE - 60_000);
+    const resolveClassId = vi
+      .fn<() => Promise<ResolvedClass>>()
+      .mockImplementationOnce(async () => {
+        order.push('resolve');
+        throw new Error('fetch failed');
+      })
+      .mockImplementationOnce(async () => {
+        order.push('resolve');
+        throw new Error('Elixia schedule: HTTP 502');
+      })
+      .mockImplementationOnce(async () => {
+        order.push('resolve');
+        return { classId: 'class-77', durationMin: 55 };
+      });
+    const built = {
+      book: vi.fn(async (): Promise<AttemptOutcome> => {
+        order.push('book');
+        return { kind: 'booked', bookingId: '1' };
+      }),
+      resolveClassId,
+      tokens,
+      logger: new Logger(clock.now),
+      config,
+      dryRun: false,
+      now: clock.now,
+      sleep: clock.sleep,
+      random: () => 0.5,
+    };
+
+    const report = await executeBooking(planned, built);
+
+    expect(resolveClassId).toHaveBeenCalledTimes(3);
+    // Resolved during the wait, so T-0 is a bare POST and no pre-flight probe
+    // was needed: two short gaps, then one long sleep to the instant.
+    expect(clock.slept).toEqual([2_000, 2_000, 56_000]);
+    expect(order[order.length - 1]).toBe('book');
+    expect(built.book).toHaveBeenCalledWith(tokens, 'class-77', expect.anything());
+    expect(report.bookRequestOffsetMs).toBe(0);
+  });
+
+  it('does not retry the early resolve when the class is merely not listed yet', async () => {
+    // Nothing about waiting two seconds makes a booking window open sooner,
+    // and each attempt is a full schedule page. The pre-flight probe already
+    // covers a window that opens during the wait, so this case gets the two
+    // attempts it always had and no more.
+    const resolveClassId = vi.fn(async (): Promise<ResolvedClass> => {
+      throw new ClassNotListedError('not listed yet');
+    });
+    const { clock, built } = deps({ resolveClassId });
+
+    await executeBooking(planned, built);
+
+    // One before the wait, one at the pre-flight, then the race's own.
+    expect(resolveClassId.mock.calls.length).toBeGreaterThan(2);
+    expect(clock.slept.slice(0, 2)).toEqual([58_500, 1_500]);
+  });
+
+  it('gives up on the early resolve rather than eating into the wait', async () => {
+    // The retries are bounded and must never push past the instant: a lookup
+    // that is still failing has cost the optimisation, and must not also cost
+    // the booking.
+    const resolveClassId = vi.fn(async (): Promise<ResolvedClass> => {
+      throw new Error('fetch failed');
+    });
+    const { clock, built } = deps({ resolveClassId });
+
+    const report = await executeBooking(planned, built);
+
+    expect(clock.slept.slice(0, 3)).toEqual([2_000, 2_000, 54_500]);
+    expect(report.firstAttemptOffsetMs).toBe(0);
+  });
+
+  it('skips the early retry when there is no room for it before the pre-flight', async () => {
+    // QStash delivery is not exact, so a tick can arrive seconds before the
+    // instant rather than tens of seconds. The attempt cap alone does not
+    // protect that case: three tries two seconds apart would swallow the
+    // pre-flight probe and land the second attempt after the moment it was
+    // supposed to happen.
+    const clock = harness(RELEASE - 3_000);
+    const offsets: number[] = [];
+    const resolveClassId = vi.fn(async (): Promise<ResolvedClass> => {
+      offsets.push(clock.now() - RELEASE);
+      throw new Error('fetch failed');
+    });
+    const { built } = deps({
+      resolveClassId,
+      now: clock.now,
+      sleep: clock.sleep,
+      logger: new Logger(clock.now),
+    });
+
+    const report = await executeBooking(planned, built);
+
+    // One early attempt, then the wait split at the pre-flight exactly as it
+    // would have been with no retry at all.
+    expect(clock.slept.slice(0, 2)).toEqual([1_500, 1_500]);
+    expect(offsets.slice(0, 2)).toEqual([-3_000, -1_500]);
+    expect(report.firstAttemptOffsetMs).toBe(0);
   });
 
   it('probes once more just before T-0 when the class was not listed at the start', async () => {
@@ -431,10 +541,10 @@ describe('executeBooking', () => {
 
     const report = await executeBooking(planned, built);
 
-    // First request at +0, backoff of 188ms (250 capped, half-jittered at
-    // random()=0.5), second request after that.
+    // First request at +0, the 100ms it takes, then the poll band's own first
+    // wait — 38ms at base 50 with random() = 0.5 — then the second request.
     expect(report.firstAttemptOffsetMs).toBe(0);
-    expect(report.bookRequestOffsetMs).toBe(288);
+    expect(report.bookRequestOffsetMs).toBe(138);
   });
 
   it('reports no booking request when the class never resolved', async () => {

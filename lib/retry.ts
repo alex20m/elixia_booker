@@ -44,6 +44,15 @@ export interface RetryOptions {
    * Left undefined, `maxDelayMs` applies to every retryable outcome as before.
    */
   pollMaxDelayMs?: number;
+  /**
+   * First wait on the "not there yet" band, replacing `baseDelayMs`.
+   *
+   * The cap decides the worst case; this decides the best one. A rejection
+   * moments after a window opens usually means the two clocks disagree by a
+   * few milliseconds, and spending the ordinary backoff base recovering from
+   * that is the difference between the first wave of requests and the second.
+   */
+  pollBaseDelayMs?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   /** Injectable for deterministic tests. Must return [0, 1). */
@@ -230,13 +239,18 @@ export async function retryWithBackoff(
     // "Not there yet" gets the tight probe cap; everything else — a rate
     // limit, a server error, a request that never landed — is something
     // asking to be left alone, and keeps the full exponential backoff.
+    const notThereYet = isNotThereYet(outcome);
     const maxDelayMs =
-      isNotThereYet(outcome) && options.pollMaxDelayMs !== undefined
+      notThereYet && options.pollMaxDelayMs !== undefined
         ? Math.min(options.pollMaxDelayMs, options.maxDelayMs)
         : options.maxDelayMs;
+    const baseDelayMs =
+      notThereYet && options.pollBaseDelayMs !== undefined
+        ? options.pollBaseDelayMs
+        : options.baseDelayMs;
     const delay = backoffDelayMs(
       attempts,
-      { baseDelayMs: options.baseDelayMs, maxDelayMs },
+      { baseDelayMs, maxDelayMs },
       retryAfterOf(outcome),
       random,
     );

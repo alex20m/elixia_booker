@@ -106,6 +106,29 @@ export interface BookingConfig {
    */
   listingPollMaxDelayMs: number;
   /**
+   * First wait after a "not open yet" rejection, before the doubling starts.
+   *
+   * Much shorter than `retryBaseDelayMs`, and for the same reason the cap is:
+   * the first rejection at T-0 usually means the two clocks disagree by a few
+   * milliseconds, not that anything is wrong. Recovering from that in tens of
+   * milliseconds rather than hundreds is the difference between arriving with
+   * the first wave and arriving after it.
+   */
+  listingPollBaseDelayMs: number;
+  /**
+   * How many times to attempt the early resolve before giving up on it and
+   * leaving the rest to the pre-flight probe.
+   *
+   * Only a failure a retry could plausibly fix is retried — a dead connection,
+   * a bad gateway, a page that came back unparseable. A class that is simply
+   * not listed yet is not retried here: nothing about waiting two seconds
+   * makes a booking window open sooner, and the pre-flight probe already
+   * covers a window that opens during the wait.
+   */
+  preResolveAttempts: number;
+  /** Gap between those attempts. Never allowed to run past the pre-flight. */
+  preResolveRetryMs: number;
+  /**
    * How long before the firing instant to make one last attempt at resolving
    * the class, when the attempt made at the start of the run came back
    * "not listed yet".
