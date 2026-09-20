@@ -45,6 +45,38 @@ So look for it by reading the loop, not by waiting for it to page you: *does
 anything in this iteration's body have to finish before the next iteration's
 deadline?* If yes, the loop is a queue.
 
+### Check where your lateness number is stamped before you trust it
+
+If the run already records a per-item offset, it is tempting to treat that as
+the measurement and skip to a cause. Look at where the line that sets it sits
+first, because the plausible place to put it is the wrong one.
+
+The natural spot is the top of the item's work — the first thing after the
+wait, where the item is "starting". What that measures is how accurately the
+sleep hit the instant. It is stamped **before** the lookups, the parses, the
+retries and the request itself, so everything that actually decides the outcome
+happens after it and none of it is in the number. Two items a second apart both
+report single digits, and the number stays reassuring precisely as the thing it
+is supposed to detect gets worse.
+
+It is usually also *named* for what it measures — "first attempt", "started" —
+and then read, or printed to users, as though it meant the request landed.
+Check the stamp, not the name, and check the wording of anything that renders
+it: a message saying an item "completed 1ms after the window opened" when it
+means "woke up" sends everyone looking in the wrong place, including you.
+
+What you want is two numbers: **woke** (the offset when the item resumed) and
+**sent** (the offset when the request that produced the final outcome went
+out), with the request one stamped immediately before the call rather than
+after the response, since the question is when you got in the queue and not how
+long the answer took. Record the attempt count beside them. The gap between
+woke and sent *is* the critical path, and its composition — one slow lookup,
+or four retry rounds — tells you which of the two fixes below you need.
+
+Get this in place before concluding anything. A plausible mechanism with no
+measurement behind it is a guess, and this particular guess is cheap to make
+because the code will happily support several.
+
 ## The fix, and the part of it that is easy to get backwards
 
 Split the run into three phases and treat them differently:
@@ -236,6 +268,12 @@ operation, wildly different outcomes, nothing errored. So when the report
 persists after the batch is fair, stop reading the loop and read one item's
 path from the instant to its request. Two things on it re-create the spread.
 
+Which one you have is a question for the *sent* offset and the attempt count
+above, not for reading alone: one attempt with a long woke-to-sent gap is the
+second problem, several attempts is the first. Both are worth fixing on their
+own merits, but only the measurement says which one is costing someone their
+place today.
+
 ### Polling is not backing off
 
 Exponential backoff with jitter is the reflex for any retry, and for one of the
@@ -329,6 +367,8 @@ the request going out at offset ~0.
 - Per-item state actually per-item — mutate it back to shared and watch a test
   go red, since nothing else will tell you.
 - The limiter's comment says why the hot path is deliberately ungated.
+- The lateness number is stamped at the request, not at the item's wake-up,
+  and anything that renders it says which one it means.
 - "Not there yet" and "please slow down" have separate delay caps, with a test
   pinning each band, so capping both cannot ship as a politeness fix.
 - The tight cap is written down with what it costs in request volume.
