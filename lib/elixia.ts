@@ -374,11 +374,32 @@ export async function performElixiaLogin(
 //     "apply filters" prompt and carries no `schedule.events` at all — so a
 //     centre has to be resolved to a numeric club id before anything can be
 //     looked up.
-//   * **Only bookable dates carry events.** `schedule.dateList.dates` marks
-//     every date beyond the booking window `disabled: true`, and those dates
-//     have zero events. A class further out than the window is therefore not
-//     merely unbookable but *invisible*, which is what `ClassNotListedError`
-//     represents.
+//   * **A date marked `disabled` carries no events.** `schedule.dateList.dates`
+//     flags dates beyond the published range `disabled: true`, and those dates
+//     hold zero classes — so a class out past it is not merely unbookable but
+//     *invisible*, which is what `ClassNotListedError` represents.
+//
+// **Open question, and it decides how fast a booking can possibly be.** What
+// `disabled` actually tracks is unverified: a publication horizon Elixia
+// applies to everyone, or the booking window of the account whose cookie made
+// the request. The two comments in this file used to assert one each, in the
+// same commit, so neither is evidence.
+//
+// It matters because the whole of lib/booking.ts is built to resolve the class
+// id *before* the release instant and leave only the POST for T-0:
+//
+//   * Site-wide horizon (~14 days to everyone) — a 7-day member's class is
+//     listed about a week ahead, the resolve at the start of the run succeeds,
+//     and T-0 already costs one request. Nothing left to optimise.
+//   * Per-account window — the class materialises at T-0 exactly, every resolve
+//     before it fails by design, and every booking pays a schedule fetch and
+//     parse on the critical path before it can POST.
+//
+// One real booking settles it, and needs no instrumentation beyond what is
+// already recorded: `bookRequestOffsetMs - firstAttemptOffsetMs` (the Activity
+// tab prints it as "Nms finding the class") is ~0 in the first case and the
+// cost of a page read in the second. Until someone reads that number off a
+// live booking, assume the pessimistic case — which is what the code does.
 
 const DATA_PROPS_RE = /<script data-props="true" type="application\/json">([\s\S]*?)<\/script>/;
 
@@ -614,10 +635,12 @@ function matchScheduleEvent(
   // and carrying zero classes. Diagnosing that as "the class is not listed"
   // would be technically true and completely unhelpful.
   //
-  // Note what `disabled` does *not* mean: it is not your booking window. Elixia
-  // publishes the same ~14 days to everyone, while how far ahead you may book
-  // is a membership tier (docs/api.md §4). A date can be enabled and listed and
-  // still be unbookable by you — so this says "published", not "bookable".
+  // This says "not published", which is deliberately weaker than "you cannot
+  // book it": whether `disabled` tracks Elixia's own publication horizon or the
+  // requesting account's booking window is unverified — see the open question
+  // in this file's header, which also says how one booking settles it. Either
+  // way the caller's response is the same, because an absent class cannot be
+  // booked whatever the reason for its absence.
   const known = (props.schedule?.dateList?.dates ?? []).find((d) => d.isoDate === classDate);
   if (known?.disabled === true) {
     throw new ClassNotListedError(
