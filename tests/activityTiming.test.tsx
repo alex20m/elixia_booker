@@ -102,14 +102,26 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const renderRow = async (entry: BookingHistoryEntry): Promise<string> => {
+/**
+ * The row's three lines, read separately.
+ *
+ * Deliberately not one `textContent`: that concatenates the lines with no
+ * separator, so "1 try" runs straight into the outcome pill and an assertion
+ * about a word ending cannot be written. Reading each line also keeps the
+ * split itself under test — which fact is on which line is the point here.
+ */
+const renderRow = async (
+  entry: BookingHistoryEntry,
+): Promise<{ title: string; meta: string; timing: string }> => {
   stubFetch(viewWith([entry]));
   await act(async () => {
     root.render(<DashboardApp />);
   });
   const row = container.querySelector('#history-list .row');
   if (!row) throw new Error('no history row rendered');
-  return row.textContent ?? '';
+  const text = (selector: string): string =>
+    row.querySelector(selector)?.textContent ?? '';
+  return { title: text('.row-title'), meta: text('.row-meta'), timing: text('.row-timing') };
 };
 
 describe('the Activity tab', () => {
@@ -117,38 +129,64 @@ describe('the Activity tab', () => {
     // Several tries means the class was not listed at the computed instant
     // and the run spent rounds waiting for it — a completely different cause
     // from one slow try, and invisible without this number.
-    expect(await renderRow(attempt({ attempts: 4 }))).toMatch(/4 tries/);
+    expect((await renderRow(attempt({ attempts: 4 }))).timing).toMatch(/\b4 tries\b/);
   });
 
   it('says one try in the singular, so a clean run reads as one', async () => {
     // Shown even at one: absent, a reader cannot tell "it went first time"
     // from "this build does not report it".
-    const text = await renderRow(attempt({ attempts: 1 }));
-    expect(text).toMatch(/1 try\b/);
-    expect(text).not.toMatch(/1 tries/);
+    const { timing } = await renderRow(attempt({ attempts: 1 }));
+    expect(timing).toMatch(/\b1 try\b/);
+    expect(timing).not.toMatch(/1 tries/);
   });
 
   it('separates when the run woke from when the request went out', async () => {
     // The gap between them is the critical path. One number alone reads as
     // if the booking happened the instant the window opened.
-    const text = await renderRow(attempt({ firstAttemptOffsetMs: 1, bookRequestOffsetMs: 910 }));
-    expect(text).toContain('woke +1ms');
-    expect(text).toContain('sent +910ms');
+    const { timing } = await renderRow(
+      attempt({ firstAttemptOffsetMs: 1, bookRequestOffsetMs: 910 }),
+    );
+    expect(timing).toContain('woke +1ms');
+    expect(timing).toContain('sent +910ms');
   });
 
-  it('claims nothing about the request on a row written before it was recorded', async () => {
-    const text = await renderRow(attempt({ bookRequestOffsetMs: undefined }));
-    expect(text).toContain('woke +1ms');
-    expect(text).not.toContain('sent');
+  it('shows how long the run spent between waking and asking', async () => {
+    // The gap is the critical path, and it is the answer to "why was mine
+    // slower" — subtracting two offsets by eye is exactly the step someone
+    // will not take.
+    const { timing } = await renderRow(
+      attempt({ firstAttemptOffsetMs: 1, bookRequestOffsetMs: 112 }),
+    );
+    expect(timing).toContain('111ms finding the class');
   });
 
-  it('claims nothing about the request when the class never listed', async () => {
-    // Distinct from an old row: nothing was ever sent, so there is no
-    // offset to show rather than one that was not saved.
-    const text = await renderRow(
+  it('says a row predates the request time rather than implying it was instant', async () => {
+    const { timing } = await renderRow(attempt({ bookRequestOffsetMs: undefined }));
+    expect(timing).toContain('woke +1ms');
+    expect(timing).toContain('request time not recorded');
+    expect(timing).not.toMatch(/sent \+\d/);
+  });
+
+  it('says no request went out when the class never listed', async () => {
+    // Distinct from an old row: nothing was ever sent, rather than a time
+    // that was not saved. Reading one as the other sends someone hunting a
+    // slow request that never happened.
+    const { timing } = await renderRow(
       attempt({ outcome: 'too-early', attempts: 12, bookRequestOffsetMs: null }),
     );
-    expect(text).toMatch(/12 tries/);
-    expect(text).not.toContain('sent');
+    expect(timing).toMatch(/\b12 tries\b/);
+    expect(timing).toContain('no request sent');
+    expect(timing).not.toContain('request time not recorded');
+    expect(timing).not.toMatch(/sent \+\d/);
+  });
+
+  it('keeps the technical timings off the line a person reads first', async () => {
+    // The split the notifications rely on: line two is what happened, line
+    // three is the machinery. A reader who does not care can stop at two.
+    const { meta, timing } = await renderRow(attempt({ detail: 'waitlist position 16' }));
+    expect(meta).toContain('waitlist position 16');
+    expect(meta).not.toContain('woke');
+    expect(meta).not.toContain('try');
+    expect(timing).toContain('woke +1ms');
   });
 });

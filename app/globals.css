@@ -1181,6 +1181,25 @@ button.link .spinner {
   overflow-wrap: anywhere;
 }
 
+/* The activity list's third line: the machinery behind an attempt, set apart
+   from .row-meta so a reader who only wants to know what happened can stop at
+   the line above. Tabular figures because these are read by comparing them
+   down the column — two rows' offsets should line up digit for digit. */
+.row-timing {
+  color: var(--text-alt);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  /* Monospace, and not only for the alignment. These lines are read by
+     comparing one attempt against another down the column, which needs the
+     digits to line up — but it is also the cheapest way to say "this line is
+     the machinery, the line above is what happened". Set in the same colour
+     they were, they read as two equally important sentences. */
+  letter-spacing: -0.01em;
+  margin-top: 2px;
+  opacity: 0.8;
+  overflow-wrap: anywhere;
+}
+
 /* The class list's own row content — kept separate from .row-title/.row-meta
    above, which the activity/history list also uses, so restyling one booking
    card never reaches into the other list. */
