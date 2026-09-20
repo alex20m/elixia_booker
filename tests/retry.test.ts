@@ -264,6 +264,157 @@ describe('retryWithBackoff', () => {
     expect(onWait).toHaveBeenCalledWith(1, 250);
   });
 
+  it('keeps probing at the poll cap while the class is merely not listed yet', async () => {
+    // The gap between probes is the lateness someone pays once the class
+    // finally appears — and, across two people waiting on the same release,
+    // the spread between them. Exponential growth alone took that gap to
+    // maxDelayMs (5s); the poll cap holds it at 1s however long the wait runs.
+    const clock = fakeClock();
+    const waits: number[] = [];
+
+    await retryWithBackoff(async () => ({ kind: 'too-early' }), {
+      ...opts,
+      ...clock,
+      pollMaxDelayMs: 1_000,
+      random: () => 1, // no jitter discount, so these are the worst-case gaps
+      onWait: (_attempt, delayMs) => waits.push(delayMs),
+    });
+
+    expect(waits.slice(0, 6)).toEqual([250, 500, 1_000, 1_000, 1_000, 1_000]);
+    expect(Math.max(...waits)).toBe(1_000);
+  });
+
+  it('still backs off exponentially from a rate limit, which is the server asking for room', async () => {
+    // The tight cap is only right for "it is not there yet". A server pushing
+    // back wants to be asked *less* often, and capping that at a second would
+    // turn polite retrying into hammering.
+    const clock = fakeClock();
+    const waits: number[] = [];
+
+    await retryWithBackoff(async () => ({ kind: 'rate-limited' }), {
+      ...opts,
+      ...clock,
+      pollMaxDelayMs: 1_000,
+      random: () => 1,
+      onWait: (_attempt, delayMs) => waits.push(delayMs),
+    });
+
+    expect(waits.slice(0, 6)).toEqual([250, 500, 1_000, 2_000, 4_000, 5_000]);
+  });
+
+  it('probes a rejected-too-soon booking at the poll cap, not the backoff cap', async () => {
+    // Once the class is resolvable before T-0 the booking POST is the first
+    // thing that happens at the instant, so the "not open yet" rejection
+    // arrives as a *booking* failure rather than a lookup one. Elixia's
+    // taxonomy has no "too early" code (docs/api.md §5), so it lands in the
+    // 4xx that maps to `error` — and left on the exponential band, the wait
+    // for a window that is about to open grows to five seconds.
+    const clock = fakeClock();
+    const waits: number[] = [];
+
+    await retryWithBackoff(async () => ({ kind: 'error', detail: 'not open yet', status: 400 }), {
+      ...opts,
+      ...clock,
+      pollMaxDelayMs: 1_000,
+      random: () => 1,
+      onWait: (_attempt, delayMs) => waits.push(delayMs),
+    });
+
+    expect(waits.slice(0, 6)).toEqual([250, 500, 1_000, 1_000, 1_000, 1_000]);
+  });
+
+  it('probes within tens of milliseconds at first, not hundreds', async () => {
+    // The first rejection at the instant is usually a few ms of clock
+    // disagreement, so the useful answer is to ask again almost immediately.
+    // Starting the ramp at the ordinary backoff base spends a quarter of a
+    // second doing nothing at the one moment that decides the place.
+    const clock = fakeClock();
+    const waits: number[] = [];
+
+    await retryWithBackoff(async () => ({ kind: 'too-early' }), {
+      ...opts,
+      ...clock,
+      pollBaseDelayMs: 50,
+      pollMaxDelayMs: 1_000,
+      random: () => 1,
+      onWait: (_attempt, delayMs) => waits.push(delayMs),
+    });
+
+    expect(waits.slice(0, 6)).toEqual([50, 100, 200, 400, 800, 1_000]);
+  });
+
+  it('keeps the ordinary base for a server that is pushing back', async () => {
+    // The fast base belongs to "not there yet" alone. Applied to a rate limit
+    // it would quadruple the rate at which we hit a server already saying no.
+    const clock = fakeClock();
+    const waits: number[] = [];
+
+    await retryWithBackoff(async () => ({ kind: 'rate-limited' }), {
+      ...opts,
+      ...clock,
+      pollBaseDelayMs: 50,
+      pollMaxDelayMs: 1_000,
+      random: () => 1,
+      onWait: (_attempt, delayMs) => waits.push(delayMs),
+    });
+
+    expect(waits.slice(0, 4)).toEqual([250, 500, 1_000, 2_000]);
+  });
+
+  it('still backs off from a server error, which is the server in trouble', async () => {
+    // A 5xx is not "the window has not opened", it is Elixia struggling, and
+    // probing it every second is how a struggling server stays struggling.
+    const clock = fakeClock();
+    const waits: number[] = [];
+
+    await retryWithBackoff(async () => ({ kind: 'error', detail: 'boom', status: 503 }), {
+      ...opts,
+      ...clock,
+      pollMaxDelayMs: 1_000,
+      random: () => 1,
+      onWait: (_attempt, delayMs) => waits.push(delayMs),
+    });
+
+    expect(waits.slice(0, 6)).toEqual([250, 500, 1_000, 2_000, 4_000, 5_000]);
+  });
+
+  it('still backs off from a failure that never reached the server', async () => {
+    // No status at all means the request did not complete — a dead
+    // connection or a failed lookup. Nothing about that says "try again in a
+    // second", and the cause is as likely to be us as them.
+    const clock = fakeClock();
+    const waits: number[] = [];
+
+    await retryWithBackoff(async () => ({ kind: 'error', detail: 'fetch failed' }), {
+      ...opts,
+      ...clock,
+      pollMaxDelayMs: 1_000,
+      random: () => 1,
+      onWait: (_attempt, delayMs) => waits.push(delayMs),
+    });
+
+    expect(waits.slice(0, 6)).toEqual([250, 500, 1_000, 2_000, 4_000, 5_000]);
+  });
+
+  it('never lets the poll cap stretch a wait beyond maxDelayMs', async () => {
+    // pollMaxDelayMs exists to shorten a wait, never to lengthen one, so a
+    // configuration with the two the wrong way round must not make probing
+    // *less* frequent than ordinary backoff already allows.
+    const clock = fakeClock();
+    const waits: number[] = [];
+
+    await retryWithBackoff(async () => ({ kind: 'too-early' }), {
+      ...opts,
+      maxDelayMs: 400,
+      ...clock,
+      pollMaxDelayMs: 9_000,
+      random: () => 1,
+      onWait: (_attempt, delayMs) => waits.push(delayMs),
+    });
+
+    expect(Math.max(...waits)).toBe(400);
+  });
+
   it('honours Retry-After from a rate-limit response', async () => {
     const clock = fakeClock();
     const sleep = vi.fn(clock.sleep);

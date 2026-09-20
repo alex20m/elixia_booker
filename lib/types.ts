@@ -92,6 +92,57 @@ export interface BookingConfig {
   /** Upper bound on any single backoff delay. */
   retryMaxDelayMs: number;
   /**
+   * Upper bound on the gap between two "the class is not listed yet" probes.
+   *
+   * Deliberately much smaller than `retryMaxDelayMs`, because the two waits
+   * are answers to different questions. Backing off exponentially is right
+   * when a server has pushed back: the polite thing is to ask less often.
+   * A class that has not appeared yet is not pushing back — it is simply not
+   * there, and the only thing that matters is how soon after it appears we
+   * notice. Under the exponential grid that gap grows without limit up to
+   * `retryMaxDelayMs`, so two users waiting on the same class drift onto
+   * different probe schedules and can reach it seconds apart. This caps that
+   * gap, and with it the spread between two people racing the same release.
+   */
+  listingPollMaxDelayMs: number;
+  /**
+   * First wait after a "not open yet" rejection, before the doubling starts.
+   *
+   * Much shorter than `retryBaseDelayMs`, and for the same reason the cap is:
+   * the first rejection at T-0 usually means the two clocks disagree by a few
+   * milliseconds, not that anything is wrong. Recovering from that in tens of
+   * milliseconds rather than hundreds is the difference between arriving with
+   * the first wave and arriving after it.
+   */
+  listingPollBaseDelayMs: number;
+  /**
+   * How many times to attempt the early resolve before giving up on it and
+   * leaving the rest to the pre-flight probe.
+   *
+   * Only a failure a retry could plausibly fix is retried — a dead connection,
+   * a bad gateway, a page that came back unparseable. A class that is simply
+   * not listed yet is not retried here: nothing about waiting two seconds
+   * makes a booking window open sooner, and the pre-flight probe already
+   * covers a window that opens during the wait.
+   */
+  preResolveAttempts: number;
+  /** Gap between those attempts. Never allowed to run past the pre-flight. */
+  preResolveRetryMs: number;
+  /**
+   * How long before the firing instant to make one last attempt at resolving
+   * the class, when the attempt made at the start of the run came back
+   * "not listed yet".
+   *
+   * Two things this buys, both of which shorten the critical path. Elixia
+   * publishes no release time (docs/api.md §4), so the computed T-0 is an
+   * estimate: a class whose window opened during the wait is found here
+   * instead of costing a schedule fetch at T-0, leaving the race a bare POST.
+   * And the run has by then been idle for tens of seconds, long enough for
+   * the HTTP keep-alive to lapse — this probe re-establishes the connection
+   * so the booking request is not also paying for a TCP and TLS handshake.
+   */
+  preflightMs: number;
+  /**
    * How far ahead of a release instant the cron handler will claim it.
    * Must comfortably exceed the cron interval, or a release can fall between
    * two runs and never be claimed.
@@ -483,7 +534,20 @@ export interface BookingHistoryEntry {
   outcome: AttemptOutcome['kind'];
   detail?: string;
   attempts: number;
+  /** How far from T-0 the run woke up. Says nothing about when it asked. */
   firstAttemptOffsetMs: number | null;
+  /**
+   * How far from T-0 the booking request went out — the number that decides
+   * a waitlist place. Absent on rows written before this field existed, and
+   * null when the class never listed so no request was ever sent.
+   */
+  bookRequestOffsetMs?: number | null;
+  /**
+   * How the first attempt was refused, when the run retried — e.g.
+   * `"error 400"`. Null when it went through first time, absent on rows
+   * written before this field existed.
+   */
+  firstAttemptOutcome?: string | null;
   dryRun: boolean;
   /**
    * The centre this class was at, for the calendar feed's event location.

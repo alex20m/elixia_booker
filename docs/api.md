@@ -189,7 +189,7 @@ logic never actually calls it.
 | How is a single class instance identified? Stable across days? | `"<clubId>p<number>"`, e.g. `741p70111`. **Per-occurrence, not per-class**: the same weekly class has a different id on each date (`741p70111` on one day, `741p70095` on another). An id therefore only ever resolves for one concrete date, which is why `resolveClassId` takes a `classDate`. |
 | Class start time format — local, UTC, or offset-bearing? | **Offset-bearing ISO 8601**: `metadata.startsAt` = `"2026-08-21T17:00:00+03:00"`. `metadata.time` carries the same instant as a display string, `"17:00"`. The offset being explicit removes any DST guesswork on the listing side. |
 | Fields for capacity, booked count, waitlist length | `hasWaitingList` (bool), `waitingListCount` (int) and `isBooked` (bool) per class. There is **no capacity or booked-count field** — you cannot tell how full a class is before trying, only whether a waiting list exists and how long it is. |
-| Does a not-yet-open class appear in the listing at all? | **No.** `schedule.dateList.dates` lists ~35 dates, each with `disabled: true|false`; every date past the booking window is `disabled: true` **and carries zero events**. A class further out than the window is not merely unbookable, it is invisible. |
+| Does a not-yet-open class appear in the listing at all? | **Yes — `disabled` is a publication horizon, not your booking window.** `schedule.dateList.dates` lists ~35 dates, each with `disabled: true|false`; a `disabled` date carries zero events, so a class beyond the *published* range really is invisible. But that boundary is Elixia's, not your membership's: a Basic member (7-day booking window) sees about **14 days** of classes in the SATS app, i.e. roughly a week of classes that are listed and not yet bookable. **This row previously said the opposite**, and the error is explicable: the original capture was almost certainly taken on a 14-day account, where the publication horizon and the booking window coincide exactly and nothing distinguishes them. The consequence is large — see §5 and `lib/booking.ts`. |
 | Is there a field stating when booking opens? | **None.** No per-class release time, and no window length either — the window is only implied by where `disabled` flips. |
 
 **`clubIds` options are spread across several nodes, not one.** The filter tree
@@ -335,7 +335,7 @@ next optimisation for the critical path.
 | Payload shape | `{"id": "<classId>"}` — just the class id. Nothing else; **no waitlist flag**. |
 | Success response | `200`, JSON: `{"dataLayer":[…analytics, ignore…], "payload":{"className","clubId","clubName","participationId","status","waitingListPosition","hasWaitingList"}}`. `status` is `"Booked"` or `"OnWaitingList"` — see §6. `participationId` (e.g. `"741p1295323"`) is the id to keep: cancellation needs it, not the class id. It is minted fresh per booking (booking, cancelling and rebooking the same class gave `741p1299243` then `741p1299244`). |
 | **The error taxonomy** | Published by the site itself, in the schedule page's props under `schedule.event.errorMessages.book`: `badRequest`, `conflict`, `forbidden`, `unauthorized`, `unknown`, `unknownDownstream`. That enumerates every failure the endpoint produces. Note what is *absent*: no "class full", and no "too early". |
-| Response when booking has not opened yet | **No such response exists.** The class is not on the schedule at all, so there is no id to post — see §4. |
+| Response when booking has not opened yet | **Unobserved, and it does exist.** The previous claim here — that there is no id to post, so no such response — rested on §4's since-corrected reading. A class is listed about a week before a 7-day member may book it, so a POST *can* be made before the window opens and something must come back. The published taxonomy has no "too early" code, which leaves `badRequest`. Nothing has confirmed the status, so `classifyBookingResponse` does not special-case it: it falls into `error`, and `lib/retry.ts` treats a 4xx `error` as "not there yet" (tight probe cadence) rather than as server pushback. Worth replacing with a real observation the first time one is captured. |
 | Response when the class is full | **Not an error.** `200` with `status: "OnWaitingList"` — see §6. |
 | Response when already booked / overlapping | `409` with `{"message":"Sinulla on voimassa oleva varaus päällekkäin."}` ("you have an overlapping reservation"). Observed directly. **This covers both** booking the same class twice and holding a *different* class at the same time — the API does not distinguish them, so nor can the app. Permanent either way. |
 | Cancellation endpoint | `POST https://www.elixia.fi/api/unbook`, body `{"participationId": "<participationId>"}`. Response `200`, body `{}`. Confirmed against both a `"Booked"` and an `"OnWaitingList"` participation. |
@@ -358,6 +358,15 @@ Elixia actually said, but nothing branches on it.
 | `429` | `rate-limited` | yes |
 | `404` | `too-early` | yes |
 | `400`, `5xx` | `error` | yes |
+
+**Retryable is not one speed.** `lib/retry.ts` splits the retryable outcomes in
+two, because "the thing is not there yet" and "the other side wants to be left
+alone" want opposite responses. `404` and any 4xx `error` get a tight, capped
+probe cadence: nobody is pushing back, and the only thing that matters is
+noticing promptly when the window opens. `429`, `5xx` and an error carrying no
+status at all keep full exponential backoff, and a `Retry-After` always wins.
+Collapsing the two — capping everything at a second — turns polite retrying
+into hammering the moment Elixia is genuinely struggling.
 
 ---
 

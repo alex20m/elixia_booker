@@ -446,6 +446,30 @@ function ClassList({ view, refresh }: { view: DashboardView; refresh: () => Prom
   );
 }
 
+const signedMs = (ms: number): string => `${ms >= 0 ? '+' : ''}${ms}ms`;
+
+/**
+ * The timing line's pieces, in the order they happened.
+ *
+ * Two offsets rather than one, because either alone misleads. "woke" is how
+ * accurately the run hit the release instant and nothing more — it is stamped
+ * before the class is even looked up. "sent" is when Elixia was actually
+ * asked, which is what decides a waitlist place. Their difference is the
+ * critical path, spelled out rather than left as arithmetic nobody does.
+ *
+ * The two ways "sent" can be missing are deliberately worded apart. Null means
+ * the class never appeared and no request was ever made; undefined means the
+ * row predates the column. Reading one as the other sends someone hunting a
+ * slow request that never happened.
+ */
+function timingParts(wokeMs: number | null, sentMs: number | null | undefined): string[] {
+  if (wokeMs === null) return [];
+  const woke = `woke ${signedMs(wokeMs)}`;
+  if (sentMs === undefined) return [woke, 'request time not recorded'];
+  if (sentMs === null) return [woke, 'no request sent'];
+  return [`${woke} → sent ${signedMs(sentMs)}`, `${sentMs - wokeMs}ms finding the class`];
+}
+
 function ActivityTab({ view }: { view: DashboardView }) {
   return (
     <section className="card">
@@ -458,10 +482,22 @@ function ActivityTab({ view }: { view: DashboardView }) {
         <div className="list" id="history-list">
           {view.history.map((h, i) => {
             const [cls, label] = OUTCOME_LABELS[h.outcome] ?? ['pill-err', h.outcome];
-            const timing =
-              h.firstAttemptOffsetMs === null
-                ? ''
-                : ` · fired ${h.firstAttemptOffsetMs >= 0 ? '+' : ''}${h.firstAttemptOffsetMs}ms from T-0`;
+            // Shown even when it is one. Left out below a threshold, a reader
+            // cannot tell "it went through first time" from "this build does
+            // not report it" — and one try versus several is the difference
+            // between a slow lookup and rounds spent waiting for the class to
+            // be listed, which is the first fork in diagnosing a late booking.
+            const tries = `${h.attempts} ${h.attempts === 1 ? 'try' : 'tries'}`;
+            // What refused the first try, when there was more than one. The
+            // count alone says something went wrong N times and nothing about
+            // what — and a 4xx from the booking call (the window not quite
+            // open) and a rejected session want opposite responses.
+            const refusal = h.firstAttemptOutcome ? [`first: ${h.firstAttemptOutcome}`] : [];
+            const timing = [
+              ...timingParts(h.firstAttemptOffsetMs, h.bookRequestOffsetMs),
+              tries,
+              ...refusal,
+            ].join(' · ');
             return (
               <div className="row" key={`${h.subscriptionId ?? 'gone'}-${h.atMs}-${i}`}>
                 <div className="row-main">
@@ -471,9 +507,9 @@ function ActivityTab({ view }: { view: DashboardView }) {
                   <div className="row-meta">
                     {new Date(h.atMs).toLocaleString()}
                     {h.dryRun ? ' · dry run' : ''}
-                    {timing}
                     {h.detail ? ` · ${h.detail}` : ''}
                   </div>
+                  <div className="row-timing">{timing}</div>
                 </div>
                 <span className={`pill ${cls}`}>{label}</span>
               </div>

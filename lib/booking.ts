@@ -5,6 +5,19 @@
  * refresh, resolving the class id — happens *before* the sleep, so the only
  * thing standing between the release instant and the POST is one network hop.
  * Any work left until after the sleep is time spent losing the race.
+ *
+ * "Early" is three moments, and the first one usually wins. Elixia lists a
+ * class about a week before a 7-day member may book it (docs/api.md §4), so
+ * the resolve at the top of the run is expected to *succeed* and leave T-0
+ * holding nothing but the POST. It is retried when it fails for a reason a
+ * retry could fix; an unawaited probe 1.5s out catches a listing that only
+ * appeared during the wait and reopens a connection long since closed for
+ * idleness; and anything still unresolved is resolved inside the race.
+ *
+ * Because the id is usually in hand, "the window has not opened yet" arrives
+ * as a *rejected booking* rather than a lookup that found nothing — and
+ * Elixia publishes no code for it. See `isNotThereYet` in lib/retry.ts for
+ * how that is paced, and why the pacing is not the ordinary backoff.
  */
 
 import { retryWithBackoff, defaultSleep, type RetryResult } from './retry';
@@ -28,10 +41,12 @@ export interface BookingDeps {
   /**
    * Resolves the desired class to Elixia's own id, by fetching the schedule.
    *
-   * Expected to fail with `ClassNotListedError` until the booking window
-   * opens: Elixia does not list a class at all before then (docs/api.md §4).
-   * That is why this is attempted twice — once early, once at T-0 — rather
-   * than treated as a fatal error the first time.
+   * Throws `ClassNotListedError` when the class is not on the published
+   * schedule. For most memberships that is unusual rather than expected —
+   * publication runs ~14 days ahead of a 7-day booking window (docs/api.md
+   * §4) — but it is still not fatal on the first try: a class right at the
+   * edge of the published range appears only as the release nears, so this
+   * is attempted early, again before the race, and once more inside it.
    */
   resolveClassId: (planned: PlannedBooking) => Promise<ResolvedClass>;
   tokens: StoredTokens;
@@ -58,8 +73,39 @@ export interface BookingReport {
   outcome: AttemptOutcome;
   attempts: number;
   exhausted: boolean;
-  /** How far from T-0 the first request went out. Negative is early. */
+  /**
+   * How far from T-0 the run *woke up and began work*. Negative is early.
+   *
+   * Not when anything was asked of Elixia. It is stamped at the top of the
+   * first attempt, before the class is looked up, so it measures the sleep's
+   * accuracy and nothing else. Two runs that both wake at +1ms can still
+   * reach the booking endpoint a second apart — see `bookRequestOffsetMs`,
+   * which is the number that decides who gets the place.
+   */
   firstAttemptOffsetMs: number | null;
+  /**
+   * How far from T-0 the booking request that produced this outcome was
+   * issued. Negative is early, null when no request was ever sent.
+   *
+   * This is the one that matters. Everything between waking and here — the
+   * schedule fetch that resolves the class id, its parse, any retry rounds
+   * spent waiting for the class to be listed — is time other people are
+   * using to book, and none of it shows up in `firstAttemptOffsetMs`.
+   */
+  bookRequestOffsetMs: number | null;
+  /**
+   * How the first attempt was refused, when the run went on to try again —
+   * `"too-early"`, `"error 400"`, `"unauthorized 403"` and so on. Null when
+   * the first attempt was also the last, since a row repeating its own
+   * outcome explains nothing.
+   *
+   * "Three tries" says something went wrong three times and nothing about
+   * what, which is the difference between a window that had not quite opened
+   * and Elixia refusing the session outright. Those want opposite responses,
+   * and without this the only way to tell them apart is to be watching the
+   * platform's logs at the moment it happens.
+   */
+  firstAttemptOutcome: string | null;
   dryRun: boolean;
   /**
    * How long the class actually runs, read off the same schedule match that
@@ -67,6 +113,16 @@ export interface BookingReport {
    * with a duration to record was ever found.
    */
   durationMin?: number;
+}
+
+/**
+ * A refusal in a few characters: the kind, plus the HTTP status where there
+ * was one. Short because it is read on one line beside the timings.
+ */
+function attemptLabel(outcome: AttemptOutcome): string {
+  return 'status' in outcome && outcome.status !== undefined
+    ? `${outcome.kind} ${outcome.status}`
+    : outcome.kind;
 }
 
 /** Outcomes that mean the slot is secured; everything else is a miss. */
@@ -99,26 +155,104 @@ export async function executeBooking(
 
   // --- Everything below the sleep must be as thin as possible. -------------
   //
-  // Resolving early is an optimisation, not a precondition. A class outside
-  // its booking window is absent from the schedule entirely (docs/api.md §4),
-  // so this attempt legitimately fails whenever the window has not opened yet
-  // — and whether it has depends on a release granularity Elixia does not
-  // publish. Failing softly here and resolving again after the sleep keeps the
-  // critical path to a single request in the common case, without depending on
-  // an answer nobody has.
+  // Resolving early is still an optimisation rather than a precondition, even
+  // though it is now expected to succeed: a class at the very edge of the
+  // published range, or a centre that cannot be read this minute, has to fall
+  // through to the race rather than fail the booking outright. So every
+  // resolve below fails softly, and the race carries the last resort.
   let classId: string | null = null;
   let durationMin: number | undefined;
-  try {
-    ({ classId, durationMin } = await deps.resolveClassId(planned));
-    logger.log('class.resolved', { classId, durationMin, when: 'before-sleep' });
-  } catch (err) {
-    logger.log('class.unresolved', {
-      when: 'before-sleep',
-      reason: (err as Error).message,
-    });
-  }
+
+  /**
+   * Take a resolution, unless one is already in hand, and report the id in
+   * force either way.
+   *
+   * The guard matters now that a resolution can arrive from a probe running
+   * alongside the race: whichever lands first is the one the booking request
+   * uses, and a straggler must not swap the id out from under it.
+   */
+  const adopt = (resolved: ResolvedClass, when: string): string => {
+    if (classId !== null) return classId;
+    ({ classId, durationMin } = resolved);
+    logger.log('class.resolved', { classId, durationMin, when });
+    return resolved.classId;
+  };
 
   const fireAt = planned.releaseEpochMs - config.leadMs;
+  const preflightAt = fireAt - config.preflightMs;
+
+  // Retried, because for most memberships this attempt is expected to
+  // *succeed*: Elixia lists a class about a week before a 7-day member may
+  // book it (docs/api.md §4), so the id is usually there for the taking long
+  // before the race. That makes a dropped connection here expensive — it
+  // costs the whole point of resolving early — and worth another go.
+  //
+  // Only a failure a retry could fix. A class that is merely not listed yet
+  // is left alone: no amount of asking again makes a booking window open
+  // sooner, each attempt is a full schedule page, and the pre-flight probe
+  // below already covers a window that opens during the wait. The loop also
+  // stops rather than running into the pre-flight, because a lookup still
+  // failing after several seconds has already cost the optimisation and must
+  // not also cost the booking.
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      void adopt(await deps.resolveClassId(planned), 'before-sleep');
+      break;
+    } catch (err) {
+      const retryable = !(err instanceof ClassNotListedError);
+      logger.log('class.unresolved', {
+        when: 'before-sleep',
+        attempt,
+        retryable,
+        reason: (err as Error).message,
+      });
+      if (!retryable || attempt >= config.preResolveAttempts) break;
+      if (now() + config.preResolveRetryMs >= preflightAt) break;
+      await sleep(config.preResolveRetryMs);
+    }
+  }
+
+  // --- One last look, moments before firing. -------------------------------
+  //
+  // Only when the early attempt came back empty, which is the normal case: a
+  // class is absent from the schedule until its window opens. Two things are
+  // being bought here, and both of them come off the critical path.
+  //
+  // Elixia publishes no release time at all (docs/api.md §4), so `fireAt` is
+  // computed, not read — a class whose window opened during the wait is found
+  // here rather than costing a full schedule fetch at T-0, which turns the
+  // race into a bare POST. And by this point the run has been idle for tens
+  // of seconds, comfortably longer than an HTTP keep-alive, so the socket to
+  // Elixia is gone; opening it now means the booking request is not also
+  // paying for a TCP and TLS handshake at the one instant that matters.
+  //
+  // Deliberately *not* awaited. A probe that hangs must cost the race
+  // nothing: the whole point of doing this early is that T-0 arrives on time
+  // regardless, and an awaited probe on a stalled connection would push the
+  // booking request past the instant it exists to hit. It is fire-and-forget
+  // with its rejection handled, and whatever it finds is picked up by
+  // `adopt`, or not, before the attempt below reads `classId`.
+  if (classId === null && preflightAt > now()) {
+    const preflightWaitMs = preflightAt - now();
+    logger.log('sleep.begin', {
+      waitMs: preflightWaitMs,
+      fireAt: new Date(preflightAt).toISOString(),
+      reason: 'preflight',
+    });
+    await sleep(preflightWaitMs);
+
+    logger.log('class.preflight');
+    void deps
+      .resolveClassId(planned)
+      .then((resolved) => void adopt(resolved, 'preflight'))
+      .catch((err: unknown) =>
+        logger.log('class.unresolved', {
+          when: 'preflight',
+          reason: (err as Error).message,
+        }),
+      );
+  }
+
   const waitMs = fireAt - now();
   if (waitMs > 0) {
     logger.log('sleep.begin', { waitMs, fireAt: new Date(fireAt).toISOString() });
@@ -129,22 +263,31 @@ export async function executeBooking(
   }
 
   let firstAttemptOffsetMs: number | null = null;
+  // Overwritten by each request, so it ends up holding the one whose outcome
+  // was final — the request that actually won or lost the place.
+  let bookRequestOffsetMs: number | null = null;
+  let firstAttemptOutcome: string | null = null;
 
   const runAttempt = async (signal: AbortSignal): Promise<AttemptOutcome> => {
     if (firstAttemptOffsetMs === null) {
       firstAttemptOffsetMs = now() - planned.releaseEpochMs;
     }
 
-    // The class appears on the schedule the moment booking opens, so *not being
-    // listed* is "not open yet" rather than a failure — retryable, with the
-    // budget bounding how long we keep looking. Any other lookup failure (an
-    // unknown centre, a changed page, a dead connection) is reported as the
-    // error it is: retrying those for 30s and then blaming the timing would
-    // send someone hunting a race that never happened.
-    if (classId === null) {
+    // A class that is still not listed here is treated as "not open yet" —
+    // retryable, with the budget bounding how long we keep looking. Any other
+    // lookup failure (an unknown centre, a changed page, a dead connection) is
+    // reported as the error it is: retrying those for 30s and then blaming the
+    // timing would send someone hunting a race that never happened. Note the
+    // error carries no status, which is what keeps it on the slow backoff band
+    // rather than the fast one — a dead connection is not a window about to
+    // open.
+    // Read once: the preflight probe may still be in flight and can fill
+    // `classId` mid-attempt, and an attempt that resolved its own id must
+    // book *that* id rather than re-reading a field that changed underneath.
+    let id = classId;
+    if (id === null) {
       try {
-        ({ classId, durationMin } = await deps.resolveClassId(planned));
-        logger.log('class.resolved', { classId, durationMin, when: 'at-release' });
+        id = adopt(await deps.resolveClassId(planned), 'at-release');
       } catch (err) {
         const reason = (err as Error).message;
         logger.log('class.unresolved', { when: 'at-release', reason });
@@ -154,12 +297,17 @@ export async function executeBooking(
       }
     }
 
+    // Stamped here, not after the call returns: the question is when the
+    // request went out relative to everyone else's, not how long Elixia took
+    // to answer it.
+    bookRequestOffsetMs = now() - planned.releaseEpochMs;
+
     if (deps.dryRun) {
-      logger.log('attempt.dry-run', { classId });
+      logger.log('attempt.dry-run', { classId: id, bookRequestOffsetMs });
       return { kind: 'booked', bookingId: 'DRY-RUN' };
     }
 
-    return deps.book(deps.tokens, classId, signal);
+    return deps.book(deps.tokens, id, signal);
   };
 
   // Whatever is left after the sleep, never more than the configured budget.
@@ -176,10 +324,15 @@ export async function executeBooking(
     budgetMs,
     baseDelayMs: config.retryBaseDelayMs,
     maxDelayMs: config.retryMaxDelayMs,
+    pollMaxDelayMs: config.listingPollMaxDelayMs,
+    pollBaseDelayMs: config.listingPollBaseDelayMs,
     now,
     sleep,
     ...(deps.random ? { random: deps.random } : {}),
-    onAttempt: (attempt, outcome) => logger.log('attempt.result', { attempt, ...outcome }),
+    onAttempt: (attempt, outcome) => {
+      if (attempt === 1) firstAttemptOutcome = attemptLabel(outcome);
+      logger.log('attempt.result', { attempt, ...outcome });
+    },
     onWait: (attempt, delayMs) => logger.log('attempt.backoff', { attempt, delayMs }),
   });
 
@@ -191,6 +344,8 @@ export async function executeBooking(
     attempts: result.attempts,
     exhausted: result.exhausted,
     firstAttemptOffsetMs,
+    bookRequestOffsetMs,
+    firstAttemptOutcome,
   });
 
   return {
@@ -199,6 +354,9 @@ export async function executeBooking(
     attempts: result.attempts,
     exhausted: result.exhausted,
     firstAttemptOffsetMs,
+    bookRequestOffsetMs,
+    // Only when it explains something the final outcome does not.
+    firstAttemptOutcome: result.attempts > 1 ? firstAttemptOutcome : null,
     dryRun: deps.dryRun,
     ...(durationMin !== undefined ? { durationMin } : {}),
   };
@@ -219,52 +377,83 @@ const SHORT_MONTHS = [
   'Dec',
 ];
 
-/** "2026-09-06" -> "Sep 6". Read as a string, not a Date, to sidestep timezones. */
+const SHORT_WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/**
+ * "2026-09-13" -> "Sat 13 Sep".
+ *
+ * Day before month, because these messages are read in Finland. The weekday
+ * is not decoration: a booking is made a week or two ahead, and the weekday
+ * is what tells someone at a glance that it is the class they meant rather
+ * than the same class on another day.
+ *
+ * Parsed as UTC midnight and read back in UTC, so the calendar day that comes
+ * out is the one in the string. Anything zone-aware here can land a day off,
+ * and a message naming the wrong day is worse than one naming no day at all.
+ */
 function friendlyDate(classDate: string): string {
-  const [, month, day] = classDate.split('-');
-  return `${SHORT_MONTHS[Number(month) - 1]} ${Number(day)}`;
+  const [year, month, day] = classDate.split('-').map(Number);
+  const weekday = SHORT_WEEKDAYS[new Date(Date.UTC(year!, month! - 1, day!)).getUTCDay()];
+  return `${weekday} ${day} ${SHORT_MONTHS[month! - 1]}`;
 }
 
-/** One-line human summary for Telegram. */
+/** "09:30" -> "9.30", and "14:00" -> "14.00". */
+function friendlyTime(startTime: string): string {
+  const [hour, minute] = startTime.split(':');
+  return `${Number(hour)}.${minute}`;
+}
+
+/**
+ * The message a person actually reads, on Telegram or in an email.
+ *
+ * Deliberately carries no timings, attempt counts, offsets or provider error
+ * text. All of that is recorded and shown on the Activity page, which is
+ * where someone goes to ask *why* an attempt went the way it did; a
+ * notification only has to say what happened and, where there is one, what to
+ * do about it. Mixing the two made the one line most people ever see read as
+ * machine output — and, worse, the offset it quoted was measured before the
+ * booking request was even sent, so it was a technical number that was also
+ * wrong.
+ *
+ * Where there is advice, it goes on a second line rather than a second
+ * sentence. `subjectFor` in lib/notify.ts takes the first line as the email
+ * subject, so this keeps the headline short enough to survive a subject line
+ * while the body still carries both.
+ */
 export function describeReport(report: BookingReport): string {
   const { planned, outcome } = report;
-  const what = `${planned.desired.className} @ ${planned.desired.center}, ${planned.classDate} ${planned.desired.startTime}`;
-  const timing =
-    report.firstAttemptOffsetMs === null
-      ? ''
-      : ` (fired ${report.firstAttemptOffsetMs >= 0 ? '+' : ''}${report.firstAttemptOffsetMs}ms from T-0)`;
-  // Same facts as `what`/`timing` above, but spelled out in words instead of
-  // "@"/sign shorthand and ISO-ish date/time — for the message a user
-  // actually reads, not the debug log.
-  const friendlyWhat = `${planned.desired.className} at ${planned.desired.center} on ${friendlyDate(planned.classDate)} at ${planned.desired.startTime.replace(':', '.')}`;
-  const friendlyTiming =
-    report.firstAttemptOffsetMs === null
-      ? ''
-      : report.firstAttemptOffsetMs >= 0
-        ? ` (booked ${report.firstAttemptOffsetMs}ms after booking opened)`
-        : ` (booked ${Math.abs(report.firstAttemptOffsetMs)}ms before booking opened)`;
+  const what = `${planned.desired.className} at ${planned.desired.center} on ${friendlyDate(
+    planned.classDate,
+  )} at ${friendlyTime(planned.desired.startTime)}`;
   const prefix = report.dryRun ? '[DRY RUN] ' : '';
 
   switch (outcome.kind) {
     case 'booked':
-      return `${prefix}✅ Booked ${what}${timing}`;
+      return `${prefix}✅ Booked ${what}`;
     case 'waitlisted':
       return outcome.position === undefined
-        ? `${prefix}🕒 You're on the waitlist for ${friendlyWhat}${friendlyTiming}`
-        : `${prefix}🕒 You're number ${outcome.position} on the waitlist for ${friendlyWhat}${friendlyTiming}`;
+        ? `${prefix}🕒 You're on the waitlist for ${what}`
+        : `${prefix}🕒 You're number ${outcome.position} on the waitlist for ${what}`;
     // Elixia cannot tell "you already booked this" apart from "you hold a
     // different class at the same time", so neither can this message.
     case 'already-booked':
-      return `${prefix}ℹ️ Skipped ${what} — you already have an overlapping booking${
-        outcome.detail ? ` (${outcome.detail})` : ''
-      }`;
+      return `${prefix}ℹ️ Didn't book ${what} — you already have a booking at that time.`;
     case 'unauthorized':
-      return `${prefix}🚨 Elixia refused to book ${what} — ${outcome.detail}`;
+      return (
+        `${prefix}🚨 Elixia wouldn't accept your saved login, so ${what} wasn't booked.\n` +
+        `Re-link your Elixia account in the app to start booking again.`
+      );
     case 'too-early':
-      return `${prefix}❌ Never appeared on the schedule in time: ${what}${timing} after ${report.attempts} attempts`;
+      return (
+        `${prefix}❌ ${what} never opened for booking, so nothing was booked.\n` +
+        `It's worth checking the Elixia app in case the class has moved.`
+      );
     case 'rate-limited':
-      return `${prefix}❌ Rate limited booking ${what} after ${report.attempts} attempts`;
+      return `${prefix}❌ Elixia was turning requests away, so ${what} wasn't booked.`;
     case 'error':
-      return `${prefix}❌ Failed ${what}: ${outcome.detail}`;
+      return (
+        `${prefix}❌ Something went wrong booking ${what}.\n` +
+        `The Activity page in the app has the details.`
+      );
   }
 }

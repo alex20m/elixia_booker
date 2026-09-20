@@ -374,11 +374,33 @@ export async function performElixiaLogin(
 //     "apply filters" prompt and carries no `schedule.events` at all — so a
 //     centre has to be resolved to a numeric club id before anything can be
 //     looked up.
-//   * **Only bookable dates carry events.** `schedule.dateList.dates` marks
-//     every date beyond the booking window `disabled: true`, and those dates
-//     have zero events. A class further out than the window is therefore not
-//     merely unbookable but *invisible*, which is what `ClassNotListedError`
-//     represents.
+//   * **A date marked `disabled` carries no events.** `schedule.dateList.dates`
+//     flags dates beyond the published range `disabled: true`, and those dates
+//     hold zero classes — so a class out past it is not merely unbookable but
+//     *invisible*, which is what `ClassNotListedError` represents.
+//
+// **That horizon is Elixia's, not your membership's**, and the difference
+// shapes the whole of lib/booking.ts. A Basic member — 7-day booking window —
+// sees about 14 days of classes, so a class is listed for roughly a week
+// before they may book it. The class id therefore exists well before the
+// release instant, which is why the resolve at the top of a booking run is
+// expected to *succeed* and leave T-0 holding nothing but the POST.
+//
+// Two consequences, both easy to get backwards:
+//
+//   * A failure to resolve is then genuinely unusual — a renamed class, a
+//     withdrawn one, a centre that cannot be read — rather than the ordinary
+//     "window has not opened" it was once assumed to be.
+//   * The "not open yet" rejection moves to the *booking* call, because the
+//     POST is now the first thing that happens at T-0. Elixia publishes no
+//     "too early" code (docs/api.md §5), so it arrives as a plain 4xx. See
+//     `isNotThereYet` in lib/retry.ts for why that must not be treated as
+//     server pushback.
+//
+// Known the hard way: docs/api.md §4 asserted the opposite for months, and so
+// did one of the two comments in this file. The original capture was taken on
+// a 14-day account, where the publication horizon and the booking window
+// coincide exactly and nothing tells them apart.
 
 const DATA_PROPS_RE = /<script data-props="true" type="application\/json">([\s\S]*?)<\/script>/;
 
@@ -614,10 +636,12 @@ function matchScheduleEvent(
   // and carrying zero classes. Diagnosing that as "the class is not listed"
   // would be technically true and completely unhelpful.
   //
-  // Note what `disabled` does *not* mean: it is not your booking window. Elixia
-  // publishes the same ~14 days to everyone, while how far ahead you may book
-  // is a membership tier (docs/api.md §4). A date can be enabled and listed and
-  // still be unbookable by you — so this says "published", not "bookable".
+  // This says "not published", which is deliberately weaker than "you cannot
+  // book it": whether `disabled` tracks Elixia's own publication horizon or the
+  // requesting account's booking window is unverified — see the open question
+  // in this file's header, which also says how one booking settles it. Either
+  // way the caller's response is the same, because an absent class cannot be
+  // booked whatever the reason for its absence.
   const known = (props.schedule?.dateList?.dates ?? []).find((d) => d.isoDate === classDate);
   if (known?.disabled === true) {
     throw new ClassNotListedError(
@@ -886,6 +910,23 @@ export interface ElixiaClientOptions {
 export class ElixiaClient implements BookingBackend {
   private readonly fetchImpl: typeof fetch;
   private readonly baseUrl: string;
+  /**
+   * Club name -> numeric club id, for the life of this client.
+   *
+   * The mapping belongs to Elixia's group-wide filter tree, not to any one
+   * account (docs/api.md §4), so one lookup answers it for every user this
+   * client serves. Caching it is not a general-purpose speed-up — it exists
+   * to keep a request off the booking critical path. Without it, every single
+   * attempt for a subscription whose centre is stored as a *name* refetches
+   * and reparses the unfiltered schedule page — the biggest one on the site,
+   * carrying all 226 clubs — before it can even ask for the club's own page.
+   * That doubles both the latency of each probe and the synchronous parsing
+   * that every booking sharing the invocation is queued behind.
+   *
+   * Scoped to the instance on purpose. A tick builds one client and drops it,
+   * so the entry cannot outlive the run and go stale against a renamed club.
+   */
+  private readonly clubIdByName = new Map<string, string>();
 
   constructor(options: ElixiaClientOptions = {}) {
     this.fetchImpl = options.fetchImpl ?? fetch;
@@ -916,15 +957,24 @@ export class ElixiaClient implements BookingBackend {
    * A centre may be stored either as the numeric club id the API uses, or as
    * the name a human recognises. A name costs one extra request — the club
    * list only exists on the schedule page — which is why the booking engine
-   * resolves the class id ahead of T-0 wherever it can.
+   * resolves the class id ahead of T-0 wherever it can, and why the answer is
+   * remembered for the life of this client rather than re-fetched on every
+   * attempt (see `clubIdByName`).
    */
   private async resolveClubId(tokens: StoredTokens, center: string): Promise<string> {
     const trimmed = center.trim();
     if (/^\d+$/.test(trimmed)) return trimmed;
 
+    const cached = this.clubIdByName.get(trimmed);
+    if (cached !== undefined) return cached;
+
     const props = await this.fetchPage(tokens, `${this.baseUrl}${ENDPOINTS.schedule}`);
     const id = findClubIdByName(props, trimmed);
+    // Only a hit is remembered. A miss may well be this account not being able
+    // to see the club, and caching that would turn one bad read into a run
+    // that refuses the centre without looking again.
     if (!id) throw new UnknownCenterError(center);
+    this.clubIdByName.set(trimmed, id);
     return id;
   }
 

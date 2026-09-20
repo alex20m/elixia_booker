@@ -11,6 +11,14 @@
  * Backoff is exponential with jitter. The jitter is not decoration: a bot that
  * retries on an exact schedule after a shared T-0 is trivially identifiable,
  * and it also means every retry lands at the moment everyone else's does.
+ *
+ * There are two bands, not one, because "wait" answers two different
+ * questions. A rate limit or a transport error is the other side asking for
+ * room, and the right response is to ask progressively less often. A
+ * `too-early` is the thing simply not existing yet, and there the only thing
+ * that matters is noticing promptly when it does — so that band is capped
+ * tight by `pollMaxDelayMs`. See its doc comment for why conflating the two
+ * costs a shared deadline seconds.
  */
 
 import { isRetryable, type AttemptOutcome } from './types';
@@ -20,6 +28,31 @@ export interface RetryOptions {
   budgetMs: number;
   baseDelayMs: number;
   maxDelayMs: number;
+  /**
+   * Cap on the wait after a `too-early` outcome, when it should be tighter
+   * than `maxDelayMs`.
+   *
+   * `too-early` is not the server pushing back — it is the resource not
+   * existing yet (for this app, a class Elixia has not published). Backing
+   * off exponentially from it is answering the wrong question: the longer the
+   * thing takes to appear, the *less* often we look for it, so the lateness
+   * when it finally appears grows without bound up to `maxDelayMs`. Worse for
+   * a shared deadline, the growth is multiplicative and independently
+   * jittered, so two clients waiting on the same instant drift onto different
+   * probe schedules and reach it seconds apart.
+   *
+   * Left undefined, `maxDelayMs` applies to every retryable outcome as before.
+   */
+  pollMaxDelayMs?: number;
+  /**
+   * First wait on the "not there yet" band, replacing `baseDelayMs`.
+   *
+   * The cap decides the worst case; this decides the best one. A rejection
+   * moments after a window opens usually means the two clocks disagree by a
+   * few milliseconds, and spending the ordinary backoff base recovering from
+   * that is the difference between the first wave of requests and the second.
+   */
+  pollBaseDelayMs?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   /** Injectable for deterministic tests. Must return [0, 1). */
@@ -77,6 +110,37 @@ export function backoffDelayMs(
 
 function retryAfterOf(outcome: AttemptOutcome): number | undefined {
   return 'retryAfterMs' in outcome ? outcome.retryAfterMs : undefined;
+}
+
+/**
+ * Whether this failure means "the thing is not there yet" rather than "the
+ * other side wants to be left alone".
+ *
+ * `too-early` is the obvious case. The subtle one is a 4xx from the booking
+ * call itself: once the class can be resolved before the release instant, the
+ * POST is the *first* thing that happens at T-0, so a window that has not
+ * quite opened is rejected as a booking failure rather than showing up as a
+ * lookup that found nothing. Elixia publishes no "too early" code at all
+ * (docs/api.md §5), so that rejection lands in the generic 4xx bucket, and
+ * left on the exponential band the wait for a window about to open grows to
+ * `maxDelayMs`.
+ *
+ * Kept to 4xx deliberately. A 5xx is the server in trouble, and probing a
+ * struggling server every second is how it stays in trouble; an error with no
+ * status never reached the server at all, so nothing about it says the
+ * resource is merely early. 429 is its own outcome kind and never arrives
+ * here, which matters — a rate limit is the one thing that must always back
+ * off.
+ *
+ * This is a judgement about a status code nobody has observed from a
+ * too-early booking, because the site cannot be reached from a test run. It
+ * is the safe side of the bet either way: guessing wrong costs roughly forty
+ * bounded requests instead of a dozen, and the outcome is the same failure.
+ */
+function isNotThereYet(outcome: AttemptOutcome): boolean {
+  if (outcome.kind === 'too-early') return true;
+  if (outcome.kind !== 'error' || outcome.status === undefined) return false;
+  return outcome.status >= 400 && outcome.status < 500;
 }
 
 /**
@@ -172,7 +236,24 @@ export async function retryWithBackoff(
       return { outcome, attempts, exhausted: false };
     }
 
-    const delay = backoffDelayMs(attempts, options, retryAfterOf(outcome), random);
+    // "Not there yet" gets the tight probe cap; everything else — a rate
+    // limit, a server error, a request that never landed — is something
+    // asking to be left alone, and keeps the full exponential backoff.
+    const notThereYet = isNotThereYet(outcome);
+    const maxDelayMs =
+      notThereYet && options.pollMaxDelayMs !== undefined
+        ? Math.min(options.pollMaxDelayMs, options.maxDelayMs)
+        : options.maxDelayMs;
+    const baseDelayMs =
+      notThereYet && options.pollBaseDelayMs !== undefined
+        ? options.pollBaseDelayMs
+        : options.baseDelayMs;
+    const delay = backoffDelayMs(
+      attempts,
+      { baseDelayMs, maxDelayMs },
+      retryAfterOf(outcome),
+      random,
+    );
     if (now() + delay >= deadline) {
       return { outcome, attempts, exhausted: true };
     }

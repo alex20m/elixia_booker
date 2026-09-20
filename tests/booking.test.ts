@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { describeReport, executeBooking, isSuccess } from '../lib/booking';
+import type { BookingReport } from '../lib/booking';
 import { Logger } from '../lib/logger';
 import { ClassNotListedError } from '../lib/types';
 import type {
@@ -19,6 +20,11 @@ const config: BookingConfig = {
   retryBudgetMs: 30_000,
   retryBaseDelayMs: 250,
   retryMaxDelayMs: 5_000,
+  listingPollMaxDelayMs: 1_000,
+  listingPollBaseDelayMs: 50,
+  preflightMs: 1_500,
+  preResolveAttempts: 3,
+  preResolveRetryMs: 2_000,
   claimHorizonMs: 90_000,
   claimGraceMs: 120_000,
   classes: [],
@@ -204,6 +210,225 @@ describe('executeBooking', () => {
     expect(report.attempts).toBeGreaterThan(1);
   });
 
+  it('tries the early resolve again when the lookup itself failed', async () => {
+    // A class is listed about a week before a 7-day member may book it, so
+    // the early resolve is expected to succeed and leave T-0 holding only the
+    // POST. A dropped connection on that one attempt used to cost the whole
+    // benefit: nothing tried again until the pre-flight probe.
+    const order: string[] = [];
+    const clock = harness(RELEASE - 60_000);
+    const resolveClassId = vi
+      .fn<() => Promise<ResolvedClass>>()
+      .mockImplementationOnce(async () => {
+        order.push('resolve');
+        throw new Error('fetch failed');
+      })
+      .mockImplementationOnce(async () => {
+        order.push('resolve');
+        throw new Error('Elixia schedule: HTTP 502');
+      })
+      .mockImplementationOnce(async () => {
+        order.push('resolve');
+        return { classId: 'class-77', durationMin: 55 };
+      });
+    const built = {
+      book: vi.fn(async (): Promise<AttemptOutcome> => {
+        order.push('book');
+        return { kind: 'booked', bookingId: '1' };
+      }),
+      resolveClassId,
+      tokens,
+      logger: new Logger(clock.now),
+      config,
+      dryRun: false,
+      now: clock.now,
+      sleep: clock.sleep,
+      random: () => 0.5,
+    };
+
+    const report = await executeBooking(planned, built);
+
+    expect(resolveClassId).toHaveBeenCalledTimes(3);
+    // Resolved during the wait, so T-0 is a bare POST and no pre-flight probe
+    // was needed: two short gaps, then one long sleep to the instant.
+    expect(clock.slept).toEqual([2_000, 2_000, 56_000]);
+    expect(order[order.length - 1]).toBe('book');
+    expect(built.book).toHaveBeenCalledWith(tokens, 'class-77', expect.anything());
+    expect(report.bookRequestOffsetMs).toBe(0);
+  });
+
+  it('does not retry the early resolve when the class is merely not listed yet', async () => {
+    // Nothing about waiting two seconds makes a booking window open sooner,
+    // and each attempt is a full schedule page. The pre-flight probe already
+    // covers a window that opens during the wait, so this case gets the two
+    // attempts it always had and no more.
+    const resolveClassId = vi.fn(async (): Promise<ResolvedClass> => {
+      throw new ClassNotListedError('not listed yet');
+    });
+    const { clock, built } = deps({ resolveClassId });
+
+    await executeBooking(planned, built);
+
+    // One before the wait, one at the pre-flight, then the race's own.
+    expect(resolveClassId.mock.calls.length).toBeGreaterThan(2);
+    expect(clock.slept.slice(0, 2)).toEqual([58_500, 1_500]);
+  });
+
+  it('gives up on the early resolve rather than eating into the wait', async () => {
+    // The retries are bounded and must never push past the instant: a lookup
+    // that is still failing has cost the optimisation, and must not also cost
+    // the booking.
+    const resolveClassId = vi.fn(async (): Promise<ResolvedClass> => {
+      throw new Error('fetch failed');
+    });
+    const { clock, built } = deps({ resolveClassId });
+
+    const report = await executeBooking(planned, built);
+
+    expect(clock.slept.slice(0, 3)).toEqual([2_000, 2_000, 54_500]);
+    expect(report.firstAttemptOffsetMs).toBe(0);
+  });
+
+  it('skips the early retry when there is no room for it before the pre-flight', async () => {
+    // QStash delivery is not exact, so a tick can arrive seconds before the
+    // instant rather than tens of seconds. The attempt cap alone does not
+    // protect that case: three tries two seconds apart would swallow the
+    // pre-flight probe and land the second attempt after the moment it was
+    // supposed to happen.
+    const clock = harness(RELEASE - 3_000);
+    const offsets: number[] = [];
+    const resolveClassId = vi.fn(async (): Promise<ResolvedClass> => {
+      offsets.push(clock.now() - RELEASE);
+      throw new Error('fetch failed');
+    });
+    const { built } = deps({
+      resolveClassId,
+      now: clock.now,
+      sleep: clock.sleep,
+      logger: new Logger(clock.now),
+    });
+
+    const report = await executeBooking(planned, built);
+
+    // One early attempt, then the wait split at the pre-flight exactly as it
+    // would have been with no retry at all.
+    expect(clock.slept.slice(0, 2)).toEqual([1_500, 1_500]);
+    expect(offsets.slice(0, 2)).toEqual([-3_000, -1_500]);
+    expect(report.firstAttemptOffsetMs).toBe(0);
+  });
+
+  it('probes once more just before T-0 when the class was not listed at the start', async () => {
+    // The early resolve runs tens of seconds out, so it answers for a moment
+    // long past by the time the race begins — and leaves the socket to Elixia
+    // to lapse. A probe moments before firing catches a window that opened
+    // during the wait and reopens the connection, so the race is a bare POST
+    // rather than a schedule fetch and a handshake before the POST.
+    const order: string[] = [];
+    const clock = harness(RELEASE - 60_000);
+    const resolveClassId = vi
+      .fn<() => Promise<ResolvedClass>>()
+      .mockImplementationOnce(async () => {
+        order.push('resolve');
+        throw new ClassNotListedError('not listed yet');
+      })
+      .mockImplementationOnce(async () => {
+        order.push('resolve');
+        return { classId: 'class-77', durationMin: 55 };
+      });
+    const built = {
+      book: vi.fn(async (): Promise<AttemptOutcome> => {
+        order.push('book');
+        return { kind: 'booked', bookingId: '1' };
+      }),
+      resolveClassId,
+      tokens,
+      logger: new Logger(clock.now),
+      config,
+      dryRun: false,
+      now: clock.now,
+      sleep: async (ms: number) => {
+        order.push('sleep');
+        clock.advance(ms);
+      },
+      random: () => 0.5,
+    };
+
+    const report = await executeBooking(planned, built);
+
+    // The second resolve sits between two sleeps: it happened before T-0, not
+    // at it. One sleep short of that is the pre-fix behaviour.
+    expect(order).toEqual(['resolve', 'sleep', 'resolve', 'sleep', 'book']);
+    expect(resolveClassId).toHaveBeenCalledTimes(2);
+    expect(built.book).toHaveBeenCalledWith(tokens, 'class-77', expect.anything());
+    expect(report.firstAttemptOffsetMs).toBe(0);
+  });
+
+  it('sleeps to the probe and then on to T-0, splitting the wait rather than extending it', async () => {
+    const { clock, built } = deps({
+      resolveClassId: vi
+        .fn<() => Promise<ResolvedClass>>()
+        .mockRejectedValueOnce(new ClassNotListedError('not listed yet'))
+        .mockResolvedValue({ classId: 'class-77', durationMin: 55 }),
+    });
+
+    const report = await executeBooking(planned, built);
+
+    expect(clock.slept).toEqual([58_500, 1_500]);
+    expect(report.firstAttemptOffsetMs).toBe(0);
+  });
+
+  it('does not wait on the pre-flight probe, so a stalled one cannot delay the booking', async () => {
+    // Fire-and-forget is the point. A probe on a dead connection that the run
+    // *awaited* would push the booking request past the instant the whole
+    // design exists to hit.
+    const resolveClassId = vi
+      .fn<() => Promise<ResolvedClass>>()
+      .mockRejectedValueOnce(new ClassNotListedError('not listed yet'))
+      .mockImplementationOnce(() => new Promise<ResolvedClass>(() => {})) // never settles
+      .mockResolvedValue({ classId: 'class-77', durationMin: 55 });
+    const { clock, built } = deps({ resolveClassId });
+
+    const finished = await Promise.race([
+      executeBooking(planned, built).then((r) => r),
+      new Promise<'still waiting on the pre-flight probe'>((resolve) =>
+        setTimeout(() => resolve('still waiting on the pre-flight probe'), 500),
+      ),
+    ]);
+
+    expect(finished).not.toBe('still waiting on the pre-flight probe');
+    expect(clock.slept).toEqual([58_500, 1_500]);
+    expect(built.book).toHaveBeenCalledWith(tokens, 'class-77', expect.anything());
+    expect((finished as BookingReport).firstAttemptOffsetMs).toBe(0);
+  });
+
+  it('keeps the id the race resolved when a slow probe answers afterwards', async () => {
+    // Both can be in flight at once now. Whichever lands first is what the
+    // booking request used, so a straggler must not rewrite the run's record
+    // of which class was booked.
+    let answerProbe: (resolved: ResolvedClass) => void = () => {};
+    const resolveClassId = vi
+      .fn<() => Promise<ResolvedClass>>()
+      .mockRejectedValueOnce(new ClassNotListedError('not listed yet'))
+      .mockImplementationOnce(
+        () => new Promise<ResolvedClass>((resolve) => (answerProbe = resolve)),
+      )
+      .mockResolvedValue({ classId: 'raced', durationMin: 55 });
+    const { built } = deps({
+      resolveClassId,
+      book: vi.fn(async (): Promise<AttemptOutcome> => {
+        // The probe comes back mid-request, after the race already has an id.
+        answerProbe({ classId: 'straggler', durationMin: 30 });
+        await Promise.resolve();
+        return { kind: 'booked', bookingId: '1' };
+      }),
+    });
+
+    const report = await executeBooking(planned, built);
+
+    expect(built.book).toHaveBeenCalledWith(tokens, 'raced', expect.anything());
+    expect(report.durationMin).toBe(55);
+  });
+
   it('reports a real lookup failure as an error, not as "never opened in time"', async () => {
     // A mistyped centre never resolves however long you wait. Calling that
     // "too early" would send someone hunting a race that never happened.
@@ -264,6 +489,110 @@ describe('executeBooking', () => {
 
     expect(book).toHaveBeenCalledTimes(1);
     expect(report.outcome.kind).toBe('unauthorized');
+  });
+
+  it('records how the first attempt was refused, not only that it was retried', async () => {
+    // "4 tries" says something went wrong four times and nothing about what.
+    // The status on the first refusal is the whole diagnosis: a 4xx is the
+    // window not open yet, a 401 or 403 would be Elixia rejecting the session
+    // outright — and those want completely different fixes.
+    const outcomes: AttemptOutcome[] = [
+      { kind: 'error', detail: 'liian aikaisin', status: 400 },
+      { kind: 'waitlisted', position: 5 },
+    ];
+    const { built } = deps({ book: vi.fn(async () => outcomes.shift()!) });
+
+    const report = await executeBooking(planned, built);
+
+    expect(report.attempts).toBe(2);
+    expect(report.firstAttemptOutcome).toBe('error 400');
+  });
+
+  it('names a refusal that carried no status at all', async () => {
+    const outcomes: AttemptOutcome[] = [{ kind: 'too-early' }, { kind: 'booked' }];
+    const { built } = deps({ book: vi.fn(async () => outcomes.shift()!) });
+
+    expect((await executeBooking(planned, built)).firstAttemptOutcome).toBe('too-early');
+  });
+
+  it('leaves the first attempt unrecorded when it was also the last', async () => {
+    // Nothing to explain about a booking that went through first time, and a
+    // row repeating its own outcome is noise on the one line meant to carry
+    // the diagnosis.
+    const { built } = deps();
+
+    const report = await executeBooking(planned, built);
+
+    expect(report.attempts).toBe(1);
+    expect(report.firstAttemptOutcome).toBeNull();
+  });
+
+  it('records when the booking request went out, not just when the run woke up', async () => {
+    // These are different numbers and the gap between them is the whole race.
+    // `firstAttemptOffsetMs` is stamped before the class is even looked up, so
+    // a run that woke punctually and then spent a second fetching the
+    // schedule reports the same "1ms" as one that booked instantly. Two people
+    // on the same class can both read 1ms and still be a second apart.
+    const clock = harness(RELEASE - 60_000);
+    const built = {
+      book: vi.fn(async (): Promise<AttemptOutcome> => ({ kind: 'waitlisted', position: 5 })),
+      resolveClassId: vi.fn(async () => {
+        clock.advance(900); // the schedule fetch and parse, on the critical path
+        return { classId: 'class-77', durationMin: 55 };
+      }),
+      tokens,
+      logger: new Logger(clock.now),
+      config,
+      dryRun: false,
+      now: clock.now,
+      sleep: clock.sleep,
+      random: () => 0.5,
+    };
+
+    // The class only lists at the instant itself, so both the early resolve
+    // and the pre-flight probe come back empty and it is the resolve at T-0
+    // that costs the 900ms.
+    const unlisted = async (): Promise<ResolvedClass> => {
+      throw new ClassNotListedError('not listed yet');
+    };
+    built.resolveClassId.mockImplementationOnce(unlisted).mockImplementationOnce(unlisted);
+
+    const report = await executeBooking(planned, built);
+
+    expect(report.firstAttemptOffsetMs).toBe(0);
+    expect(report.bookRequestOffsetMs).toBe(900);
+  });
+
+  it('counts the request that won, not the first one attempted', async () => {
+    const outcomes: AttemptOutcome[] = [
+      { kind: 'too-early' },
+      { kind: 'waitlisted', position: 5 },
+    ];
+    const { clock, built } = deps({
+      book: vi.fn(async () => {
+        clock.advance(100);
+        return outcomes.shift()!;
+      }),
+    });
+
+    const report = await executeBooking(planned, built);
+
+    // First request at +0, the 100ms it takes, then the poll band's own first
+    // wait — 38ms at base 50 with random() = 0.5 — then the second request.
+    expect(report.firstAttemptOffsetMs).toBe(0);
+    expect(report.bookRequestOffsetMs).toBe(138);
+  });
+
+  it('reports no booking request when the class never resolved', async () => {
+    const { built } = deps({
+      resolveClassId: vi.fn(async () => {
+        throw new ClassNotListedError('not listed yet');
+      }),
+    });
+
+    const report = await executeBooking(planned, built);
+
+    expect(report.bookRequestOffsetMs).toBeNull();
   });
 
   it('logs every attempt with an offset from T-0', async () => {
@@ -371,76 +700,96 @@ describe('describeReport', () => {
     attempts: 1,
     exhausted: false,
     firstAttemptOffsetMs: 42,
+    bookRequestOffsetMs: 910,
+    firstAttemptOutcome: null,
     dryRun: false,
   };
 
-  it('names the class, date and timing on success', () => {
-    const text = describeReport({ ...base, outcome: { kind: 'booked' } });
-    expect(text).toContain('Bodypump');
-    expect(text).toContain('2026-08-18');
-    expect(text).toContain('+42ms');
+  const line = (outcome: AttemptOutcome, over: Partial<BookingReport> = {}): string =>
+    describeReport({ ...base, outcome, ...over });
+
+  // 2026-08-18 is a Tuesday. Spelled out here rather than derived, so the
+  // test cannot agree with a wrong implementation of the same arithmetic.
+  const WHEN = 'Tue 18 Aug at 9.00';
+
+  it('names the class, the centre and when it runs, in words', () => {
+    expect(line({ kind: 'booked' })).toBe(`✅ Booked Bodypump at tapiola on ${WHEN}`);
   });
 
-  it('marks a dry run so it cannot be mistaken for a real booking', () => {
-    const text = describeReport({ ...base, dryRun: true, outcome: { kind: 'booked' } });
-    expect(text).toContain('[DRY RUN]');
-  });
-
-  it('surfaces the detail of an auth failure', () => {
-    const text = describeReport({
-      ...base,
-      outcome: { kind: 'unauthorized', detail: 'HTTP 401 token expired' },
-    });
-    expect(text).toContain('HTTP 401 token expired');
-  });
-
-  it('shows a negative offset when the request went out early', () => {
-    const text = describeReport({
-      ...base,
-      firstAttemptOffsetMs: -300,
-      outcome: { kind: 'booked' },
-    });
-    expect(text).toContain('-300ms');
-  });
-
-  it('tells the user their waitlist spot in plain language, not jargon', () => {
-    const text = describeReport({ ...base, outcome: { kind: 'waitlisted', position: 7 } });
-    expect(text).toContain('number 7');
-    expect(text).toContain('waitlist');
-    expect(text).toContain('Bodypump');
-    // Spelled-out words instead of symbol shorthand.
-    expect(text).not.toContain('#');
-    expect(text).not.toContain('@');
-    // Timing is still there, but in plain language, not dev jargon.
-    expect(text).not.toContain('fired');
-    expect(text).not.toContain('T-0');
-    expect(text).not.toContain('requested');
-    expect(text).toContain('booked 42ms after booking opened');
-    // Date/time read as a sentence, not an ISO stamp: no year, dot for time.
-    expect(text).toContain('on Aug 18 at 09.00');
-    expect(text).not.toContain('2026');
-    expect(text).not.toContain('09:00');
+  it('gives a waitlist place its number', () => {
+    expect(line({ kind: 'waitlisted', position: 7 })).toBe(
+      `🕒 You're number 7 on the waitlist for Bodypump at tapiola on ${WHEN}`,
+    );
   });
 
   it('still names the class when Elixia reports no position for the waitlist', () => {
-    const text = describeReport({ ...base, outcome: { kind: 'waitlisted' } });
-    expect(text).toContain('waitlist');
-    expect(text).toContain('Bodypump');
-    expect(text).not.toMatch(/#undefined/);
-    expect(text).not.toContain('@');
-    expect(text).toContain('booked 42ms after booking opened');
-    expect(text).toContain('on Aug 18 at 09.00');
-    expect(text).not.toContain('2026');
+    expect(line({ kind: 'waitlisted' })).toBe(
+      `🕒 You're on the waitlist for Bodypump at tapiola on ${WHEN}`,
+    );
   });
 
-  it('describes an early waitlist request in plain language', () => {
-    const text = describeReport({
-      ...base,
-      firstAttemptOffsetMs: -300,
-      outcome: { kind: 'waitlisted', position: 2 },
-    });
-    expect(text).toContain('booked 300ms before booking opened');
-    expect(text).not.toContain('-300');
-    expect(text).not.toContain('requested');
+  it('explains an overlapping booking without repeating itself', () => {
+    // Elixia cannot tell "you already booked this" apart from "you hold a
+    // different class at the same time", so neither can this message. It used
+    // to print the reason twice — once in words, once as the raw detail.
+    expect(line({ kind: 'already-booked', detail: 'overlapping booking' })).toBe(
+      `ℹ️ Didn't book Bodypump at tapiola on ${WHEN} — you already have a booking at that time.`,
+    );
+  });
+
+  it('tells the user what to do about a rejected login, not what Elixia said', () => {
+    const text = line({ kind: 'unauthorized', detail: 'HTTP 401 token expired' });
+    expect(text).toContain('Re-link your Elixia account');
+    expect(text).not.toContain('HTTP 401');
+  });
+
+  it('says a class never opened without counting the tries at the reader', () => {
+    const text = line({ kind: 'too-early' }, { attempts: 12, bookRequestOffsetMs: null });
+    expect(text).toContain('never opened for booking');
+    expect(text).not.toContain('12');
+  });
+
+  it('keeps the provider\'s own error text out of a failure message', () => {
+    const text = line({ kind: 'error', detail: 'could not look up the class: fetch failed' });
+    expect(text).toContain('Something went wrong');
+    expect(text).not.toContain('fetch failed');
+  });
+
+  it('marks a dry run so it cannot be mistaken for a real booking', () => {
+    expect(line({ kind: 'booked' }, { dryRun: true })).toContain('[DRY RUN]');
+  });
+
+  it('puts what to do next on its own line, so it can be an email subject', () => {
+    // `subjectFor` takes the first line. A message whose advice is a second
+    // sentence on the same line makes a subject that is either too long or
+    // truncated mid-word; on its own line the headline stands alone and the
+    // email body still carries both.
+    const text = line({ kind: 'unauthorized', detail: 'HTTP 401' });
+    const [headline, advice] = text.split('\n');
+    expect(headline!.length).toBeLessThanOrEqual(120);
+    expect(headline).toContain("wasn't booked");
+    expect(advice).toContain('Re-link');
+  });
+
+  it.each([
+    ['booked', { kind: 'booked' } as AttemptOutcome],
+    ['waitlisted', { kind: 'waitlisted', position: 5 } as AttemptOutcome],
+    ['already-booked', { kind: 'already-booked', detail: 'overlap' } as AttemptOutcome],
+    ['unauthorized', { kind: 'unauthorized', detail: 'HTTP 401' } as AttemptOutcome],
+    ['too-early', { kind: 'too-early' } as AttemptOutcome],
+    ['rate-limited', { kind: 'rate-limited' } as AttemptOutcome],
+    ['error', { kind: 'error', detail: 'fetch failed' } as AttemptOutcome],
+  ])('says nothing technical in the %s message', (_name, outcome) => {
+    // The split this depends on: every millisecond, offset, attempt count and
+    // raw provider string belongs on the Activity page, not in a message
+    // someone reads on their phone. One escape and the whole notification
+    // reads as machine output again.
+    const text = line(outcome);
+    expect(text).not.toMatch(/\d+\s?ms\b/);
+    expect(text).not.toMatch(/T-0/);
+    expect(text).not.toMatch(/HTTP/);
+    expect(text).not.toMatch(/\d{4}-\d{2}-\d{2}/); // an ISO date
+    expect(text).not.toMatch(/@/);
+    expect(text).not.toMatch(/attempts?\b/);
   });
 });

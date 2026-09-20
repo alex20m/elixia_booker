@@ -1876,6 +1876,8 @@ async function bookEntry(
         ...('detail' in report.outcome ? { detail: report.outcome.detail } : {}),
         attempts: report.attempts,
         firstAttemptOffsetMs: report.firstAttemptOffsetMs,
+        bookRequestOffsetMs: report.bookRequestOffsetMs,
+        firstAttemptOutcome: report.firstAttemptOutcome,
         dryRun: report.dryRun,
         center: subscription.center,
         ...(report.durationMin !== undefined ? { durationMin: report.durationMin } : {}),
