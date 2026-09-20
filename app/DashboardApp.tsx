@@ -470,6 +470,12 @@ function ActivityTab({ view }: { view: DashboardView }) {
                 : h.bookRequestOffsetMs === null || h.bookRequestOffsetMs === undefined
                   ? ` · woke ${signed(h.firstAttemptOffsetMs)} from T-0`
                   : ` · woke ${signed(h.firstAttemptOffsetMs)}, sent ${signed(h.bookRequestOffsetMs)} from T-0`;
+            // Shown even when it is one. Left out below a threshold, a reader
+            // cannot tell "it went through first time" from "this build does
+            // not report it" — and one try versus several is the difference
+            // between a slow lookup and rounds spent waiting for the class to
+            // be listed, which is the first fork in diagnosing a late booking.
+            const tries = ` · ${h.attempts} ${h.attempts === 1 ? 'try' : 'tries'}`;
             return (
               <div className="row" key={`${h.subscriptionId ?? 'gone'}-${h.atMs}-${i}`}>
                 <div className="row-main">
@@ -479,6 +485,7 @@ function ActivityTab({ view }: { view: DashboardView }) {
                   <div className="row-meta">
                     {new Date(h.atMs).toLocaleString()}
                     {h.dryRun ? ' · dry run' : ''}
+                    {tries}
                     {timing}
                     {h.detail ? ` · ${h.detail}` : ''}
                   </div>
