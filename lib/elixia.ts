@@ -379,27 +379,28 @@ export async function performElixiaLogin(
 //     hold zero classes — so a class out past it is not merely unbookable but
 //     *invisible*, which is what `ClassNotListedError` represents.
 //
-// **Open question, and it decides how fast a booking can possibly be.** What
-// `disabled` actually tracks is unverified: a publication horizon Elixia
-// applies to everyone, or the booking window of the account whose cookie made
-// the request. The two comments in this file used to assert one each, in the
-// same commit, so neither is evidence.
+// **That horizon is Elixia's, not your membership's**, and the difference
+// shapes the whole of lib/booking.ts. A Basic member — 7-day booking window —
+// sees about 14 days of classes, so a class is listed for roughly a week
+// before they may book it. The class id therefore exists well before the
+// release instant, which is why the resolve at the top of a booking run is
+// expected to *succeed* and leave T-0 holding nothing but the POST.
 //
-// It matters because the whole of lib/booking.ts is built to resolve the class
-// id *before* the release instant and leave only the POST for T-0:
+// Two consequences, both easy to get backwards:
 //
-//   * Site-wide horizon (~14 days to everyone) — a 7-day member's class is
-//     listed about a week ahead, the resolve at the start of the run succeeds,
-//     and T-0 already costs one request. Nothing left to optimise.
-//   * Per-account window — the class materialises at T-0 exactly, every resolve
-//     before it fails by design, and every booking pays a schedule fetch and
-//     parse on the critical path before it can POST.
+//   * A failure to resolve is then genuinely unusual — a renamed class, a
+//     withdrawn one, a centre that cannot be read — rather than the ordinary
+//     "window has not opened" it was once assumed to be.
+//   * The "not open yet" rejection moves to the *booking* call, because the
+//     POST is now the first thing that happens at T-0. Elixia publishes no
+//     "too early" code (docs/api.md §5), so it arrives as a plain 4xx. See
+//     `isNotThereYet` in lib/retry.ts for why that must not be treated as
+//     server pushback.
 //
-// One real booking settles it, and needs no instrumentation beyond what is
-// already recorded: `bookRequestOffsetMs - firstAttemptOffsetMs` (the Activity
-// tab prints it as "Nms finding the class") is ~0 in the first case and the
-// cost of a page read in the second. Until someone reads that number off a
-// live booking, assume the pessimistic case — which is what the code does.
+// Known the hard way: docs/api.md §4 asserted the opposite for months, and so
+// did one of the two comments in this file. The original capture was taken on
+// a 14-day account, where the publication horizon and the booking window
+// coincide exactly and nothing tells them apart.
 
 const DATA_PROPS_RE = /<script data-props="true" type="application\/json">([\s\S]*?)<\/script>/;
 

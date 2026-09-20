@@ -104,6 +104,37 @@ function retryAfterOf(outcome: AttemptOutcome): number | undefined {
 }
 
 /**
+ * Whether this failure means "the thing is not there yet" rather than "the
+ * other side wants to be left alone".
+ *
+ * `too-early` is the obvious case. The subtle one is a 4xx from the booking
+ * call itself: once the class can be resolved before the release instant, the
+ * POST is the *first* thing that happens at T-0, so a window that has not
+ * quite opened is rejected as a booking failure rather than showing up as a
+ * lookup that found nothing. Elixia publishes no "too early" code at all
+ * (docs/api.md §5), so that rejection lands in the generic 4xx bucket, and
+ * left on the exponential band the wait for a window about to open grows to
+ * `maxDelayMs`.
+ *
+ * Kept to 4xx deliberately. A 5xx is the server in trouble, and probing a
+ * struggling server every second is how it stays in trouble; an error with no
+ * status never reached the server at all, so nothing about it says the
+ * resource is merely early. 429 is its own outcome kind and never arrives
+ * here, which matters — a rate limit is the one thing that must always back
+ * off.
+ *
+ * This is a judgement about a status code nobody has observed from a
+ * too-early booking, because the site cannot be reached from a test run. It
+ * is the safe side of the bet either way: guessing wrong costs roughly forty
+ * bounded requests instead of a dozen, and the outcome is the same failure.
+ */
+function isNotThereYet(outcome: AttemptOutcome): boolean {
+  if (outcome.kind === 'too-early') return true;
+  if (outcome.kind !== 'error' || outcome.status === undefined) return false;
+  return outcome.status >= 400 && outcome.status < 500;
+}
+
+/**
  * Returned by `runBounded` when its own timer, not the attempt, won the race.
  *
  * Kept distinct from any `AttemptOutcome`: the attempt was cut off with nothing
@@ -196,11 +227,11 @@ export async function retryWithBackoff(
       return { outcome, attempts, exhausted: false };
     }
 
-    // A `too-early` gets the tight probe cap; everything else — a rate limit,
-    // a transport error — is a server or a network asking to be left alone,
-    // and keeps the full exponential backoff.
+    // "Not there yet" gets the tight probe cap; everything else — a rate
+    // limit, a server error, a request that never landed — is something
+    // asking to be left alone, and keeps the full exponential backoff.
     const maxDelayMs =
-      outcome.kind === 'too-early' && options.pollMaxDelayMs !== undefined
+      isNotThereYet(outcome) && options.pollMaxDelayMs !== undefined
         ? Math.min(options.pollMaxDelayMs, options.maxDelayMs)
         : options.maxDelayMs;
     const delay = backoffDelayMs(
