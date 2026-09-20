@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { describeReport, executeBooking, isSuccess } from '../lib/booking';
+import type { BookingReport } from '../lib/booking';
 import { Logger } from '../lib/logger';
 import { ClassNotListedError } from '../lib/types';
 import type {
@@ -19,6 +20,8 @@ const config: BookingConfig = {
   retryBudgetMs: 30_000,
   retryBaseDelayMs: 250,
   retryMaxDelayMs: 5_000,
+  listingPollMaxDelayMs: 1_000,
+  preflightMs: 1_500,
   claimHorizonMs: 90_000,
   claimGraceMs: 120_000,
   classes: [],
@@ -202,6 +205,118 @@ describe('executeBooking', () => {
     expect(built.book).not.toHaveBeenCalled();
     expect(report.outcome.kind).toBe('too-early');
     expect(report.attempts).toBeGreaterThan(1);
+  });
+
+  it('probes once more just before T-0 when the class was not listed at the start', async () => {
+    // The early resolve runs tens of seconds out, so it answers for a moment
+    // long past by the time the race begins — and leaves the socket to Elixia
+    // to lapse. A probe moments before firing catches a window that opened
+    // during the wait and reopens the connection, so the race is a bare POST
+    // rather than a schedule fetch and a handshake before the POST.
+    const order: string[] = [];
+    const clock = harness(RELEASE - 60_000);
+    const resolveClassId = vi
+      .fn<() => Promise<ResolvedClass>>()
+      .mockImplementationOnce(async () => {
+        order.push('resolve');
+        throw new ClassNotListedError('not listed yet');
+      })
+      .mockImplementationOnce(async () => {
+        order.push('resolve');
+        return { classId: 'class-77', durationMin: 55 };
+      });
+    const built = {
+      book: vi.fn(async (): Promise<AttemptOutcome> => {
+        order.push('book');
+        return { kind: 'booked', bookingId: '1' };
+      }),
+      resolveClassId,
+      tokens,
+      logger: new Logger(clock.now),
+      config,
+      dryRun: false,
+      now: clock.now,
+      sleep: async (ms: number) => {
+        order.push('sleep');
+        clock.advance(ms);
+      },
+      random: () => 0.5,
+    };
+
+    const report = await executeBooking(planned, built);
+
+    // The second resolve sits between two sleeps: it happened before T-0, not
+    // at it. One sleep short of that is the pre-fix behaviour.
+    expect(order).toEqual(['resolve', 'sleep', 'resolve', 'sleep', 'book']);
+    expect(resolveClassId).toHaveBeenCalledTimes(2);
+    expect(built.book).toHaveBeenCalledWith(tokens, 'class-77', expect.anything());
+    expect(report.firstAttemptOffsetMs).toBe(0);
+  });
+
+  it('sleeps to the probe and then on to T-0, splitting the wait rather than extending it', async () => {
+    const { clock, built } = deps({
+      resolveClassId: vi
+        .fn<() => Promise<ResolvedClass>>()
+        .mockRejectedValueOnce(new ClassNotListedError('not listed yet'))
+        .mockResolvedValue({ classId: 'class-77', durationMin: 55 }),
+    });
+
+    const report = await executeBooking(planned, built);
+
+    expect(clock.slept).toEqual([58_500, 1_500]);
+    expect(report.firstAttemptOffsetMs).toBe(0);
+  });
+
+  it('does not wait on the pre-flight probe, so a stalled one cannot delay the booking', async () => {
+    // Fire-and-forget is the point. A probe on a dead connection that the run
+    // *awaited* would push the booking request past the instant the whole
+    // design exists to hit.
+    const resolveClassId = vi
+      .fn<() => Promise<ResolvedClass>>()
+      .mockRejectedValueOnce(new ClassNotListedError('not listed yet'))
+      .mockImplementationOnce(() => new Promise<ResolvedClass>(() => {})) // never settles
+      .mockResolvedValue({ classId: 'class-77', durationMin: 55 });
+    const { clock, built } = deps({ resolveClassId });
+
+    const finished = await Promise.race([
+      executeBooking(planned, built).then((r) => r),
+      new Promise<'still waiting on the pre-flight probe'>((resolve) =>
+        setTimeout(() => resolve('still waiting on the pre-flight probe'), 500),
+      ),
+    ]);
+
+    expect(finished).not.toBe('still waiting on the pre-flight probe');
+    expect(clock.slept).toEqual([58_500, 1_500]);
+    expect(built.book).toHaveBeenCalledWith(tokens, 'class-77', expect.anything());
+    expect((finished as BookingReport).firstAttemptOffsetMs).toBe(0);
+  });
+
+  it('keeps the id the race resolved when a slow probe answers afterwards', async () => {
+    // Both can be in flight at once now. Whichever lands first is what the
+    // booking request used, so a straggler must not rewrite the run's record
+    // of which class was booked.
+    let answerProbe: (resolved: ResolvedClass) => void = () => {};
+    const resolveClassId = vi
+      .fn<() => Promise<ResolvedClass>>()
+      .mockRejectedValueOnce(new ClassNotListedError('not listed yet'))
+      .mockImplementationOnce(
+        () => new Promise<ResolvedClass>((resolve) => (answerProbe = resolve)),
+      )
+      .mockResolvedValue({ classId: 'raced', durationMin: 55 });
+    const { built } = deps({
+      resolveClassId,
+      book: vi.fn(async (): Promise<AttemptOutcome> => {
+        // The probe comes back mid-request, after the race already has an id.
+        answerProbe({ classId: 'straggler', durationMin: 30 });
+        await Promise.resolve();
+        return { kind: 'booked', bookingId: '1' };
+      }),
+    });
+
+    const report = await executeBooking(planned, built);
+
+    expect(built.book).toHaveBeenCalledWith(tokens, 'raced', expect.anything());
+    expect(report.durationMin).toBe(55);
   });
 
   it('reports a real lookup failure as an error, not as "never opened in time"', async () => {

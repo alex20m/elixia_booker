@@ -264,6 +264,63 @@ describe('retryWithBackoff', () => {
     expect(onWait).toHaveBeenCalledWith(1, 250);
   });
 
+  it('keeps probing at the poll cap while the class is merely not listed yet', async () => {
+    // The gap between probes is the lateness someone pays once the class
+    // finally appears — and, across two people waiting on the same release,
+    // the spread between them. Exponential growth alone took that gap to
+    // maxDelayMs (5s); the poll cap holds it at 1s however long the wait runs.
+    const clock = fakeClock();
+    const waits: number[] = [];
+
+    await retryWithBackoff(async () => ({ kind: 'too-early' }), {
+      ...opts,
+      ...clock,
+      pollMaxDelayMs: 1_000,
+      random: () => 1, // no jitter discount, so these are the worst-case gaps
+      onWait: (_attempt, delayMs) => waits.push(delayMs),
+    });
+
+    expect(waits.slice(0, 6)).toEqual([250, 500, 1_000, 1_000, 1_000, 1_000]);
+    expect(Math.max(...waits)).toBe(1_000);
+  });
+
+  it('still backs off exponentially from a rate limit, which is the server asking for room', async () => {
+    // The tight cap is only right for "it is not there yet". A server pushing
+    // back wants to be asked *less* often, and capping that at a second would
+    // turn polite retrying into hammering.
+    const clock = fakeClock();
+    const waits: number[] = [];
+
+    await retryWithBackoff(async () => ({ kind: 'rate-limited' }), {
+      ...opts,
+      ...clock,
+      pollMaxDelayMs: 1_000,
+      random: () => 1,
+      onWait: (_attempt, delayMs) => waits.push(delayMs),
+    });
+
+    expect(waits.slice(0, 6)).toEqual([250, 500, 1_000, 2_000, 4_000, 5_000]);
+  });
+
+  it('never lets the poll cap stretch a wait beyond maxDelayMs', async () => {
+    // pollMaxDelayMs exists to shorten a wait, never to lengthen one, so a
+    // configuration with the two the wrong way round must not make probing
+    // *less* frequent than ordinary backoff already allows.
+    const clock = fakeClock();
+    const waits: number[] = [];
+
+    await retryWithBackoff(async () => ({ kind: 'too-early' }), {
+      ...opts,
+      maxDelayMs: 400,
+      ...clock,
+      pollMaxDelayMs: 9_000,
+      random: () => 1,
+      onWait: (_attempt, delayMs) => waits.push(delayMs),
+    });
+
+    expect(Math.max(...waits)).toBe(400);
+  });
+
   it('honours Retry-After from a rate-limit response', async () => {
     const clock = fakeClock();
     const sleep = vi.fn(clock.sleep);

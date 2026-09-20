@@ -15,6 +15,8 @@ const baseConfig: BookingConfig = {
   retryBudgetMs: 30_000,
   retryBaseDelayMs: 250,
   retryMaxDelayMs: 5_000,
+  listingPollMaxDelayMs: 1_000,
+  preflightMs: 1_500,
   claimHorizonMs: 90_000,
   claimGraceMs: 120_000,
   classes: [],

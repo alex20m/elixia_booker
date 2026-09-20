@@ -17,6 +17,26 @@ export const DEFAULT_TIMINGS = {
   retryBaseDelayMs: 250,
   retryMaxDelayMs: 5_000,
   /**
+   * The probe cadence while a class is merely not listed yet.
+   *
+   * One second is a deliberate trade. The worst case it allows is a booking
+   * that goes out a second after Elixia publishes the class; the exponential
+   * grid alone allowed five, and — because the delay keeps growing — allowed
+   * two people waiting on the same class to reach it five seconds apart. The
+   * cost is request volume in the one case where the class never appears at
+   * all: roughly forty page reads spread across the 30s budget rather than a
+   * dozen, which is still well under one request per second and below what a
+   * person refreshing the page by hand produces. In the normal case the class
+   * appears within a probe or two and the volume is unchanged.
+   */
+  listingPollMaxDelayMs: 1_000,
+  /**
+   * 1.5s before firing: long enough that a probe on a slow connection can
+   * still land before T-0, short enough that the connection it opens is
+   * still alive when the booking request needs it.
+   */
+  preflightMs: 1_500,
+  /**
    * How far ahead of a release the cron will claim it. Comfortably wider than
    * the one-minute tick, so a release cannot fall between two runs unclaimed.
    */

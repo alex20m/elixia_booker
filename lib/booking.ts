@@ -5,6 +5,15 @@
  * refresh, resolving the class id — happens *before* the sleep, so the only
  * thing standing between the release instant and the POST is one network hop.
  * Any work left until after the sleep is time spent losing the race.
+ *
+ * "Early" is two moments, not one. A class is absent from the schedule until
+ * its window opens (docs/api.md §4), so the resolve at the top of the run
+ * usually finds nothing; a second, unawaited probe fires a moment before T-0,
+ * where it can both catch a window that opened during the wait and warm a
+ * connection that has long since been closed for idleness. Whatever is still
+ * unresolved when the race starts is resolved inside it — and that probing is
+ * paced tightly on purpose, because the gap between two probes is the lateness
+ * everyone pays once the class does appear. See `listingPollMaxDelayMs`.
  */
 
 import { retryWithBackoff, defaultSleep, type RetryResult } from './retry';
@@ -108,9 +117,24 @@ export async function executeBooking(
   // an answer nobody has.
   let classId: string | null = null;
   let durationMin: number | undefined;
+
+  /**
+   * Take a resolution, unless one is already in hand, and report the id in
+   * force either way.
+   *
+   * The guard matters now that a resolution can arrive from a probe running
+   * alongside the race: whichever lands first is the one the booking request
+   * uses, and a straggler must not swap the id out from under it.
+   */
+  const adopt = (resolved: ResolvedClass, when: string): string => {
+    if (classId !== null) return classId;
+    ({ classId, durationMin } = resolved);
+    logger.log('class.resolved', { classId, durationMin, when });
+    return resolved.classId;
+  };
+
   try {
-    ({ classId, durationMin } = await deps.resolveClassId(planned));
-    logger.log('class.resolved', { classId, durationMin, when: 'before-sleep' });
+    void adopt(await deps.resolveClassId(planned), 'before-sleep');
   } catch (err) {
     logger.log('class.unresolved', {
       when: 'before-sleep',
@@ -119,6 +143,49 @@ export async function executeBooking(
   }
 
   const fireAt = planned.releaseEpochMs - config.leadMs;
+
+  // --- One last look, moments before firing. -------------------------------
+  //
+  // Only when the early attempt came back empty, which is the normal case: a
+  // class is absent from the schedule until its window opens. Two things are
+  // being bought here, and both of them come off the critical path.
+  //
+  // Elixia publishes no release time at all (docs/api.md §4), so `fireAt` is
+  // computed, not read — a class whose window opened during the wait is found
+  // here rather than costing a full schedule fetch at T-0, which turns the
+  // race into a bare POST. And by this point the run has been idle for tens
+  // of seconds, comfortably longer than an HTTP keep-alive, so the socket to
+  // Elixia is gone; opening it now means the booking request is not also
+  // paying for a TCP and TLS handshake at the one instant that matters.
+  //
+  // Deliberately *not* awaited. A probe that hangs must cost the race
+  // nothing: the whole point of doing this early is that T-0 arrives on time
+  // regardless, and an awaited probe on a stalled connection would push the
+  // booking request past the instant it exists to hit. It is fire-and-forget
+  // with its rejection handled, and whatever it finds is picked up by
+  // `adopt`, or not, before the attempt below reads `classId`.
+  const preflightAt = fireAt - config.preflightMs;
+  if (classId === null && preflightAt > now()) {
+    const preflightWaitMs = preflightAt - now();
+    logger.log('sleep.begin', {
+      waitMs: preflightWaitMs,
+      fireAt: new Date(preflightAt).toISOString(),
+      reason: 'preflight',
+    });
+    await sleep(preflightWaitMs);
+
+    logger.log('class.preflight');
+    void deps
+      .resolveClassId(planned)
+      .then((resolved) => void adopt(resolved, 'preflight'))
+      .catch((err: unknown) =>
+        logger.log('class.unresolved', {
+          when: 'preflight',
+          reason: (err as Error).message,
+        }),
+      );
+  }
+
   const waitMs = fireAt - now();
   if (waitMs > 0) {
     logger.log('sleep.begin', { waitMs, fireAt: new Date(fireAt).toISOString() });
@@ -141,10 +208,13 @@ export async function executeBooking(
     // unknown centre, a changed page, a dead connection) is reported as the
     // error it is: retrying those for 30s and then blaming the timing would
     // send someone hunting a race that never happened.
-    if (classId === null) {
+    // Read once: the preflight probe may still be in flight and can fill
+    // `classId` mid-attempt, and an attempt that resolved its own id must
+    // book *that* id rather than re-reading a field that changed underneath.
+    let id = classId;
+    if (id === null) {
       try {
-        ({ classId, durationMin } = await deps.resolveClassId(planned));
-        logger.log('class.resolved', { classId, durationMin, when: 'at-release' });
+        id = adopt(await deps.resolveClassId(planned), 'at-release');
       } catch (err) {
         const reason = (err as Error).message;
         logger.log('class.unresolved', { when: 'at-release', reason });
@@ -155,11 +225,11 @@ export async function executeBooking(
     }
 
     if (deps.dryRun) {
-      logger.log('attempt.dry-run', { classId });
+      logger.log('attempt.dry-run', { classId: id });
       return { kind: 'booked', bookingId: 'DRY-RUN' };
     }
 
-    return deps.book(deps.tokens, classId, signal);
+    return deps.book(deps.tokens, id, signal);
   };
 
   // Whatever is left after the sleep, never more than the configured budget.
@@ -176,6 +246,7 @@ export async function executeBooking(
     budgetMs,
     baseDelayMs: config.retryBaseDelayMs,
     maxDelayMs: config.retryMaxDelayMs,
+    pollMaxDelayMs: config.listingPollMaxDelayMs,
     now,
     sleep,
     ...(deps.random ? { random: deps.random } : {}),

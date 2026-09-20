@@ -11,6 +11,14 @@
  * Backoff is exponential with jitter. The jitter is not decoration: a bot that
  * retries on an exact schedule after a shared T-0 is trivially identifiable,
  * and it also means every retry lands at the moment everyone else's does.
+ *
+ * There are two bands, not one, because "wait" answers two different
+ * questions. A rate limit or a transport error is the other side asking for
+ * room, and the right response is to ask progressively less often. A
+ * `too-early` is the thing simply not existing yet, and there the only thing
+ * that matters is noticing promptly when it does — so that band is capped
+ * tight by `pollMaxDelayMs`. See its doc comment for why conflating the two
+ * costs a shared deadline seconds.
  */
 
 import { isRetryable, type AttemptOutcome } from './types';
@@ -20,6 +28,22 @@ export interface RetryOptions {
   budgetMs: number;
   baseDelayMs: number;
   maxDelayMs: number;
+  /**
+   * Cap on the wait after a `too-early` outcome, when it should be tighter
+   * than `maxDelayMs`.
+   *
+   * `too-early` is not the server pushing back — it is the resource not
+   * existing yet (for this app, a class Elixia has not published). Backing
+   * off exponentially from it is answering the wrong question: the longer the
+   * thing takes to appear, the *less* often we look for it, so the lateness
+   * when it finally appears grows without bound up to `maxDelayMs`. Worse for
+   * a shared deadline, the growth is multiplicative and independently
+   * jittered, so two clients waiting on the same instant drift onto different
+   * probe schedules and reach it seconds apart.
+   *
+   * Left undefined, `maxDelayMs` applies to every retryable outcome as before.
+   */
+  pollMaxDelayMs?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   /** Injectable for deterministic tests. Must return [0, 1). */
@@ -172,7 +196,19 @@ export async function retryWithBackoff(
       return { outcome, attempts, exhausted: false };
     }
 
-    const delay = backoffDelayMs(attempts, options, retryAfterOf(outcome), random);
+    // A `too-early` gets the tight probe cap; everything else — a rate limit,
+    // a transport error — is a server or a network asking to be left alone,
+    // and keeps the full exponential backoff.
+    const maxDelayMs =
+      outcome.kind === 'too-early' && options.pollMaxDelayMs !== undefined
+        ? Math.min(options.pollMaxDelayMs, options.maxDelayMs)
+        : options.maxDelayMs;
+    const delay = backoffDelayMs(
+      attempts,
+      { baseDelayMs: options.baseDelayMs, maxDelayMs },
+      retryAfterOf(outcome),
+      random,
+    );
     if (now() + delay >= deadline) {
       return { outcome, attempts, exhausted: true };
     }
