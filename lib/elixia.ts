@@ -793,16 +793,20 @@ export function classifyBookingResponse(
   const detail = message ?? `HTTP ${status}: ${truncate(bodyText, 300)}`;
 
   switch (status) {
-    // "You must sign in to make a booking" — the session has lapsed.
+    // "You must sign in to make a booking" — the session has lapsed. Genuinely
+    // permanent inside one run: unlike 403 there is nothing ambiguous about it.
     case 401:
-      return { kind: 'unauthorized', detail };
-    // "Booking has been blocked." A membership problem, not an expired
-    // session: permanent, and no amount of re-authenticating fixes it. It
-    // shares the non-retryable `unauthorized` outcome because that is the only
-    // one with the right retry semantics, and the server's own message is
-    // carried through so the notification says which of the two it was.
+      return { kind: 'unauthorized', detail, status };
+    // "Varausten teko on estetty." Ambiguous, and the status is carried out
+    // so the caller can resolve it. Elixia returns exactly this for a booking
+    // it will never accept *and* for one merely posted before its window
+    // opened (verified 2026-09-21 — docs/api.md §5), with no difference in
+    // status or message. Classified permanent here because that is the safe
+    // default for a thin translation layer; lib/booking.ts, which knows how
+    // far from the release instant the attempt was, is what re-reads it as
+    // "not open yet" while that is still plausible.
     case 403:
-      return { kind: 'unauthorized', detail };
+      return { kind: 'unauthorized', detail, status };
     // "You have an overlapping reservation." Covers both booking the same
     // class twice and holding a different class at the same time — the API
     // does not distinguish them, so neither can this. Permanent either way.

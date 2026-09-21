@@ -22,6 +22,7 @@ const config: BookingConfig = {
   retryMaxDelayMs: 5_000,
   listingPollMaxDelayMs: 1_000,
   listingPollBaseDelayMs: 50,
+  forbiddenGraceMs: 10_000,
   preflightMs: 1_500,
   preResolveAttempts: 3,
   preResolveRetryMs: 2_000,
@@ -465,6 +466,67 @@ describe('executeBooking', () => {
 
     expect(book).toHaveBeenCalledTimes(1);
     expect(report.outcome).toEqual({ kind: 'waitlisted', position: 2 });
+  });
+
+  it('retries a 403 fired a moment early, because that is what "too early" looks like', async () => {
+    // Observed 2026-09-21: posting a class beyond the booking window returns
+    // 403 with "Varausten teko on estetty." — the same status and the same
+    // message as a genuinely blocked membership. Taking it at face value
+    // abandons the booking on the first attempt, a few milliseconds of clock
+    // disagreement away from succeeding.
+    const outcomes: AttemptOutcome[] = [
+      { kind: 'unauthorized', detail: 'Varausten teko on estetty.', status: 403 },
+      { kind: 'waitlisted', position: 3 },
+    ];
+    const { built } = deps({ book: vi.fn(async () => outcomes.shift()!) });
+
+    const report = await executeBooking(planned, built);
+
+    expect(report.outcome).toEqual({ kind: 'waitlisted', position: 3 });
+    expect(report.attempts).toBe(2);
+    expect(report.firstAttemptOutcome).toBe('error 403');
+  });
+
+  it('gives up on a 403 that outlives the grace, and still calls it a blocked account', async () => {
+    // The retry *is* the discriminator: a window that has not opened clears
+    // within moments, a blocked membership never does. So the run must end on
+    // the permanent reading, or the user is told "something went wrong" about
+    // an account that genuinely needs attention.
+    const book = vi.fn(
+      async (): Promise<AttemptOutcome> => ({
+        kind: 'unauthorized',
+        detail: 'Varausten teko on estetty.',
+        status: 403,
+      }),
+    );
+    const { built } = deps({ book });
+
+    const report = await executeBooking(planned, built);
+
+    expect(report.outcome.kind).toBe('unauthorized');
+    expect(report.exhausted).toBe(false);
+    // Bounded: the grace is 10s of a 30s budget, so it stops well short of
+    // spending the lot on an account that will never book.
+    expect(report.attempts).toBeLessThan(25);
+    expect(report.firstAttemptOutcome).toBe('error 403');
+  });
+
+  it('never retries a 401, which re-linking really does fix', async () => {
+    // Only 403 is ambiguous. A lapsed session is permanent inside this run
+    // however close to the instant it arrives.
+    const book = vi.fn(
+      async (): Promise<AttemptOutcome> => ({
+        kind: 'unauthorized',
+        detail: 'sign in to make a booking',
+        status: 401,
+      }),
+    );
+    const { built } = deps({ book });
+
+    const report = await executeBooking(planned, built);
+
+    expect(report.outcome.kind).toBe('unauthorized');
+    expect(report.attempts).toBe(1);
   });
 
   it('stops on an overlapping booking instead of retrying it', async () => {

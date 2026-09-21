@@ -48,6 +48,16 @@ export const DEFAULT_TIMINGS = {
    */
   listingPollBaseDelayMs: 50,
   /**
+   * Ten seconds, out of a 30s budget.
+   *
+   * Generous against clock disagreement between this function and Elixia,
+   * while leaving most of the budget for the permanent reading to assert
+   * itself — a blocked account costs about fifteen bounded probes and then
+   * stops with the right message, rather than spending the whole budget.
+   * Anything that still 403s ten seconds after the instant is not clock skew.
+   */
+  forbiddenGraceMs: 10_000,
+  /**
    * Three tries at resolving the class before the wait, two seconds apart.
    *
    * Bounded rather than continuous because only transient failures are

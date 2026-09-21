@@ -17,6 +17,7 @@ const baseConfig: BookingConfig = {
   retryMaxDelayMs: 5_000,
   listingPollMaxDelayMs: 1_000,
   listingPollBaseDelayMs: 50,
+  forbiddenGraceMs: 10_000,
   preflightMs: 1_500,
   preResolveAttempts: 3,
   preResolveRetryMs: 2_000,
