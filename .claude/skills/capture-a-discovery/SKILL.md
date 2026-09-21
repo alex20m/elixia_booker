@@ -159,6 +159,18 @@ specifically:
 - **Name the wrong path you took**, briefly, when the wrong path is the
   attractive one. "Pinning v7 from memory typechecks as an unknown property" is
   worth a sentence, because that is the mistake the reader is about to make.
+- **Never record an absence your sample could not have produced.** "No such
+  response exists", "that field is never set", "this error cannot happen" — the
+  strongest-sounding lines in a write-up are usually the ones nothing actually
+  tested. A capture only rules a case out if the capture could have *reached*
+  it, and the way this goes wrong is compound: a second, unrelated mistake in
+  the same document removes the path to the case, so its absence reads as
+  proof. Both errors then hold each other up and neither ever surfaces as a
+  contradiction, because nothing in the system disagrees with itself. Before
+  writing down that something does not exist, say how you would have made it
+  happen. If you cannot answer, that is the finding — write "unobserved, and
+  here is what would produce it" instead, which is a sentence someone can act
+  on rather than one they will trust.
 - **Say what your sample could not have distinguished.** A fact read off one
   account, one tenant, one plan or one environment records whatever was true
   *there* — and where two different rules would have produced the same
