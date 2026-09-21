@@ -310,3 +310,77 @@ describe('subtractCalendarDays', () => {
     expect(result.second).toBe(58);
   });
 });
+
+/**
+ * The property the hand-picked cases above each check once: a release is the
+ * class's own time of day, a window earlier, whatever the offset does in
+ * between (docs/api.md §8, confirmed by the account owner).
+ *
+ * Swept across a real transition rather than sampled, because the interesting
+ * dates are the ones adjacent to the boundary and picking them by hand is how
+ * an off-by-one survives. The oracle is `Intl` reading the instant back, not
+ * this module's own `instantToWallClock` — a test that asks the code under
+ * test what time it produced would agree with any consistent mistake.
+ */
+describe('release time of day across a DST boundary', () => {
+  const timeOfDay = (epochMs: number): string =>
+    new Intl.DateTimeFormat('sv-SE', {
+      timeZone: HELSINKI,
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).format(new Date(epochMs));
+
+  /** Every date from `from`, inclusive, for `days` days. */
+  const sweep = (from: string, days: number): WallClock[] =>
+    Array.from({ length: days }, (_, i) => {
+      const d = new Date(`${from}T00:00:00Z`);
+      d.setUTCDate(d.getUTCDate() + i);
+      return {
+        year: d.getUTCFullYear(),
+        month: d.getUTCMonth() + 1,
+        day: d.getUTCDate(),
+        hour: 18,
+        minute: 0,
+      };
+    });
+
+  it.each([
+    ['autumn, clocks back Sun 25 Oct', '2026-10-18', 19, 7],
+    ['spring, clocks forward Sun 29 Mar', '2026-03-22', 18, 7],
+    ['autumn, 14-day Premium window', '2026-10-18', 19, 14],
+  ])('keeps an 18:00 class opening at 18:00 — %s', (_label, from, days, windowDays) => {
+    for (const classStart of sweep(from, days)) {
+      const release = computeReleaseInstant({
+        classStart,
+        bookingWindowDays: windowDays,
+        timeZone: HELSINKI,
+      });
+      expect(release.resolution, `${from}+${windowDays}d`).toBe('exact');
+      expect(timeOfDay(release.epochMs), `class ${JSON.stringify(classStart)}`).toBe('18:00');
+      expect(timeOfDay(release.classEpochMs)).toBe('18:00');
+    }
+  });
+
+  it('parts company with naive subtraction by exactly an hour inside the window', () => {
+    // Without this the sweep above could pass against an implementation that
+    // subtracts 7*24h — the two agree on every date except the handful either
+    // side of the boundary, which is precisely the bug being guarded against.
+    const drift = (classStart: WallClock): number => {
+      const release = computeReleaseInstant({
+        classStart,
+        bookingWindowDays: 7,
+        timeZone: HELSINKI,
+      });
+      return release.epochMs - (release.classEpochMs - 7 * DAY);
+    };
+
+    // Class after the boundary, release before it: naive lands an hour late.
+    expect(drift({ year: 2026, month: 10, day: 28, hour: 18, minute: 0 })).toBe(-HOUR);
+    // Spring is the mirror image: naive lands an hour early.
+    expect(drift({ year: 2026, month: 4, day: 1, hour: 18, minute: 0 })).toBe(HOUR);
+    // Well clear of either boundary the two agree, so the check above is
+    // asserting something specific to the transition.
+    expect(drift({ year: 2026, month: 9, day: 28, hour: 18, minute: 0 })).toBe(0);
+  });
+});
