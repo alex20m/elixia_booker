@@ -452,6 +452,73 @@ building.
 - [ ] **Any cap on concurrent bookings per member?** Unanswered. The observed
       `409` is about *overlapping* bookings specifically, which is not the same
       thing as a total cap.
+- [ ] **What does `/api/book` return for a class that is listed but not yet
+      bookable?** The one unverified assumption the booking engine now rests
+      on, and newly *testable*: since publication runs ~14 days ahead of a
+      7-day window (§4), a class beyond the window can be found on the page
+      and posted deliberately. Elixia's taxonomy has no "too early" code, so
+      `lib/retry.ts` assumes it lands in the 4xx that maps to `error` and
+      probes straight through it. If it is instead `403`, the app reads a
+      blocked membership, stops on the first attempt and tells the user to
+      re-link a perfectly good account. **Run check A below first — it is
+      read-only and may make check B unnecessary.**
+
+      **Check A — does the page already say a class is unbookable?**
+      We only declare the fields we use (`ScheduleEvent` in `lib/elixia.ts`),
+      so the props may carry a bookability flag or a release time nobody has
+      looked at. Signed in, at `elixia.fi/varaukset?clubIds=<your club>`, in
+      the browser console:
+
+      ```js
+      const props = JSON.parse(document.querySelector('script[data-props="true"]').textContent);
+      const days = (props.schedule?.events ?? []).filter((d) => d.events?.length);
+      const near = days[0]?.events[0];
+      const far = days.at(-1)?.events[0];
+      console.log('top-level keys:', Object.keys(props));
+      console.log('dates:', (props.schedule?.dateList?.dates ?? [])
+        .map((d) => `${d.isoDate}${d.disabled ? '  DISABLED' : ''}`).join('\n'));
+      console.log('NEAR (bookable now):', near);
+      console.log('FAR  (past a 7-day window):', far);
+      ```
+
+      A field that differs between near and far — anything like `bookable`,
+      `bookableFrom`, `releasesAt` — settles this question *and* the release-time
+      question above, and would let the engine stop guessing T-0 entirely.
+
+      **Check B — post one and read the status.** Only if A finds nothing.
+      Take an id from a class ~12 days out and, in the same console:
+
+      ```js
+      const id = 'PUT_A_FAR_CLASS_ID_HERE';
+      const r = await fetch('/api/book', {
+        method: 'POST',
+        headers: { accept: 'application/json', 'content-type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      const text = await r.text();
+      console.log('STATUS', r.status, r.statusText, '\nBODY', text);
+      // Safety net: a 200 here would mean it actually booked. Undo it at once.
+      const pid = r.ok ? JSON.parse(text)?.payload?.participationId : null;
+      if (pid) {
+        const u = await fetch('/api/unbook', {
+          method: 'POST',
+          headers: { accept: 'application/json', 'content-type': 'application/json' },
+          body: JSON.stringify({ participationId: pid }),
+        });
+        console.log('UNBOOKED', u.status, await u.text());
+      }
+      ```
+
+      The status is the answer. `400`/`404`/`422` confirms the current
+      handling; `403` means `classifyBookingResponse` needs to tell a
+      too-early rejection apart from a blocked membership before it can keep
+      treating 403 as final. A `200` would be the biggest finding of the
+      three — booking beyond the window works, and the release instant this
+      whole app is built around does not exist.
+
+      Failing all that, it verifies itself in time: `first_attempt_outcome` on
+      `booking_history` records the refusal on any real run that retried, and
+      the Activity tab prints it as `first: error 400`.
 - [ ] **Does `isBooked` on the schedule listing (§4) read true for a
       waitlisted place, or only a confirmed one?** Matters for
       `matchClassBookedStatus` (`lib/elixia.ts`), which reads it to notice a
@@ -477,3 +544,4 @@ building.
 | 2026-08-21 | Second capture with the raised cap. §4 settled: the listing is the page's embedded `data-props` JSON, `clubIds` is mandatory, class ids are per-occurrence, and an unopened class is absent rather than rejected. The run also caught a real `409`, which turned §5's error taxonomy from guesses into the site's own published `errorMessages` map — and showed error text is localized Finnish, so classification moved to status codes only. `resolveClassId` implemented; `API_DISCOVERED = true`. Waitlist branching removed throughout: booking is a single call whose waiting-list placement counts as success (§6). The capture harness and its output were then deleted — its job was discovering an unknown API, and this document is now the record. | Claude |
 | 2026-08-22 | §4 gained how a club's **country and city** are derived: from the titles above each `clubIds` node, with shared titles dropped as filter headings and a title counted as a country only if it names one. The chooser now narrows by country → city → centre, and remembers all three. Unverified against a live capture — see the note in §4 for what breaking looks like and how to check. | Claude |
 | 2026-08-22 | The chooser was changed to narrow by country → city → centre, reading both from the titles above each `clubIds` node — the only candidate source, since no field carries a club's location. In production it collapsed to one country and one city: **there are no location titles in the tree**. Reverted to the flat list, keeping only the remembered last centre. §4 records what is not there, so the next attempt starts from a capture rather than from the same guess. | Claude |
+| 2026-09-21 | §4 corrected: `disabled` is Elixia's publication horizon, not your booking window — a Basic (7-day) member sees ~14 days, reported from the SATS app. §5 and §8 follow: a class can now be posted before its window opens, which makes the too-early response both reachable and testable. Added the two checks that settle it. | Claude |
