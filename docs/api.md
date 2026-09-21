@@ -189,7 +189,7 @@ logic never actually calls it.
 | How is a single class instance identified? Stable across days? | `"<clubId>p<number>"`, e.g. `741p70111`. **Per-occurrence, not per-class**: the same weekly class has a different id on each date (`741p70111` on one day, `741p70095` on another). An id therefore only ever resolves for one concrete date, which is why `resolveClassId` takes a `classDate`. |
 | Class start time format — local, UTC, or offset-bearing? | **Offset-bearing ISO 8601**: `metadata.startsAt` = `"2026-08-21T17:00:00+03:00"`. `metadata.time` carries the same instant as a display string, `"17:00"`. The offset being explicit removes any DST guesswork on the listing side. |
 | Fields for capacity, booked count, waitlist length | `hasWaitingList` (bool), `waitingListCount` (int) and `isBooked` (bool) per class. There is **no capacity or booked-count field** — you cannot tell how full a class is before trying, only whether a waiting list exists and how long it is. |
-| Does a not-yet-open class appear in the listing at all? | **Yes — `disabled` is a publication horizon, not your booking window.** `schedule.dateList.dates` lists ~35 dates, each with `disabled: true|false`; a `disabled` date carries zero events, so a class beyond the *published* range really is invisible. But that boundary is Elixia's, not your membership's: a Basic member (7-day booking window) sees about **14 days** of classes in the SATS app, i.e. roughly a week of classes that are listed and not yet bookable. **This row previously said the opposite**, and the error is explicable: the original capture was almost certainly taken on a 14-day account, where the publication horizon and the booking window coincide exactly and nothing distinguishes them. The consequence is large — see §5 and `lib/booking.ts`. |
+| Does a not-yet-open class appear in the listing at all? | **Yes — `disabled` is a publication horizon, not your booking window.** `schedule.dateList.dates` lists ~35 dates, each with `disabled: true|false`; a `disabled` date carries zero events, so a class beyond the *published* range really is invisible. But that boundary is Elixia's, not your membership's. **Observed directly on 2026-09-21** from the live page on a 7-day (Basic) account: dates `2026-09-21` through `2026-10-05` enabled, `2026-10-06` onwards `disabled` — exactly **today + 14**, while only the first 7 of those are bookable. A class a fortnight out carries a normal event object with a real id (`741p72779` in that run), so its id is readable a week before its window opens. **This row previously said the opposite**, and the error is explicable: the original capture was almost certainly taken on a 14-day account, where the publication horizon and the booking window coincide exactly and nothing distinguishes them. The consequence is large — see §5 and `lib/booking.ts`. |
 | Is there a field stating when booking opens? | **None.** No per-class release time, and no window length either — the window is only implied by where `disabled` flips. |
 
 **`clubIds` options are spread across several nodes, not one.** The filter tree
@@ -467,7 +467,19 @@ building.
       We only declare the fields we use (`ScheduleEvent` in `lib/elixia.ts`),
       so the props may carry a bookability flag or a release time nobody has
       looked at. Signed in, at `elixia.fi/varaukset?clubIds=<your club>`, in
-      the browser console:
+      the browser console.
+
+      **Run once on 2026-09-21; the horizon half is answered** (see §4) and
+      the field half is not. Top-level props keys are
+      `title, layout, messages, filters, schedule` — nothing carrying a
+      release time at that level. An event has at least
+      `hasWaitingList, groupExerciseLink, id, image, isBooked` plus the
+      `metadata` we already read, and the console collapsed the rest, so
+      whether a bookability field exists is still open. Print with
+      `JSON.stringify(e, null, 2)` rather than logging the object, and
+      compare the *same* class on a date inside the window against one
+      outside it, so a difference is about the date and not about two
+      different classes.
 
       ```js
       const props = JSON.parse(document.querySelector('script[data-props="true"]').textContent);
@@ -545,3 +557,4 @@ building.
 | 2026-08-22 | §4 gained how a club's **country and city** are derived: from the titles above each `clubIds` node, with shared titles dropped as filter headings and a title counted as a country only if it names one. The chooser now narrows by country → city → centre, and remembers all three. Unverified against a live capture — see the note in §4 for what breaking looks like and how to check. | Claude |
 | 2026-08-22 | The chooser was changed to narrow by country → city → centre, reading both from the titles above each `clubIds` node — the only candidate source, since no field carries a club's location. In production it collapsed to one country and one city: **there are no location titles in the tree**. Reverted to the flat list, keeping only the remembered last centre. §4 records what is not there, so the next attempt starts from a capture rather than from the same guess. | Claude |
 | 2026-09-21 | §4 corrected: `disabled` is Elixia's publication horizon, not your booking window — a Basic (7-day) member sees ~14 days, reported from the SATS app. §5 and §8 follow: a class can now be posted before its window opens, which makes the too-early response both reachable and testable. Added the two checks that settle it. | Claude |
+| 2026-09-21 | §4's corrected horizon confirmed against the live page rather than inferred: 15 enabled dates (today + 14) on a 7-day account, and a fortnight-out class carrying a real id. §8 check A partly run — no release time among the top-level props; whether an event carries a bookability field is still open, the console having truncated the object. | Claude |
