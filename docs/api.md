@@ -447,28 +447,33 @@ building.
       briefly recorded as 14 by misreading the schedule listing's 14-day span
       as a booking window — see §4 for why those are different things. The app
       defaults to 7, which is correct here.
-- [ ] **Is the release time the class's own time-of-day, or a fixed clock time
-      N days before?** Narrowed, not settled. `lib/schedule.ts` computes it as
-      the class's own time-of-day minus the window, and a live run on
-      2026-09-21 is consistent with that: a class at `2026-09-28 14:00` was
-      booked outright on the **first attempt, 2ms** after a T-0 computed that
-      way, with no `403` and the id already resolved before the wait.
+- [x] **Is the release time the class's own time-of-day, or a fixed clock time
+      N days before?** **The class's own time-of-day**, which is what
+      `lib/schedule.ts` already computed. Answered by the account owner from
+      using the site: a class can only be booked right after its own time, a
+      window earlier. Three measurements agree — a class thirteen days out
+      `403`s (§5); a class at `2026-09-28 14:00` booked on the first attempt
+      2ms after a T-0 computed that way, on 2026-09-21; and waiting-list
+      places of 5 and 16 on contested classes are what racing near the front
+      looks like rather than what arriving hours late looks like.
 
-      That proves the window was open **by** then. It does not prove it opened
-      **at** then — an earlier release (midnight of the release date, say, or
-      a fixed hour) would also let a +2ms attempt through, and would mean this
-      app arrives hours late for anything popular. Two things argue against
-      it: waiting-list places of 5 and 16 on contested classes are what racing
-      near the front looks like, not what arriving hours late looks like, and
-      a class thirteen days out `403`s (§5).
+      The rival reading mattered and is now dead: a midnight or fixed-hour
+      release would have let that same +2ms attempt through while meaning the
+      app arrives *hours* after the window opened on anything contested. A
+      first-attempt success alone could not tell the two apart, which is why
+      this stayed open after that run.
 
-      **The decisive test is one request.** Post a class that is *just over* a
-      window away — same date as one that works, but a later time of day, so
-      that a class-time-based release has not fired yet while a midnight-based
-      one has. `403` means the release follows the class's own time and
-      `lib/schedule.ts` is right; `200` (unbook it) means it does not, and the
-      whole T-0 computation needs rethinking. Cheaper than the two captures
-      either side of a boundary this entry used to ask for.
+      **What this makes load-bearing.** Release is a statement about the wall
+      clock in Europe/Helsinki, so a DST transition inside the window moves it
+      by an hour and naive epoch subtraction fires an hour late — fatal for a
+      contested class. `lib/schedule.ts` exists for exactly this and is tested
+      across both transitions, including the spring-forward gap and the
+      autumn ambiguity. The first real-world exercise is close: summer time
+      ends **2026-10-25**, so classes on 25–31 October, released 18–24
+      October, are the first bookings whose window spans it. Worth watching
+      one: the Activity tab's `woke` offset says whether the sleep hit the
+      right instant, and an hour-late run would be unmissable.
+
 - [x] **Which centre(s), and do they share one schedule endpoint?** One
       endpoint for all of them, selected by `clubIds`; 226 clubs are listed
       group-wide (§4).
@@ -596,3 +601,4 @@ building.
 | 2026-09-21 | §8 check A completed: no bookability field exists. The same weekly class inside and outside the booking window has an identical key set, so the release instant cannot be read and must keep being computed. The waitlist counters differ between the two but count bookings, not bookability. §4 now records the real event shape. | Claude |
 | 2026-09-21 | §8 check B done: a booking posted before its window opens returns `403` "Varausten teko on estetty." — indistinguishable from a blocked membership, and previously classified permanent, so an early fire abandoned the booking on its first attempt. §5 corrected; `lib/booking.ts` now resolves the ambiguity by distance from the release instant. | Claude |
 | 2026-09-21 | First live run on the reworked path: a class at 2026-09-28 14:00 booked on the first attempt, 2ms after T-0, id resolved before the wait (`0ms finding the class`) and no `403`. Confirms the pre-resolve reaches the instant with nothing left to do, and that the computed T-0 is not early. §8's release-time question narrowed to one decisive request. | Claude |
+| 2026-09-21 | Release time answered: the class's own time-of-day, a window earlier — the account owner's own use of the site, agreeing with the 403 at thirteen days, the first-attempt booking at +2ms, and the waiting-list positions. `lib/schedule.ts` was already right. Notes the first DST-crossing bookings, 18–24 October, as the next thing to watch. | Claude |
