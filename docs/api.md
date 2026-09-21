@@ -448,10 +448,27 @@ building.
       as a booking window — see §4 for why those are different things. The app
       defaults to 7, which is correct here.
 - [ ] **Is the release time the class's own time-of-day, or a fixed clock time
-      N days before?** Still unknown, and it decides whether releases fire at
-      the right minute — see §4. Settling it needs two captures either side of
-      a release boundary. Until then the retry-at-T-0 path absorbs the
-      difference, at the cost of some wasted attempts.
+      N days before?** Narrowed, not settled. `lib/schedule.ts` computes it as
+      the class's own time-of-day minus the window, and a live run on
+      2026-09-21 is consistent with that: a class at `2026-09-28 14:00` was
+      booked outright on the **first attempt, 2ms** after a T-0 computed that
+      way, with no `403` and the id already resolved before the wait.
+
+      That proves the window was open **by** then. It does not prove it opened
+      **at** then — an earlier release (midnight of the release date, say, or
+      a fixed hour) would also let a +2ms attempt through, and would mean this
+      app arrives hours late for anything popular. Two things argue against
+      it: waiting-list places of 5 and 16 on contested classes are what racing
+      near the front looks like, not what arriving hours late looks like, and
+      a class thirteen days out `403`s (§5).
+
+      **The decisive test is one request.** Post a class that is *just over* a
+      window away — same date as one that works, but a later time of day, so
+      that a class-time-based release has not fired yet while a midnight-based
+      one has. `403` means the release follows the class's own time and
+      `lib/schedule.ts` is right; `200` (unbook it) means it does not, and the
+      whole T-0 computation needs rethinking. Cheaper than the two captures
+      either side of a boundary this entry used to ask for.
 - [x] **Which centre(s), and do they share one schedule endpoint?** One
       endpoint for all of them, selected by `clubIds`; 226 clubs are listed
       group-wide (§4).
@@ -578,3 +595,4 @@ building.
 | 2026-09-21 | §4's corrected horizon confirmed against the live page rather than inferred: 15 enabled dates (today + 14) on a 7-day account, and a fortnight-out class carrying a real id. §8 check A partly run — no release time among the top-level props; whether an event carries a bookability field is still open, the console having truncated the object. | Claude |
 | 2026-09-21 | §8 check A completed: no bookability field exists. The same weekly class inside and outside the booking window has an identical key set, so the release instant cannot be read and must keep being computed. The waitlist counters differ between the two but count bookings, not bookability. §4 now records the real event shape. | Claude |
 | 2026-09-21 | §8 check B done: a booking posted before its window opens returns `403` "Varausten teko on estetty." — indistinguishable from a blocked membership, and previously classified permanent, so an early fire abandoned the booking on its first attempt. §5 corrected; `lib/booking.ts` now resolves the ambiguity by distance from the release instant. | Claude |
+| 2026-09-21 | First live run on the reworked path: a class at 2026-09-28 14:00 booked on the first attempt, 2ms after T-0, id resolved before the wait (`0ms finding the class`) and no `403`. Confirms the pre-resolve reaches the instant with nothing left to do, and that the computed T-0 is not early. §8's release-time question narrowed to one decisive request. | Claude |
