@@ -116,6 +116,19 @@ export interface BookingConfig {
    */
   listingPollBaseDelayMs: number;
   /**
+   * How long after the firing instant a `403` is read as "the window has not
+   * opened" rather than "this membership cannot book".
+   *
+   * Elixia answers both with `403` and the identical message "Varausten teko
+   * on estetty." (verified 2026-09-21 by posting a class beyond the booking
+   * window), so nothing in the response tells them apart. What does tell them
+   * apart is time: a window that has not opened clears within moments, a
+   * blocked membership never does. Inside this grace the refusal is retried;
+   * past it the permanent reading stands, so a genuinely blocked account is
+   * still reported as one rather than as "something went wrong".
+   */
+  forbiddenGraceMs: number;
+  /**
    * How many times to attempt the early resolve before giving up on it and
    * leaving the rest to the pre-flight probe.
    *
@@ -266,7 +279,7 @@ export type AttemptOutcome =
   | { kind: 'already-booked'; detail?: string }
   | { kind: 'too-early'; retryAfterMs?: number }
   | { kind: 'rate-limited'; retryAfterMs?: number }
-  | { kind: 'unauthorized'; detail: string }
+  | { kind: 'unauthorized'; detail: string; status?: number }
   | { kind: 'error'; detail: string; status?: number };
 
 /** Whether an outcome is worth retrying, or is final. */

@@ -336,10 +336,20 @@ next optimisation for the critical path.
 | Payload shape | `{"id": "<classId>"}` — just the class id. Nothing else; **no waitlist flag**. |
 | Success response | `200`, JSON: `{"dataLayer":[…analytics, ignore…], "payload":{"className","clubId","clubName","participationId","status","waitingListPosition","hasWaitingList"}}`. `status` is `"Booked"` or `"OnWaitingList"` — see §6. `participationId` (e.g. `"741p1295323"`) is the id to keep: cancellation needs it, not the class id. It is minted fresh per booking (booking, cancelling and rebooking the same class gave `741p1299243` then `741p1299244`). |
 | **The error taxonomy** | Published by the site itself, in the schedule page's props under `schedule.event.errorMessages.book`: `badRequest`, `conflict`, `forbidden`, `unauthorized`, `unknown`, `unknownDownstream`. That enumerates every failure the endpoint produces. Note what is *absent*: no "class full", and no "too early". |
-| Response when booking has not opened yet | **Unobserved, and it does exist.** The previous claim here — that there is no id to post, so no such response — rested on §4's since-corrected reading. A class is listed about a week before a 7-day member may book it, so a POST *can* be made before the window opens and something must come back. The published taxonomy has no "too early" code, which leaves `badRequest`. Nothing has confirmed the status, so `classifyBookingResponse` does not special-case it: it falls into `error`, and `lib/retry.ts` treats a 4xx `error` as "not there yet" (tight probe cadence) rather than as server pushback. Worth replacing with a real observation the first time one is captured. |
+| Response when booking has not opened yet | **`403` with `{"message":"Varausten teko on estetty."}`** — verified 2026-09-21 by posting a class thirteen days out on a 7-day account. **This is the same status and the same message as a blocked membership**, one row below, and nothing in the response separates them. The guess this replaces was `badRequest`; it was wrong, and wrong in the one direction that mattered, because `403` was classified non-retryable. Taken at face value a run firing a few milliseconds before Elixia agrees the window is open abandons the booking on its first attempt and tells the user to re-link a working account. What separates the two is time, not content: a window that has not opened clears within moments and a block never does, so `lib/booking.ts` re-reads a `403` as retryable while it is still within `forbiddenGraceMs` of the release instant, and lets the permanent reading stand after that. |
 | Response when the class is full | **Not an error.** `200` with `status: "OnWaitingList"` — see §6. |
 | Response when already booked / overlapping | `409` with `{"message":"Sinulla on voimassa oleva varaus päällekkäin."}` ("you have an overlapping reservation"). Observed directly. **This covers both** booking the same class twice and holding a *different* class at the same time — the API does not distinguish them, so nor can the app. Permanent either way. |
 | Cancellation endpoint | `POST https://www.elixia.fi/api/unbook`, body `{"participationId": "<participationId>"}`. Response `200`, body `{}`. Confirmed against both a `"Booked"` and an `"OnWaitingList"` participation. |
+
+**The `403` was read as one thing for a month.** This document said it meant
+a blocked membership, full stop, and `classifyBookingResponse` treated it as
+permanent on that basis. That reading came from a discovery run that had no
+way to produce the other case — while a class outside the booking window was
+believed invisible (§4), there was no id to post before a window opened, so
+the too-early `403` could not be observed and its absence looked like proof it
+did not exist. Both halves were wrong together, which is why neither showed up
+as a contradiction. Worth remembering for the rows still marked unobserved
+here: "not seen" is only evidence when the capture could have seen it.
 
 **Error bodies are localized.** Every message above came back in Finnish,
 matching the account's `ui_locales=fi`. This is why `classifyBookingResponse`
@@ -354,7 +364,7 @@ Elixia actually said, but nothing branches on it.
 | `200` + `status: "Booked"` | `booked` | — |
 | `200` + `status: "OnWaitingList"` | `waitlisted` | — |
 | `401` unauthorized | `unauthorized` (session lapsed) | no |
-| `403` forbidden ("Varausten teko on estetty") | `unauthorized` (booking blocked — a membership problem, not an expired session) | no |
+| `403` forbidden ("Varausten teko on estetty") | `unauthorized`, carrying `status` — **ambiguous**: a blocked membership *or* a window that has not opened. Resolved by `lib/booking.ts` on how far the attempt was from the release instant, not by anything in the response | only within `forbiddenGraceMs` of T-0 |
 | `409` conflict | `already-booked` | no |
 | `429` | `rate-limited` | yes |
 | `404` | `too-early` | yes |
@@ -500,8 +510,12 @@ building.
       `bookableFrom`, `releasesAt` — settles this question *and* the release-time
       question above, and would let the engine stop guessing T-0 entirely.
 
-      **Check B — post one and read the status.** Now the only route left,
-      since A came back negative.
+      **Check B — done, 2026-09-21: it is `403`.** Posting `741p72878`
+      (a Cycling thirteen days out, beyond a 7-day window) returned
+      `403` with `{"message":"Varausten teko on estetty."}` — the exact
+      status and the exact message this document already recorded as a
+      permanent membership block. See §5 for what that ambiguity costs
+      and how `lib/booking.ts` resolves it. Kept below for the record.
       Take an id from a class ~12 days out and, in the same console:
 
       ```js
@@ -563,3 +577,4 @@ building.
 | 2026-09-21 | §4 corrected: `disabled` is Elixia's publication horizon, not your booking window — a Basic (7-day) member sees ~14 days, reported from the SATS app. §5 and §8 follow: a class can now be posted before its window opens, which makes the too-early response both reachable and testable. Added the two checks that settle it. | Claude |
 | 2026-09-21 | §4's corrected horizon confirmed against the live page rather than inferred: 15 enabled dates (today + 14) on a 7-day account, and a fortnight-out class carrying a real id. §8 check A partly run — no release time among the top-level props; whether an event carries a bookability field is still open, the console having truncated the object. | Claude |
 | 2026-09-21 | §8 check A completed: no bookability field exists. The same weekly class inside and outside the booking window has an identical key set, so the release instant cannot be read and must keep being computed. The waitlist counters differ between the two but count bookings, not bookability. §4 now records the real event shape. | Claude |
+| 2026-09-21 | §8 check B done: a booking posted before its window opens returns `403` "Varausten teko on estetty." — indistinguishable from a blocked membership, and previously classified permanent, so an early fire abandoned the booking on its first attempt. §5 corrected; `lib/booking.ts` now resolves the ambiguity by distance from the release instant. | Claude |

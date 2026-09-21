@@ -307,7 +307,34 @@ export async function executeBooking(
       return { kind: 'booked', bookingId: 'DRY-RUN' };
     }
 
-    return deps.book(deps.tokens, id, signal);
+    const outcome = await deps.book(deps.tokens, id, signal);
+
+    // --- The one refusal Elixia will not let us read straight. -------------
+    //
+    // A booking posted before its window opens comes back `403` with
+    // "Varausten teko on estetty." — the same status and the same message as
+    // a membership that may never book at all (docs/api.md §5, verified
+    // 2026-09-21). Taken at face value that is non-retryable, so a run firing
+    // a few milliseconds before Elixia agrees the window is open abandons the
+    // booking on its first attempt and tells the user to re-link an account
+    // with nothing wrong with it.
+    //
+    // Nothing in the response separates the two. Time does: a window that has
+    // not opened clears within moments, a block never does — so retrying *is*
+    // the discriminator. Inside the grace the refusal is handed back as a
+    // retryable 4xx, which puts it on the fast probe band with every other
+    // "not there yet". Past the grace the permanent reading stands and the
+    // loop stops on it, so a genuinely blocked account is still reported as
+    // one instead of as an unexplained failure.
+    if (
+      outcome.kind === 'unauthorized' &&
+      outcome.status === 403 &&
+      now() - planned.releaseEpochMs < config.forbiddenGraceMs
+    ) {
+      return { kind: 'error', detail: outcome.detail, status: 403 };
+    }
+
+    return outcome;
   };
 
   // Whatever is left after the sleep, never more than the configured budget.

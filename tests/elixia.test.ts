@@ -895,12 +895,31 @@ describe('classifyBookingResponse', () => {
     });
   });
 
-  it('classifies a Finnish 403 as permanent, not as something to retry', () => {
-    // "Booking has been blocked" — a membership problem. Retrying it at T-0
-    // would burn the whole budget on a request that can never succeed.
+  it('classifies a Finnish 403 as permanent here, and carries the status out', () => {
+    // Permanent is the safe default for a translation layer, but it is not
+    // the whole story: Elixia returns this exact status and message both for
+    // a membership that may never book and for a booking merely posted
+    // before its window opened (docs/api.md §5). Nothing in the response
+    // separates them, so the status is carried out and lib/booking.ts — which
+    // knows how far the attempt was from the release instant — resolves it.
+    // Losing the status here would make that impossible.
     const outcome = classifyBookingResponse(403, JSON.stringify({ message: 'Varausten teko on estetty.' }));
-    expect(outcome).toEqual({ kind: 'unauthorized', detail: 'Varausten teko on estetty.' });
+    expect(outcome).toEqual({
+      kind: 'unauthorized',
+      detail: 'Varausten teko on estetty.',
+      status: 403,
+    });
     expect(isRetryable(outcome)).toBe(false);
+  });
+
+  it('tells a lapsed session apart from a blocked booking by status', () => {
+    // Both are `unauthorized`, and only one of them is ambiguous — so the
+    // caller needs the status to know which it is holding.
+    const lapsed = classifyBookingResponse(401, JSON.stringify({ message: 'kirjauduttava' }));
+    const blocked = classifyBookingResponse(403, JSON.stringify({ message: 'estetty' }));
+
+    expect(lapsed).toMatchObject({ kind: 'unauthorized', status: 401 });
+    expect(blocked).toMatchObject({ kind: 'unauthorized', status: 403 });
   });
 
   it('classifies a Finnish 401 as a lapsed session', () => {
