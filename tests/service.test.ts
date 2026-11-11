@@ -1032,6 +1032,148 @@ describe('the booking tick', () => {
     expect(live.has(tokens!.accessToken)).toBe(true);
   });
 
+  describe('checking the saved session before the release', () => {
+    // A backend whose sessions Elixia can end at will, recording the order
+    // things happen in so "before T-0" is a fact the test reads, not assumes.
+    function revocableBackend(check: (live: boolean) => Promise<'live' | 'dead' | 'unknown'>) {
+      const mock = new MockElixiaClient();
+      const live = new Set<string>();
+      const events: string[] = [];
+      let issued = 0;
+      config.backend = {
+        login: async (email, password, at) => {
+          const session = { ...(await mock.login(email, password, at)), refreshToken: undefined };
+          session.accessToken = `session-${++issued}`;
+          live.add(session.accessToken);
+          events.push('login');
+          return session;
+        },
+        refresh: async () => {
+          throw new Error('Elixia has no refresh endpoint');
+        },
+        listCenters: (tokens) => mock.listCenters(tokens),
+        listClasses: (tokens, center) => mock.listClasses(tokens, center),
+        resolveClassId: (tokens, sub, date) => mock.resolveClassId(tokens, sub, date),
+        checkAvailability: (tokens, center, checks) =>
+          mock.checkAvailability(tokens, center, checks),
+        checkBookedStatus: (tokens, center, checks) =>
+          mock.checkBookedStatus(tokens, center, checks),
+        checkSession: async (tokens) => {
+          events.push('check');
+          return check(live.has(tokens.accessToken));
+        },
+        book: async (tokens, id) => {
+          events.push('book');
+          return live.has(tokens.accessToken)
+            ? mock.book(tokens, id)
+            : {
+                kind: 'unauthorized',
+                detail: 'Sinun on kirjauduttava sisään, jotta voit tehdä varauksen.',
+                status: 401,
+              };
+        },
+      };
+      return { live, events };
+    }
+
+    /** A class, its release due, and a session linked moments before it. */
+    async function dueWithFreshLink(): Promise<ConfiguredProfile> {
+      const profile = await linkedProfile();
+      const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+      setNow(firstRelease(sub) - 30_000);
+      await linkElixia(config, profile, 'gym@example.com', 'correct-horse', nowMs);
+      return profile;
+    }
+
+    it('signs in again before T-0 when Elixia has already dropped the session', async () => {
+      const { live, events } = revocableBackend(async (ok) => (ok ? 'live' : 'dead'));
+      const profile = await dueWithFreshLink();
+      live.clear();
+      events.length = 0;
+
+      expect(await runDueBookings(config, nowMs, instantClock())).toBe(1);
+
+      // The booking request itself went out on a session Elixia accepted, so
+      // the race paid for nothing: no 401 at T-0 and no sign-in inside it.
+      expect(events).toEqual(['check', 'login', 'book']);
+      expect((await repo.listHistory(profile.id))[0]).toMatchObject({
+        outcome: 'booked',
+        attempts: 1,
+        firstAttemptOutcome: null,
+      });
+    });
+
+    it('keeps the saved session when it checks out live', async () => {
+      const { events } = revocableBackend(async (ok) => (ok ? 'live' : 'dead'));
+      await dueWithFreshLink();
+      events.length = 0;
+
+      await runDueBookings(config, nowMs, instantClock());
+
+      expect(events).toEqual(['check', 'book']);
+    });
+
+    it('goes ahead with the saved session when the check cannot tell', async () => {
+      // A slow or broken account page must not cost a sign-in, let alone the
+      // booking: the 401 handling at T-0 is still there behind it.
+      const { events } = revocableBackend(async () => 'unknown');
+      const profile = await dueWithFreshLink();
+      events.length = 0;
+
+      expect(await runDueBookings(config, nowMs, instantClock())).toBe(1);
+
+      expect(events).toEqual(['check', 'book']);
+      expect((await repo.listHistory(profile.id))[0]!.outcome).toBe('booked');
+    });
+
+    it('still books when signing in again ahead of T-0 fails', async () => {
+      // A sign-in that fails early is not the last word: the run still races
+      // with what it has, and the 401 at T-0 is what reports the account.
+      const { events } = revocableBackend(async () => 'dead');
+      await dueWithFreshLink();
+      const backend = config.backend!;
+      config.backend = {
+        ...backend,
+        login: async () => {
+          events.push('login');
+          throw new Error('Elixia login: connection reset');
+        },
+      };
+      events.length = 0;
+
+      expect(await runDueBookings(config, nowMs, instantClock())).toBe(1);
+
+      expect(events).toEqual(['check', 'login', 'book']);
+    });
+
+    it('lets T-0 try the sign-in again after the early one failed', async () => {
+      // The early failure was a dropped connection, not a wrong password: the
+      // race must not inherit it as the final word on the session.
+      const { live, events } = revocableBackend(async (ok) => (ok ? 'live' : 'dead'));
+      const profile = await dueWithFreshLink();
+      const backend = config.backend!;
+      let failNext = true;
+      config.backend = {
+        ...backend,
+        login: async (email, password, at) => {
+          if (failNext) {
+            failNext = false;
+            events.push('login');
+            throw new Error('Elixia login: connection reset');
+          }
+          return backend.login(email, password, at);
+        },
+      };
+      live.clear();
+      events.length = 0;
+
+      expect(await runDueBookings(config, nowMs, instantClock())).toBe(1);
+
+      expect(events).toEqual(['check', 'login', 'book', 'login', 'book']);
+      expect((await repo.listHistory(profile.id))[0]!.outcome).toBe('booked');
+    });
+  });
+
   it('records a dry run as a dry run rather than a real booking', async () => {
     config.dryRun = true;
     const profile = await linkedProfile();

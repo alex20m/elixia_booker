@@ -52,9 +52,21 @@ export { ClassNotListedError, ElixiaCredentialsRejected, UnknownCenterError };
  * real client rather than a special case threaded through the engine. The whole
  * app — sign-in, scheduling, cron, UI — runs end to end against either.
  */
+export type SessionCheck = 'live' | 'dead' | 'unknown';
+
 export interface BookingBackend {
   login(email: string, password: string, nowMs: number): Promise<StoredTokens>;
   refresh(tokens: StoredTokens, nowMs: number): Promise<StoredTokens>;
+  /**
+   * Whether Elixia still accepts this session, asked without booking anything.
+   *
+   * Needed because a session can end on Elixia's side long before its cookie
+   * expires (docs/api.md §3), and the schedule page is public, so nothing else
+   * the run does before T-0 would notice. `'unknown'` when the answer could
+   * not be read: the caller goes ahead as before rather than signing in on a
+   * guess. Optional so a backend without one simply skips the check.
+   */
+  checkSession?(tokens: StoredTokens, signal?: AbortSignal): Promise<SessionCheck>;
   /** Every centre this account can browse — the chooser's centre list. */
   listCenters(tokens: StoredTokens): Promise<CenterOption[]>;
   /** The weekly classes published for one centre — the chooser's class list. */
@@ -123,6 +135,12 @@ export const ENDPOINTS = {
   /** Server-rendered schedule page. Its embedded JSON is the listing API — see §4. */
   schedule: '/varaukset',
   book: '/api/book',
+  /**
+   * The account page every sign-in lands on. 200 with a live session (§1);
+   * a 303 to oma.elixia.fi without one (§3) — which is what makes it the
+   * session check.
+   */
+  account: '/omat-sivut',
   /** Not used by the booking engine, but confirmed working — see docs/api.md §5. */
   unbook: '/api/unbook',
 } as const;
@@ -1043,6 +1061,34 @@ export class ElixiaClient implements BookingBackend {
     const url = `${this.baseUrl}${ENDPOINTS.schedule}?clubIds=${encodeURIComponent(clubId)}`;
     const props = await this.fetchPage(tokens, url);
     return checks.map((check) => matchClassBookedStatus(props, check, check.classDate));
+  }
+
+  /**
+   * Load the account page and read its status, without following it anywhere.
+   *
+   * A real page a signed-in person opens, not a synthetic ping, and not a
+   * booking request with a made-up id. Only the two observed answers count:
+   * 200 is live, a redirect is dead. Anything else — an outage, a timeout, a
+   * redesigned page — is `'unknown'`, so a check that breaks costs nothing
+   * but the check.
+   */
+  async checkSession(tokens: StoredTokens, signal?: AbortSignal): Promise<SessionCheck> {
+    try {
+      const response = await this.fetchImpl(this.baseUrl + ENDPOINTS.account, {
+        headers: { cookie: tokens.accessToken, accept: 'text/html' },
+        redirect: 'manual',
+        cache: 'no-store',
+        ...(signal ? { signal } : {}),
+      });
+      // The body is never read; release the connection rather than leaving
+      // it held until garbage collection.
+      void response.body?.cancel().catch(() => {});
+      if (response.status === 200) return 'live';
+      if (response.status >= 300 && response.status < 400) return 'dead';
+      return 'unknown';
+    } catch {
+      return 'unknown';
+    }
   }
 
   async login(email: string, password: string, nowMs: number): Promise<StoredTokens> {

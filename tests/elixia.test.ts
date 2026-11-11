@@ -738,6 +738,57 @@ describe('ElixiaClient.book', () => {
   });
 });
 
+describe('ElixiaClient.checkSession', () => {
+  // The account page is where every sign-in lands at 200 (docs/api.md §1);
+  // without a live session it 303s away to oma.elixia.fi (seen 2026-11-11).
+  function answering(response: () => Response) {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      calls.push({ url: url.toString(), ...(init ? { init } : {}) });
+      return response();
+    }) as unknown as typeof fetch;
+    return { client: new ElixiaClient({ fetchImpl, baseUrl: BASE }), calls };
+  }
+
+  it('reads the account page with the session, without following its redirect', async () => {
+    const { client, calls } = answering(() => new Response('<html>', { status: 200 }));
+
+    expect(await client.checkSession(tokens)).toBe('live');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe(`${BASE}/omat-sivut`);
+    expect(new Headers(calls[0]!.init?.headers).get('cookie')).toBe(tokens.accessToken);
+    expect(calls[0]!.init?.redirect).toBe('manual');
+  });
+
+  it('calls a session dead when the account page sends it away', async () => {
+    const { client } = answering(
+      () =>
+        new Response(null, {
+          status: 303,
+          headers: { location: 'https://oma.elixia.fi/concept/root' },
+        }),
+    );
+
+    expect(await client.checkSession(tokens)).toBe('dead');
+  });
+
+  it('cannot tell when Elixia answers with anything else', async () => {
+    const { client } = answering(() => new Response('oops', { status: 503 }));
+
+    expect(await client.checkSession(tokens)).toBe('unknown');
+  });
+
+  it('cannot tell when Elixia cannot be reached', async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError('fetch failed');
+    }) as unknown as typeof fetch;
+
+    expect(await new ElixiaClient({ fetchImpl, baseUrl: BASE }).checkSession(tokens)).toBe(
+      'unknown',
+    );
+  });
+});
+
 describe('buildBookingBody', () => {
   it('is exactly the observed payload', () => {
     expect(buildBookingBody('741p71244')).toBe('{"id":"741p71244"}');
