@@ -50,6 +50,18 @@ export interface BookingDeps {
    */
   resolveClassId: (planned: PlannedBooking) => Promise<ResolvedClass>;
   tokens: StoredTokens;
+  /**
+   * Signs in again with the stored login and returns the new session, saved
+   * for later runs as well. Called at most once per run, and only on a `401`.
+   *
+   * Elixia can end a session before the cookie's own expiry, and there is no
+   * way to know without asking: on 2026-11-11 every linked account's booking
+   * was refused with "Sinun on kirjauduttava sisään…" at once, on sessions the
+   * app believed had days left. The password is kept for exactly this, so
+   * giving up and asking the user to re-link a working account is the wrong
+   * response. Omitted, a `401` ends the run as before.
+   */
+  renewSession?: () => Promise<StoredTokens>;
   logger: Logger;
   config: BookingConfig;
   dryRun: boolean;
@@ -267,6 +279,8 @@ export async function executeBooking(
   // was final — the request that actually won or lost the place.
   let bookRequestOffsetMs: number | null = null;
   let firstAttemptOutcome: string | null = null;
+  let tokens = deps.tokens;
+  let renewed = false;
 
   const runAttempt = async (signal: AbortSignal): Promise<AttemptOutcome> => {
     if (firstAttemptOffsetMs === null) {
@@ -307,7 +321,34 @@ export async function executeBooking(
       return { kind: 'booked', bookingId: 'DRY-RUN' };
     }
 
-    const outcome = await deps.book(deps.tokens, id, signal);
+    const outcome = await deps.book(tokens, id, signal);
+
+    // --- A session Elixia has stopped accepting. ----------------------------
+    //
+    // `401` is unambiguous — "sign in to make a booking" — and a fresh sign-in
+    // with the stored password fixes it, so do that once and go again rather
+    // than telling the user to re-link an account with nothing wrong with it.
+    // Handed back as a retryable 4xx so the next try is on the fast band and
+    // `firstAttemptOutcome` still records why there was one. Only once: a
+    // session refused straight after signing in is not a stale session, and
+    // a sign-in that fails leaves the original refusal standing, which is
+    // then exactly what the user needs to hear.
+    if (
+      outcome.kind === 'unauthorized' &&
+      outcome.status === 401 &&
+      deps.renewSession &&
+      !renewed
+    ) {
+      renewed = true;
+      try {
+        tokens = await deps.renewSession();
+        logger.log('session.renewed', { after: outcome.detail });
+        return { kind: 'error', detail: outcome.detail, status: 401 };
+      } catch (err) {
+        logger.log('session.renew-failed', { error: (err as Error).message });
+        return outcome;
+      }
+    }
 
     // --- The one refusal Elixia will not let us read straight. -------------
     //

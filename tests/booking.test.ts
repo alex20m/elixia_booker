@@ -529,6 +529,80 @@ describe('executeBooking', () => {
     expect(report.attempts).toBe(1);
   });
 
+  describe('when Elixia has dropped the saved session', () => {
+    // Seen live on 2026-11-11: every linked account's booking came back 401
+    // "Sinun on kirjauduttava sisään…" at once, with sessions the app still
+    // believed had days left. Elixia can end a session before the cookie's own
+    // expiry, and nothing short of asking tells the app it happened.
+    const signIn: AttemptOutcome = {
+      kind: 'unauthorized',
+      detail: 'Sinun on kirjauduttava sisään, jotta voit tehdä varauksen.',
+      status: 401,
+    };
+    const fresh: StoredTokens = {
+      accessToken: 'fresh',
+      expiresAtMs: RELEASE + 3_600_000,
+      updatedAtMs: RELEASE,
+    };
+
+    it('signs in again with the stored login and books with the new session', async () => {
+      const book = vi.fn(
+        async (t: StoredTokens): Promise<AttemptOutcome> =>
+          t.accessToken === 'fresh' ? { kind: 'booked', bookingId: '9' } : signIn,
+      );
+      const renewSession = vi.fn(async () => fresh);
+      const { built } = deps({ book, renewSession });
+
+      const report = await executeBooking(planned, built);
+
+      expect(report.outcome).toEqual({ kind: 'booked', bookingId: '9' });
+      expect(renewSession).toHaveBeenCalledTimes(1);
+      expect(book.mock.calls.map(([t]) => t.accessToken)).toEqual(['a', 'fresh']);
+      expect(report.firstAttemptOutcome).toBe('error 401');
+    });
+
+    it('signs in again only once, and stops if Elixia refuses the new session too', async () => {
+      const book = vi.fn(async (): Promise<AttemptOutcome> => signIn);
+      const renewSession = vi.fn(async () => fresh);
+      const { built } = deps({ book, renewSession });
+
+      const report = await executeBooking(planned, built);
+
+      expect(renewSession).toHaveBeenCalledTimes(1);
+      expect(book).toHaveBeenCalledTimes(2);
+      expect(report.outcome).toEqual(signIn);
+    });
+
+    it('reports the refused session when signing in again fails', async () => {
+      const book = vi.fn(async (): Promise<AttemptOutcome> => signIn);
+      const renewSession = vi.fn(async () => {
+        throw new Error('Incorrect email or password');
+      });
+      const { built } = deps({ book, renewSession });
+
+      const report = await executeBooking(planned, built);
+
+      expect(book).toHaveBeenCalledTimes(1);
+      expect(report.outcome).toEqual(signIn);
+    });
+
+    it('does not sign in again on a 403, which is not about the session', async () => {
+      const book = vi.fn(
+        async (): Promise<AttemptOutcome> => ({
+          kind: 'unauthorized',
+          detail: 'Varausten teko on estetty.',
+          status: 403,
+        }),
+      );
+      const renewSession = vi.fn(async () => fresh);
+      const { built } = deps({ book, renewSession });
+
+      await executeBooking(planned, built);
+
+      expect(renewSession).not.toHaveBeenCalled();
+    });
+  });
+
   it('stops on an overlapping booking instead of retrying it', async () => {
     const book = vi.fn(
       async (): Promise<AttemptOutcome> => ({ kind: 'already-booked', detail: 'overlap' }),

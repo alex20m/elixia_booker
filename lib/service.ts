@@ -660,15 +660,46 @@ async function elixiaSession(
         // session lapses and waits for the user to notice.
         await backend.login(profile.elixiaEmail ?? '', secret.password, nowMs);
 
-    await config.repo.upsertProfile({
-      ...profile,
-      elixiaSecret: await sealSecret(config, { password: secret.password, tokens }),
-      elixiaStatus: 'ok',
-      elixiaCheckedAtMs: nowMs,
-    });
+    await storeSession(config, profile, secret.password, tokens, nowMs);
   }
 
   return tokens;
+}
+
+/**
+ * A brand-new session from the stored password, saved for later runs.
+ *
+ * For when Elixia has refused a session that `elixiaSession` had every reason
+ * to think was live — it can end one before the cookie's own expiry, and only
+ * a refused request reveals that (see `renewSession` in lib/booking.ts). Always
+ * a password sign-in, never a refresh: the session being replaced is the one
+ * Elixia just turned away.
+ */
+async function renewElixiaSession(
+  config: AppConfig,
+  profile: Profile,
+  backend: BookingBackend,
+  nowMs: number,
+): Promise<StoredTokens> {
+  const { password } = await openSecret(config, profile);
+  const tokens = await backend.login(profile.elixiaEmail ?? '', password, nowMs);
+  await storeSession(config, profile, password, tokens, nowMs);
+  return tokens;
+}
+
+async function storeSession(
+  config: AppConfig,
+  profile: Profile,
+  password: string,
+  tokens: StoredTokens,
+  nowMs: number,
+): Promise<void> {
+  await config.repo.upsertProfile({
+    ...profile,
+    elixiaSecret: await sealSecret(config, { password, tokens }),
+    elixiaStatus: 'ok',
+    elixiaCheckedAtMs: nowMs,
+  });
 }
 
 /**
@@ -1661,6 +1692,12 @@ interface PreparedUser {
   profile: ConfiguredProfile;
   subscriptions: Subscription[];
   tokens: StoredTokens;
+  /**
+   * Sign in again after Elixia refuses `tokens`. Shared by every booking this
+   * user has in the tick, so classes released at the same instant cost one
+   * sign-in between them rather than one each.
+   */
+  renewSession: () => Promise<StoredTokens>;
 }
 
 /**
@@ -1794,7 +1831,11 @@ async function prepareUser(
     return null;
   }
 
-  return { profile, subscriptions, tokens };
+  let renewal: Promise<StoredTokens> | null = null;
+  const renewSession = (): Promise<StoredTokens> =>
+    (renewal ??= renewElixiaSession(config, profile, backend, nowMs));
+
+  return { profile, subscriptions, tokens, renewSession };
 }
 
 /**
@@ -1815,7 +1856,7 @@ async function bookEntry(
   nowMs: number,
   clock: TickClock,
 ): Promise<boolean> {
-  const { profile, subscriptions, tokens } = prepared;
+  const { profile, subscriptions, tokens, renewSession } = prepared;
   const subscription = subscriptions.find((s) => s.id === entry.subscriptionId);
   // The schedule is derived data; live subscriptions are the authority.
   if (!subscription || !subscription.enabled) return false;
@@ -1854,6 +1895,7 @@ async function bookEntry(
         book: (t, classId, signal) => backend.book(t, classId, signal),
         resolveClassId: (planned) => backend.resolveClassId(tokens, subscription, planned.classDate),
         tokens,
+        renewSession,
         logger,
         config: timingConfig(profile),
         dryRun: config.dryRun,
