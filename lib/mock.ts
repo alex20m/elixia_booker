@@ -112,6 +112,10 @@ export class MockElixiaClient implements BookingBackend {
     };
   }
 
+  async checkSession(_tokens: StoredTokens): Promise<'live'> {
+    return 'live';
+  }
+
   async listCenters(_tokens: StoredTokens): Promise<CenterOption[]> {
     return [...MOCK_CENTERS];
   }

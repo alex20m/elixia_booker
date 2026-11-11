@@ -1687,6 +1687,13 @@ const MINUTE_MS = 60_000;
  */
 const TICK_CONCURRENCY = 8;
 
+/**
+ * How long the pre-race session check may take before it is read as "cannot
+ * tell". Short against the ~20s a tick wakes early, so a hanging account page
+ * can only ever cost the check, never the race.
+ */
+const SESSION_CHECK_TIMEOUT_MS = 3_000;
+
 /** Everything one user's bookings need in hand before the release instant. */
 interface PreparedUser {
   profile: ConfiguredProfile;
@@ -1834,6 +1841,41 @@ async function prepareUser(
   let renewal: Promise<StoredTokens> | null = null;
   const renewSession = (): Promise<StoredTokens> =>
     (renewal ??= renewElixiaSession(config, profile, backend, nowMs));
+
+  // --- Is the session still good? Ask now, not at T-0. ----------------------
+  //
+  // Elixia can end a session days before its cookie expires (docs/api.md §3),
+  // and nothing above notices: the expiry check is local and the schedule page
+  // is public. Found out at T-0, the fix — a fresh sign-in — happens inside
+  // the race and costs the booking seconds. Found out here, ~20s early
+  // (TICK_LEAD_MS), the race starts with a session Elixia accepts.
+  //
+  // Here, inside the gate, because it is preparation: one page load per user,
+  // throttled with the rest of it, never on the race's own path. Fails open
+  // everywhere. A check that cannot tell, or a sign-in that fails, leaves the
+  // run with the session it had — the 401 handling at T-0 is still behind it,
+  // and is free to try the sign-in again, which is why a failure here clears
+  // the shared attempt instead of leaving T-0 to inherit it.
+  if (backend.checkSession) {
+    const check = await backend.checkSession(
+      tokens,
+      AbortSignal.timeout(SESSION_CHECK_TIMEOUT_MS),
+    );
+    logger.log('session.checked', { userId, check });
+    if (check === 'dead') {
+      try {
+        tokens = await renewSession();
+        logger.log('session.renewed', { userId, when: 'before-race' });
+      } catch (err) {
+        renewal = null;
+        logger.log('session.renew-failed', {
+          userId,
+          when: 'before-race',
+          error: (err as Error).message,
+        });
+      }
+    }
+  }
 
   return { profile, subscriptions, tokens, renewSession };
 }
