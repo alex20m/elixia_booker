@@ -167,7 +167,7 @@ still has to be done by the account owner, live.
 | Method, URL, payload | None observed. |
 | Triggered proactively on a timer, or reactively on a 401? | N/A — see above. |
 | Does refresh rotate the refresh token? | N/A — no refresh token exists. |
-| What does a refresh failure look like? | Not observed. Presumably: the 14-day session cookie simply expires, and the next authenticated request either 401s or itself redirects into the login chain from §1 — not yet confirmed. |
+| What does a refresh failure look like? | **A `401` from `/api/book` — and it can arrive well before the 14 days are up.** On 2026-11-11 every linked account's booking was refused at once with `401` `{"message":"Sinun on kirjauduttava sisään, jotta voit tehdä varauksen."}`, on sessions whose cookie still had days left. Elixia ended them on its own side, and nothing short of a refused request shows it: the schedule page is public, so resolving the class still works on a dead session. A bogus or missing `.SATS_GROUP_AUTH` gets the same `401`. So the cookie's `Max-Age` is an upper bound, not a promise, and `lib/booking.ts` answers a `401` by signing in again once with the stored password and retrying, rather than ending the run. Why Elixia dropped every session at once is not known. |
 
 **Why it matters:** with no refresh endpoint, "keeping a session alive" can
 only mean re-running the full login chain with the stored password, which is
@@ -363,7 +363,7 @@ Elixia actually said, but nothing branches on it.
 | --- | --- | --- |
 | `200` + `status: "Booked"` | `booked` | — |
 | `200` + `status: "OnWaitingList"` | `waitlisted` | — |
-| `401` unauthorized | `unauthorized` (session lapsed) | no |
+| `401` unauthorized | `unauthorized` (session lapsed — possibly early, see §3) | once, after signing in again with the stored password |
 | `403` forbidden ("Varausten teko on estetty") | `unauthorized`, carrying `status` — **ambiguous**: a blocked membership *or* a window that has not opened. Resolved by `lib/booking.ts` on how far the attempt was from the release instant, not by anything in the response | only within `forbiddenGraceMs` of T-0 |
 | `409` conflict | `already-booked` | no |
 | `429` | `rate-limited` | yes |
@@ -602,3 +602,4 @@ building.
 | 2026-09-21 | §8 check B done: a booking posted before its window opens returns `403` "Varausten teko on estetty." — indistinguishable from a blocked membership, and previously classified permanent, so an early fire abandoned the booking on its first attempt. §5 corrected; `lib/booking.ts` now resolves the ambiguity by distance from the release instant. | Claude |
 | 2026-09-21 | First live run on the reworked path: a class at 2026-09-28 14:00 booked on the first attempt, 2ms after T-0, id resolved before the wait (`0ms finding the class`) and no `403`. Confirms the pre-resolve reaches the instant with nothing left to do, and that the computed T-0 is not early. §8's release-time question narrowed to one decisive request. | Claude |
 | 2026-09-21 | Release time answered: the class's own time-of-day, a window earlier — the account owner's own use of the site, agreeing with the 403 at thirteen days, the first-attempt booking at +2ms, and the waiting-list positions. `lib/schedule.ts` was already right. Notes the first DST-crossing bookings, 18–24 October, as the next thing to watch. | Claude |
+| 2026-11-11 | §3, §5: Elixia ended every linked session days before its cookie expiry, so a booking was refused `401` and each user was told to re-link a working account. A `401` now triggers one fresh sign-in with the stored password and a retry, and the new session is saved for later runs. | Claude |

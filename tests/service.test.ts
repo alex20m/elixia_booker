@@ -978,6 +978,60 @@ describe('the booking tick', () => {
     expect((await repo.getProfile(profile.id))!.elixiaStatus).toBe('ok');
   });
 
+  it('signs in again and books when Elixia has dropped a session the app thought was live', async () => {
+    // 2026-11-11: every linked account's booking came back 401 "Sinun on
+    // kirjauduttava sisään…" at once, on sessions with days left before their
+    // expiry, and each user was told to re-link an account that still worked.
+    const mock = new MockElixiaClient();
+    const live = new Set<string>();
+    let issued = 0;
+    config.backend = {
+      login: async (email, password, at) => {
+        const session = { ...(await mock.login(email, password, at)), refreshToken: undefined };
+        session.accessToken = `session-${++issued}`;
+        live.add(session.accessToken);
+        return session;
+      },
+      refresh: async () => {
+        throw new Error('Elixia has no refresh endpoint');
+      },
+      listCenters: (tokens) => mock.listCenters(tokens),
+      listClasses: (tokens, center) => mock.listClasses(tokens, center),
+      resolveClassId: (tokens, sub, date) => mock.resolveClassId(tokens, sub, date),
+      checkAvailability: (tokens, center, checks) => mock.checkAvailability(tokens, center, checks),
+      checkBookedStatus: (tokens, center, checks) => mock.checkBookedStatus(tokens, center, checks),
+      book: async (tokens, id) =>
+        live.has(tokens.accessToken)
+          ? mock.book(tokens, id)
+          : {
+              kind: 'unauthorized',
+              detail: 'Sinun on kirjauduttava sisään, jotta voit tehdä varauksen.',
+              status: 401,
+            },
+    };
+
+    const profile = await linkedProfile();
+    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+    setNow(firstRelease(sub) - 30_000);
+    // Linked moments before the run, so the stored session is nowhere near
+    // its expiry and nothing about it looks stale from the app's side.
+    await linkElixia(config, profile, 'gym@example.com', 'correct-horse', nowMs);
+    live.clear();
+
+    expect(await runDueBookings(config, nowMs, instantClock())).toBe(1);
+
+    expect((await repo.listHistory(profile.id))[0]).toMatchObject({
+      outcome: 'booked',
+      firstAttemptOutcome: 'error 401',
+    });
+    const stored = await repo.getProfile(profile.id);
+    expect(stored!.elixiaStatus).toBe('ok');
+    // Kept, so the next booking starts from a session Elixia accepts rather
+    // than paying for the same sign-in again inside its own race.
+    const { tokens } = await openSecret(config, stored!);
+    expect(live.has(tokens!.accessToken)).toBe(true);
+  });
+
   it('records a dry run as a dry run rather than a real booking', async () => {
     config.dryRun = true;
     const profile = await linkedProfile();
