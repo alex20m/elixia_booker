@@ -1689,7 +1689,7 @@ const TICK_CONCURRENCY = 8;
 
 /**
  * How long the pre-race session check may take before it is read as "cannot
- * tell". Short against the ~20s a tick wakes early, so a hanging account page
+ * tell". Short against the ~20s a tick wakes early, so a hanging check
  * can only ever cost the check, never the race.
  */
 const SESSION_CHECK_TIMEOUT_MS = 3_000;
@@ -1850,7 +1850,7 @@ async function prepareUser(
   // the race and costs the booking seconds. Found out here, ~20s early
   // (TICK_LEAD_MS), the race starts with a session Elixia accepts.
   //
-  // Here, inside the gate, because it is preparation: one page load per user,
+  // Here, inside the gate, because it is preparation: one request per user,
   // throttled with the rest of it, never on the race's own path. Fails open
   // everywhere. A check that cannot tell, or a sign-in that fails, leaves the
   // run with the session it had — the 401 handling at T-0 is still behind it,

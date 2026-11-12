@@ -739,8 +739,14 @@ describe('ElixiaClient.book', () => {
 });
 
 describe('ElixiaClient.checkSession', () => {
-  // The account page is where every sign-in lands at 200 (docs/api.md §1);
-  // without a live session it 303s away to oma.elixia.fi (seen 2026-11-11).
+  // Asks the booking endpoint itself to book a class that does not exist: a
+  // dead session gets the same 401 "Sinun on kirjauduttava sisään…" there as
+  // at T-0, and a live one gets 502 "Tuntematon virhe." (both verified live
+  // 2026-11-12). Only the 401 is acted on.
+  //
+  // It used to load the account page `/omat-sivut` and read a redirect as a
+  // dead session. That page redirects signed-in members too (verified from a
+  // signed-in browser, 2026-11-12), so every session read as dead.
   function answering(response: () => Response) {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const fetchImpl = vi.fn(async (url: string | URL, init?: RequestInit) => {
@@ -750,29 +756,63 @@ describe('ElixiaClient.checkSession', () => {
     return { client: new ElixiaClient({ fetchImpl, baseUrl: BASE }), calls };
   }
 
-  it('reads the account page with the session, without following its redirect', async () => {
-    const { client, calls } = answering(() => new Response('<html>', { status: 200 }));
-
-    expect(await client.checkSession(tokens)).toBe('live');
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.url).toBe(`${BASE}/omat-sivut`);
-    expect(new Headers(calls[0]!.init?.headers).get('cookie')).toBe(tokens.accessToken);
-    expect(calls[0]!.init?.redirect).toBe('manual');
-  });
-
-  it('calls a session dead when the account page sends it away', async () => {
-    const { client } = answering(
-      () =>
-        new Response(null, {
-          status: 303,
-          headers: { location: 'https://oma.elixia.fi/concept/root' },
-        }),
+  const signIn = () =>
+    new Response(
+      JSON.stringify({ message: 'Sinun on kirjauduttava sisään, jotta voit tehdä varauksen.' }),
+      { status: 401 },
     );
 
-    expect(await client.checkSession(tokens)).toBe('dead');
+  it('asks the booking endpoint, with the session, about a class that cannot exist', async () => {
+    const { client, calls } = answering(signIn);
+
+    await client.checkSession(tokens);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe(`${BASE}/api/book`);
+    expect(calls[0]!.init?.method).toBe('POST');
+    expect(new Headers(calls[0]!.init?.headers).get('cookie')).toBe(tokens.accessToken);
+    // Not a class id: Elixia's look like `741p73877`, and nothing that does
+    // not match one can ever be booked by accident.
+    const { id } = JSON.parse(String(calls[0]!.init?.body)) as { id: string };
+    expect(id).not.toMatch(/^\d+p\d+$/);
   });
 
-  it('cannot tell when Elixia answers with anything else', async () => {
+  it('calls a session dead when Elixia says to sign in', async () => {
+    expect(await answering(signIn).client.checkSession(tokens)).toBe('dead');
+  });
+
+  it('does not sign in again on what a signed-in member actually gets back', async () => {
+    // Captured 2026-11-12 from a signed-in browser on www.elixia.fi: the
+    // made-up class gets past the sign-in check and fails further in, as
+    // a 502 "Tuntematon virhe." That must never read as a dead session.
+    const { client } = answering(
+      () => new Response(JSON.stringify({ message: 'Tuntematon virhe.' }), { status: 502 }),
+    );
+
+    expect(await client.checkSession(tokens)).toBe('unknown');
+  });
+
+  it('calls a session live when Elixia refuses the made-up class for any other reason', async () => {
+    // What a signed-in member gets back: past the sign-in check, refused on
+    // the class. Whichever 4xx it is, the session got through.
+    for (const status of [400, 403, 404, 409, 422]) {
+      const { client } = answering(
+        () => new Response(JSON.stringify({ message: 'no such class' }), { status }),
+      );
+      expect(await client.checkSession(tokens)).toBe('live');
+    }
+  });
+
+  it('does not read a redirect as a dead session', async () => {
+    // The bug in the first version: a redirect is what the old account-page
+    // check saw for signed-in members, and it called them all dead.
+    const { client } = answering(
+      () => new Response(null, { status: 303, headers: { location: 'https://oma.elixia.fi/' } }),
+    );
+    expect(await client.checkSession(tokens)).toBe('unknown');
+  });
+
+  it('cannot tell when Elixia answers with a server error', async () => {
     const { client } = answering(() => new Response('oops', { status: 503 }));
 
     expect(await client.checkSession(tokens)).toBe('unknown');

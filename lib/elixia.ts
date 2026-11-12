@@ -54,6 +54,12 @@ export { ClassNotListedError, ElixiaCredentialsRejected, UnknownCenterError };
  */
 export type SessionCheck = 'live' | 'dead' | 'unknown';
 
+/**
+ * The class `checkSession` asks to book. Elixia's ids look like `741p73877`;
+ * this cannot be one, so the check can never book anything.
+ */
+const SESSION_CHECK_CLASS_ID = 'session-check';
+
 export interface BookingBackend {
   login(email: string, password: string, nowMs: number): Promise<StoredTokens>;
   refresh(tokens: StoredTokens, nowMs: number): Promise<StoredTokens>;
@@ -135,12 +141,6 @@ export const ENDPOINTS = {
   /** Server-rendered schedule page. Its embedded JSON is the listing API — see §4. */
   schedule: '/varaukset',
   book: '/api/book',
-  /**
-   * The account page every sign-in lands on. 200 with a live session (§1);
-   * a 303 to oma.elixia.fi without one (§3) — which is what makes it the
-   * session check.
-   */
-  account: '/omat-sivut',
   /** Not used by the booking engine, but confirmed working — see docs/api.md §5. */
   unbook: '/api/unbook',
 } as const;
@@ -1064,18 +1064,30 @@ export class ElixiaClient implements BookingBackend {
   }
 
   /**
-   * Load the account page and read its status, without following it anywhere.
+   * Ask the booking endpoint to book a class that does not exist, and read
+   * only whether it got past the sign-in check.
    *
-   * A real page a signed-in person opens, not a synthetic ping, and not a
-   * booking request with a made-up id. Only the two observed answers count:
-   * 200 is live, a redirect is dead. Anything else — an outage, a timeout, a
-   * redesigned page — is `'unknown'`, so a check that breaks costs nothing
-   * but the check.
+   * The booking endpoint, because it is the one that has to accept the
+   * session at T-0: whatever it accepts twenty seconds early it accepts then.
+   * A dead session gets the same `401` "Sinun on kirjauduttava sisään…" here
+   * as on a real booking; a live one gets past that and fails on the made-up
+   * class instead, as `502` "Tuntematon virhe." (both verified 2026-11-12,
+   * docs/api.md §3). Only the `401` is acted on. A 502 is reported as
+   * `'unknown'` rather than `'live'`, because an outage looks the same — and
+   * either way the run goes ahead with the session it has. A plain 4xx would
+   * mean the session got through, so it reads as `'live'`. The id cannot be
+   * mistaken for a real one, so nothing can be booked.
+   *
+   * Not the account page `/omat-sivut`, which the first version loaded: it
+   * redirects signed-in members to oma.elixia.fi as well (verified from a
+   * signed-in browser, 2026-11-12), so it read every session as dead.
    */
   async checkSession(tokens: StoredTokens, signal?: AbortSignal): Promise<SessionCheck> {
     try {
-      const response = await this.fetchImpl(this.baseUrl + ENDPOINTS.account, {
-        headers: { cookie: tokens.accessToken, accept: 'text/html' },
+      const response = await this.fetchImpl(this.baseUrl + ENDPOINTS.book, {
+        method: 'POST',
+        headers: authHeaders(tokens),
+        body: buildBookingBody(SESSION_CHECK_CLASS_ID),
         redirect: 'manual',
         cache: 'no-store',
         ...(signal ? { signal } : {}),
@@ -1083,8 +1095,8 @@ export class ElixiaClient implements BookingBackend {
       // The body is never read; release the connection rather than leaving
       // it held until garbage collection.
       void response.body?.cancel().catch(() => {});
-      if (response.status === 200) return 'live';
-      if (response.status >= 300 && response.status < 400) return 'dead';
+      if (response.status === 401) return 'dead';
+      if (response.status >= 400 && response.status < 500) return 'live';
       return 'unknown';
     } catch {
       return 'unknown';
