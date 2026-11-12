@@ -836,9 +836,63 @@ describe('buildBookingBody', () => {
 });
 
 describe('performElixiaLogin', () => {
-  function formHtml(action: string): string {
-    return `<form class="form" action="${action.replace(/&/g, '&amp;')}" method="post">login</form>`;
+  function formHtml(action: string, inside = ''): string {
+    return `<form class="form" action="${action.replace(/&/g, '&amp;')}" method="post">${inside}login</form>`;
   }
+
+  /** Keycloak's banner on a wrong password, as served on 2026-11-12. */
+  const REJECTED_BANNER =
+    '<div aria-live="polite" class="banner banner--error" id="input-error">' +
+    '<div class="banner__icon banner__icon--error"></div>' +
+    '<span>Virheellinen käyttäjätunnus tai salasana.</span></div>';
+
+  it('does not call it a wrong password when the form comes back without the error banner', async () => {
+    // Pausing someone's bookings is only right when Elixia has *said* the
+    // password is wrong. A form shown again for any other reason — another
+    // step, a changed flow — is a sign-in that did not finish, not a verdict.
+    const authAction = `${AUTH}/realms/sats/login-actions/authenticate?session_code=abc`;
+    const fetchImpl = (async (url: string | URL) => {
+      const key = url.toString();
+      if (key === `${BASE}/kirjaudu-sisaan?onSuccess=%2Fomat-sivut` || key === authAction) {
+        return new Response(formHtml(authAction), { status: 200 });
+      }
+      throw new Error(`unexpected fetch in test: ${key}`);
+    }) as typeof fetch;
+
+    const err = (await performElixiaLogin(fetchImpl, BASE, 'user@example.com', 'pw', NOW).then(
+      () => null,
+      (e: unknown) => e,
+    )) as Error;
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(ElixiaCredentialsRejected);
+  });
+
+  it('does not call it a wrong password when signing in ends somewhere unexpected', async () => {
+    // What a sign-in flow that has changed shape looks like: no session
+    // cookie and no verdict on the password either.
+    const authAction = `${AUTH}/realms/sats/login-actions/authenticate?session_code=abc`;
+    const fetchImpl = (async (url: string | URL) => {
+      const key = url.toString();
+      if (key === `${BASE}/kirjaudu-sisaan?onSuccess=%2Fomat-sivut`) {
+        return new Response(formHtml(authAction), { status: 200 });
+      }
+      if (key === authAction) {
+        return new Response(null, { status: 302, headers: { location: `${BASE}/jotain-uutta` } });
+      }
+      if (key === `${BASE}/jotain-uutta`) return new Response('<html>new page</html>', { status: 200 });
+      throw new Error(`unexpected fetch in test: ${key}`);
+    }) as typeof fetch;
+
+    const err = (await performElixiaLogin(fetchImpl, BASE, 'user@example.com', 'pw', NOW).then(
+      () => null,
+      (e: unknown) => e,
+    )) as Error;
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(ElixiaCredentialsRejected);
+    expect(err.message).toMatch(/did not finish/);
+  });
 
   it('walks the real redirect chain (kirjaudu-sisaan -> Keycloak -> return) into a session cookie', async () => {
     const authAction = `${AUTH}/realms/sats/login-actions/authenticate?session_code=abc&execution=def&client_id=sats-web`;
@@ -1045,9 +1099,10 @@ describe('performElixiaLogin', () => {
 
   it('treats a re-rendered login form as rejected credentials, not a crash', async () => {
     // Keycloak's real failure behaviour (docs/api.md §1): wrong credentials
-    // come back as HTTP 200 with the same form, never as an error status.
+    // come back as HTTP 200 with the same form, never as an error status —
+    // and with its error banner, captured live on 2026-11-12.
     const authAction = `${AUTH}/realms/sats/login-actions/authenticate?session_code=abc`;
-    const html = formHtml(authAction);
+    const html = formHtml(authAction, REJECTED_BANNER);
 
     const fetchImpl = (async (url: string | URL) => {
       const key = url.toString();
@@ -1201,6 +1256,11 @@ describe('performElixiaLogin — a session cookie that was never earned', () => 
    * cookie by re-setting it empty with `Max-Age=0`, which a jar that only asks
    * "is the name present" cannot tell apart from a real session.
    */
+  /** Keycloak's rejection page carries this banner (captured 2026-11-12). */
+  const banner =
+    '<div aria-live="polite" class="banner banner--error" id="input-error">' +
+    '<span>Virheellinen käyttäjätunnus tai salasana.</span></div>';
+
   it('rejects a wrong password even when the pre-login hops cleared a session cookie', async () => {
     const authAction = `${AUTH}/realms/sats/login-actions/authenticate?session_code=abc`;
     const form = `<form class="form" action="${authAction}" method="post">login</form>`;
@@ -1215,7 +1275,10 @@ describe('performElixiaLogin — a session cookie that was never earned', () => 
       }
       // Keycloak's rejection: HTTP 200, the same form again, no new cookies.
       if (key === authAction) {
-        return new Response(form, { status: 200, headers: { 'content-type': 'text/html' } });
+        return new Response(form.replace('login</form>', `${banner}login</form>`), {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        });
       }
       throw new Error(`unexpected fetch in test: ${key}`);
     }) as typeof fetch;
@@ -1237,7 +1300,10 @@ describe('performElixiaLogin — a session cookie that was never earned', () => 
         return new Response(form, { status: 200, headers });
       }
       if (key === authAction) {
-        return new Response(form, { status: 200, headers: { 'content-type': 'text/html' } });
+        return new Response(form.replace('login</form>', `${banner}login</form>`), {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        });
       }
       throw new Error(`unexpected fetch in test: ${key}`);
     }) as typeof fetch;
@@ -1251,8 +1317,9 @@ describe('performElixiaLogin — a session cookie that was never earned', () => 
     const authAction = `${AUTH}/realms/sats/login-actions/authenticate?session_code=abc`;
     const form = `<form class="form" action="${authAction}" method="post">login</form>`;
 
+    const rejected = form.replace('login</form>', `${banner}login</form>`);
     const fetchImpl = (async () =>
-      new Response(form, { status: 200, headers: { 'content-type': 'text/html' } })) as typeof fetch;
+      new Response(rejected, { status: 200, headers: { 'content-type': 'text/html' } })) as typeof fetch;
 
     await expect(
       performElixiaLogin(fetchImpl, BASE, 'user@example.com', 'wrong', NOW),

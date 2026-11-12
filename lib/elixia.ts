@@ -195,6 +195,13 @@ const DEFAULT_SESSION_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const MAX_REDIRECTS = 10;
 
 /**
+ * Keycloak's error banner on its login form — present when it has judged the
+ * password wrong (docs/api.md §1). Matched by id, not by its Finnish text,
+ * which follows the requested locale.
+ */
+const REJECTION_BANNER = /\bid="input-error"/;
+
+/**
  * Cookies by the host that set them, then by name.
  *
  * Keyed by host because the chain now crosses three sites that reuse names:
@@ -377,7 +384,7 @@ export async function performElixiaLogin(
   // second sign-in for the portal: enough extra hops to outrun
   // MAX_REDIRECTS, and nothing in them that booking needs.
   let signedIn = false;
-  await fetchFollowing(
+  const landed = await fetchFollowing(
     fetchImpl,
     jar,
     ttl,
@@ -406,8 +413,26 @@ export async function performElixiaLogin(
   // Reading the jar alone would then accept any password at all, seal the
   // credentials as verified, and leave the booker to fail silently weeks
   // later against a session it never had.
+  //
+  // And no session is not, by itself, a wrong password. Only Keycloak saying
+  // so is: the same form served again *with* its error banner
+  // (`id="input-error"`, "Virheellinen käyttäjätunnus tai salasana." —
+  // captured 2026-11-12). That distinction now decides whether someone's
+  // bookings are paused, so anything short of it — a form without the
+  // banner, a page nobody has seen before — is a sign-in that did not finish,
+  // reported as a plain error. Exactly that kind of drift is what, on
+  // 2026-11-12, made good passwords look rejected.
   if (!signedIn) {
-    throw new ElixiaCredentialsRejected('Elixia rejected the email or password');
+    const page = landed.status === 200 ? await landed.text() : '';
+    if (extractLoginFormAction(page) && REJECTION_BANNER.test(page)) {
+      throw new ElixiaCredentialsRejected('Elixia rejected the email or password');
+    }
+    const where = new URL(landed.url || action);
+    throw new Error(
+      `Elixia sign-in did not finish: it ended on ${where.host}${where.pathname} ` +
+        `(HTTP ${landed.status}) with no session and no verdict on the password — ` +
+        'see docs/api.md §1',
+    );
   }
 
   // Only www.elixia.fi's own cookies: that is the site every later request

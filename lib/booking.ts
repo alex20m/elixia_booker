@@ -514,13 +514,14 @@ export function describeReport(report: BookingReport): string {
     // different class at the same time", so neither can this message.
     case 'already-booked':
       return `${prefix}ℹ️ Didn't book ${what} — you already have a booking at that time.`;
-    // Booking carries on after any of these — the next class is attempted as
-    // usual — so none of them says booking has stopped.
+    // Only a password Elixia has verifiably rejected pauses booking
+    // (lib/service.ts); after the other two the next class is attempted as
+    // usual, so they do not say booking has stopped.
     case 'unauthorized':
       if (outcome.signIn === 'refused') {
         return (
           `${prefix}🚨 Elixia rejected your saved password, so ${what} wasn't booked.\n` +
-          `If you've changed your Elixia password, update it in the app.`
+          `Booking is paused until you update your Elixia password in the app.`
         );
       }
       if (outcome.signIn === 'failed') {

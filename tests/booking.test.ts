@@ -906,7 +906,7 @@ describe('describeReport', () => {
     expect(text).not.toContain('start booking again');
   });
 
-  it('asks for a new password only when Elixia rejected the saved one', () => {
+  it('says booking is paused, and how to resume it, when Elixia rejected the saved password', () => {
     const text = line({
       kind: 'unauthorized',
       detail: 'sign in (Signing in again failed: Elixia rejected the email or password)',
@@ -915,7 +915,7 @@ describe('describeReport', () => {
     });
     expect(text).toBe(
       `🚨 Elixia rejected your saved password, so Bodypump at tapiola on ${WHEN} wasn't booked.\n` +
-        "If you've changed your Elixia password, update it in the app.",
+        'Booking is paused until you update your Elixia password in the app.',
     );
   });
 

@@ -1024,34 +1024,85 @@ describe('the booking tick', () => {
       expect((await repo.listHistory(profile.id))[0]!.outcome).toBe('booked');
     });
 
-    it('keeps attempting every booking when Elixia rejects the password, signing in once per run', async () => {
-      // Once, not once per step: a password Elixia has refused will be
-      // refused again, and repeated failures on every booking are what an
-      // identity server locks a real account out over.
+    it('pauses booking once Elixia has verifiably rejected the saved password', async () => {
+      // The one sign-in failure that does pause: Elixia itself said the
+      // password is wrong. Every booking after it would fail the same way,
+      // and each attempt is another failed sign-in against a real account.
       const profile = await linkedProfile();
       const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
       let logins = 0;
       config.backend = Object.assign(new MockElixiaClient(), {
+        refresh: async (): Promise<StoredTokens> => {
+          throw new Error('Elixia has no refresh endpoint');
+        },
         login: async (): Promise<StoredTokens> => {
           logins += 1;
           throw new ElixiaCredentialsRejected('Elixia rejected the email or password');
         },
-        checkSession: async () => 'dead' as const,
-        book: async () => signInFirst,
       });
 
       setNow(firstRelease(sub) - 30_000);
-      expect(await runDueBookings(config, nowMs, instantClock())).toBe(1);
+      expect(await runDueBookings(config, nowMs, instantClock())).toBe(0);
+      expect((await repo.getProfile(profile.id))!.elixiaStatus).toBe('expired');
+
+      // Paused means paused: next week's class is not attempted, and nobody
+      // signs in against the account again until the password is updated.
+      setNow(firstRelease(sub) + 7 * 86_400_000 - 30_000);
+      expect(await runDueBookings(config, nowMs, instantClock())).toBe(0);
       expect(logins).toBe(1);
+    });
+
+    it('pauses after a booking whose sign-in at T-0 Elixia rejected', async () => {
+      const profile = await linkedProfile();
+      const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+      setNow(firstRelease(sub) - 30_000);
+      // A session saved moments ago, so nothing is renewed before the race.
+      await linkElixia(config, profile, 'gym@example.com', 'correct-horse', nowMs);
+      config.backend = Object.assign(new MockElixiaClient(), {
+        login: async (): Promise<StoredTokens> => {
+          throw new ElixiaCredentialsRejected('Elixia rejected the email or password');
+        },
+        checkSession: async () => 'unknown' as const,
+        book: async () => signInFirst,
+      });
+
+      expect(await runDueBookings(config, nowMs, instantClock())).toBe(1);
+
+      expect((await repo.listHistory(profile.id))[0]!.outcome).toBe('unauthorized');
+      expect((await repo.getProfile(profile.id))!.elixiaStatus).toBe('expired');
+    });
+
+    it('resumes booking as soon as the password is updated', async () => {
+      const profile = await linkedProfile();
+      const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+      let passwordRight = false;
+      const mock = new MockElixiaClient();
+      config.backend = Object.assign(new MockElixiaClient(), {
+        refresh: async (): Promise<StoredTokens> => {
+          throw new Error('Elixia has no refresh endpoint');
+        },
+        login: async (email: string, password: string, at: number): Promise<StoredTokens> => {
+          if (!passwordRight) {
+            throw new ElixiaCredentialsRejected('Elixia rejected the email or password');
+          }
+          return mock.login(email, password, at);
+        },
+      });
+      setNow(firstRelease(sub) - 30_000);
+      await runDueBookings(config, nowMs, instantClock());
+      expect((await repo.getProfile(profile.id))!.elixiaStatus).toBe('expired');
+
+      passwordRight = true;
+      await updateElixiaCredentials(
+        config,
+        (await repo.getProfile(profile.id))!,
+        { password: 'new-horse' },
+        nowMs,
+      );
 
       setNow(firstRelease(sub) + 7 * 86_400_000 - 30_000);
       expect(await runDueBookings(config, nowMs, instantClock())).toBe(1);
-      expect(logins).toBe(2);
-
-      expect((await repo.getProfile(profile.id))!.elixiaStatus).toBe('ok');
-      const history = await repo.listHistory(profile.id);
-      expect(history.map((h) => h.outcome)).toEqual(['unauthorized', 'unauthorized']);
-      expect(history[0]!.detail).toContain('Elixia rejected the email or password');
+      expect((await repo.listHistory(profile.id))[0]!.outcome).toBe('booked');
     });
 
     it('keeps attempting bookings even when the saved login cannot be read', async () => {
