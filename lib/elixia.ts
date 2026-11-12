@@ -194,8 +194,30 @@ const SESSION_COOKIE_NAME = '.SATS_GROUP_AUTH';
 const DEFAULT_SESSION_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const MAX_REDIRECTS = 10;
 
-function jarHeader(jar: Map<string, string>): string {
-  return [...jar.entries()].map(([name, value]) => `${name}=${value}`).join('; ');
+/**
+ * Cookies by the host that set them, then by name.
+ *
+ * Keyed by host because the chain now crosses three sites that reuse names:
+ * www.elixia.fi, auth.satsgroup.com and — after signing in — oma.elixia.fi,
+ * which runs a sign-in of its own and sets its *own* `.SATS_GROUP_AUTH`. A
+ * jar keyed by name alone let that overwrite the session www.elixia.fi
+ * accepts (docs/api.md §1). Every cookie observed is host-only (no `Domain`
+ * attribute), so the host is the whole of the scoping rule here; `Path` is
+ * not, because no two cookies in the chain differ by path alone.
+ */
+type CookieJar = Map<string, Map<string, string>>;
+
+function cookiesFor(jar: CookieJar, host: string): Map<string, string> {
+  let cookies = jar.get(host);
+  if (!cookies) {
+    cookies = new Map();
+    jar.set(host, cookies);
+  }
+  return cookies;
+}
+
+function jarHeader(cookies: Map<string, string>): string {
+  return [...cookies.entries()].map(([name, value]) => `${name}=${value}`).join('; ');
 }
 
 /**
@@ -223,7 +245,7 @@ function absorbSetCookies(
   headers: Headers,
   jar: Map<string, string>,
   ttl: { ms: number },
-  issued?: Set<string>,
+  issued: Set<string>,
 ): void {
   for (const line of headers.getSetCookie()) {
     const pair = line.split(';', 1)[0] ?? '';
@@ -235,12 +257,12 @@ function absorbSetCookies(
 
     if (value === '' || (maxAge && Number(maxAge[1]) <= 0)) {
       jar.delete(name);
-      issued?.delete(name);
+      issued.delete(name);
       continue;
     }
 
     jar.set(name, value);
-    issued?.add(name);
+    issued.add(name);
 
     if (name === SESSION_COOKIE_NAME && maxAge) ttl.ms = Number(maxAge[1]) * 1000;
   }
@@ -259,23 +281,31 @@ function absorbSetCookies(
  */
 async function fetchFollowing(
   fetchImpl: typeof fetch,
-  jar: Map<string, string>,
+  jar: CookieJar,
   ttl: { ms: number },
   url: string,
   init: RequestInit = {},
-  issued?: Set<string>,
+  /**
+   * Called with each hop's host and the cookie names that hop set; returning
+   * true ends the walk there, redirect or not.
+   */
+  stopAfter?: (host: string, issued: Set<string>) => boolean,
 ): Promise<Response> {
   let currentUrl = url;
   let currentInit: RequestInit = init;
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const host = new URL(currentUrl).host;
+    const cookies = cookiesFor(jar, host);
     const headers = new Headers(currentInit.headers);
-    const cookie = jarHeader(jar);
+    const cookie = jarHeader(cookies);
     if (cookie) headers.set('cookie', cookie);
 
     const response = await fetchImpl(currentUrl, { ...currentInit, headers, redirect: 'manual' });
-    absorbSetCookies(response.headers, jar, ttl, issued);
+    const issued = new Set<string>();
+    absorbSetCookies(response.headers, cookies, ttl, issued);
 
+    if (stopAfter?.(host, issued)) return response;
     if (response.status < 300 || response.status >= 400) return response;
     const location = response.headers.get('location');
     if (!location) return response;
@@ -320,8 +350,9 @@ export async function performElixiaLogin(
   password: string,
   nowMs: number,
 ): Promise<StoredTokens> {
-  const jar = new Map<string, string>();
+  const jar: CookieJar = new Map();
   const ttl = { ms: DEFAULT_SESSION_TTL_MS };
+  const sessionHost = new URL(baseUrl).host;
 
   const loginPage = await fetchFollowing(
     fetchImpl,
@@ -337,9 +368,15 @@ export async function performElixiaLogin(
     );
   }
 
-  // Which cookies *this* request produced, as opposed to what the jar picked
-  // up on the way to the form. The distinction is the whole check below.
-  const issued = new Set<string>();
+  // Whether *this* submission earned www.elixia.fi a session, as opposed to
+  // what the jar picked up on the way to the form. The distinction is the
+  // whole check below.
+  //
+  // And the walk stops right there. Since Elixia moved its account pages to
+  // oma.elixia.fi (2026-11), the chain carries on past www's session into a
+  // second sign-in for the portal: enough extra hops to outrun
+  // MAX_REDIRECTS, and nothing in them that booking needs.
+  let signedIn = false;
   await fetchFollowing(
     fetchImpl,
     jar,
@@ -350,7 +387,10 @@ export async function performElixiaLogin(
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ username: email, password, credentialId: '' }).toString(),
     },
-    issued,
+    (host, issued) => {
+      if (host === sessionHost && issued.has(SESSION_COOKIE_NAME)) signedIn = true;
+      return signedIn;
+    },
   );
 
   // A wrong password does not come back as an error status — Keycloak
@@ -366,12 +406,14 @@ export async function performElixiaLogin(
   // Reading the jar alone would then accept any password at all, seal the
   // credentials as verified, and leave the booker to fail silently weeks
   // later against a session it never had.
-  if (!issued.has(SESSION_COOKIE_NAME)) {
+  if (!signedIn) {
     throw new ElixiaCredentialsRejected('Elixia rejected the email or password');
   }
 
+  // Only www.elixia.fi's own cookies: that is the site every later request
+  // goes to, and the only one whose cookies a browser would send there.
   return {
-    accessToken: jarHeader(jar),
+    accessToken: jarHeader(cookiesFor(jar, sessionHost)),
     expiresAtMs: nowMs + ttl.ms,
     updatedAtMs: nowMs,
   };

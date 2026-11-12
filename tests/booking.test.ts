@@ -583,7 +583,16 @@ describe('executeBooking', () => {
       const report = await executeBooking(planned, built);
 
       expect(book).toHaveBeenCalledTimes(1);
-      expect(report.outcome).toEqual(signIn);
+      // The reason goes on the record. On 2026-11-12 a failing sign-in left
+      // only Elixia's "sign in" text and "1 try" on the Activity page, and
+      // the cause had to be reverse-engineered from that.
+      expect(report.outcome).toEqual({
+        kind: 'unauthorized',
+        status: 401,
+        detail:
+          'Sinun on kirjauduttava sisään, jotta voit tehdä varauksen. ' +
+          '(Signing in again failed: Incorrect email or password)',
+      });
     });
 
     it('does not sign in again on a 403, which is not about the session', async () => {

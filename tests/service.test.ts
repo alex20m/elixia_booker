@@ -311,6 +311,43 @@ describe('linking a gym account', () => {
     expect(stored!.elixiaSecret).toBeUndefined();
   });
 
+  it('refuses the link when Elixia signs in but will not accept the session it issued', async () => {
+    // What a sign-in flow that has drifted looks like from outside: the
+    // password is accepted, a cookie comes back, and the booking endpoint
+    // still says "sign in". Saved, that session fails at T-0 with nobody the
+    // wiser — so linking is where it has to be caught, and it is not the
+    // password's fault.
+    const drifted: BookingBackend = Object.assign(new MockElixiaClient(), {
+      checkSession: async () => 'dead' as const,
+    });
+    const linking = { ...config, backend: drifted };
+    const profile = await getOrCreateProfile(linking, USER_ID);
+
+    const err = await linkElixia(linking, profile, 'gym@example.com', 'correct-horse', nowMs).catch(
+      (e: unknown) => e as ServiceError,
+    );
+
+    expect(err).toBeInstanceOf(ServiceError);
+    expect((err as ServiceError).status).toBe(502);
+    expect((err as ServiceError).message).not.toMatch(/rejected those credentials/i);
+
+    const stored = await repo.getProfile(USER_ID);
+    expect(stored!.elixiaStatus).toBe('unlinked');
+    expect(stored!.elixiaSecret).toBeUndefined();
+  });
+
+  it('links when the session cannot be checked, rather than blocking on the check', async () => {
+    const unsure: BookingBackend = Object.assign(new MockElixiaClient(), {
+      checkSession: async () => 'unknown' as const,
+    });
+    const linking = { ...config, backend: unsure };
+    const profile = await getOrCreateProfile(linking, USER_ID);
+
+    await linkElixia(linking, profile, 'gym@example.com', 'correct-horse', nowMs);
+
+    expect((await repo.getProfile(USER_ID))!.elixiaStatus).toBe('ok');
+  });
+
   it('requires both fields', async () => {
     const profile = await getOrCreateProfile(config, USER_ID);
     await expect(linkElixia(config, profile, '', 'pw', nowMs)).rejects.toThrow(/required/);
@@ -1129,8 +1166,14 @@ describe('the booking tick', () => {
     it('still books when signing in again ahead of T-0 fails', async () => {
       // A sign-in that fails early is not the last word: the run still races
       // with what it has, and the 401 at T-0 is what reports the account.
-      const { events } = revocableBackend(async () => 'dead');
+      // Wrong from the run onwards only: linking now checks the session too,
+      // and refuses one that reads dead.
+      let checkSaysDead = false;
+      const { events } = revocableBackend(async (ok) =>
+        checkSaysDead || !ok ? 'dead' : 'live',
+      );
       await dueWithFreshLink();
+      checkSaysDead = true;
       const backend = config.backend!;
       config.backend = {
         ...backend,

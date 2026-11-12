@@ -540,9 +540,10 @@ export async function linkElixia(
   // Nothing is stored unless Elixia itself accepts the pair: an account linked
   // on unverified credentials looks healthy on the dashboard and then fails at
   // T-0, weeks later, on the one request that had to work.
+  const backend = backendFor(config);
   let tokens;
   try {
-    tokens = await backendFor(config).login(email.trim(), password, nowMs);
+    tokens = await backend.login(email.trim(), password, nowMs);
   } catch (err) {
     // Only a real rejection is reported as one. Everything else — Elixia
     // unreachable, the sign-in flow changed shape — is a failure to *check*,
@@ -558,6 +559,24 @@ export async function linkElixia(
     }
     const detail = config.mock ? ` (${(err as Error).message})` : '';
     throw new ServiceError(`Elixia rejected those credentials${detail}`, 401);
+  }
+
+  // A cookie coming back is not proof the session works. In November 2026
+  // Elixia's sign-in grew a second leg into oma.elixia.fi, and the session
+  // the app saved from it was refused at T-0 (docs/api.md §1). Asking the
+  // booking endpoint now makes linking the end-to-end test it looks like, and
+  // turns that drift into an error here instead of a missed class later.
+  // Only a definite "dead" refuses the link; a check that cannot tell does
+  // not stand in the way of credentials Elixia did accept.
+  if (
+    backend.checkSession &&
+    (await backend.checkSession(tokens, AbortSignal.timeout(SESSION_CHECK_TIMEOUT_MS))) === 'dead'
+  ) {
+    throw new ServiceError(
+      'Elixia accepted those credentials but then refused the session it issued, so nothing was ' +
+        'saved. Your password is fine — this is a problem with how the app signs in.',
+      502,
+    );
   }
 
   const updated: Profile = {

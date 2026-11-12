@@ -912,6 +912,137 @@ describe('performElixiaLogin', () => {
     expect(result.refreshToken).toBeUndefined();
   });
 
+  it("keeps www's own session now that signing in carries on into oma.elixia.fi", async () => {
+    // The chain as observed on 2026-11-12. Two things changed since §1 was
+    // captured: the sats-web client uses PKCE, with the verifier in a
+    // `.SATS_GROUP_FLOW` cookie on www, and `/omat-sivut` no longer renders —
+    // it sends the browser on to oma.elixia.fi, which runs a sign-in of its
+    // own and sets its *own* `.SATS_GROUP_AUTH`. Followed to the end, that is
+    // more hops than the login allowed, and a jar keyed only by name would let
+    // oma's session overwrite the one www.elixia.fi actually accepts.
+    const OMA = 'https://oma.elixia.fi';
+    const authAction = `${AUTH}/realms/sats/login-actions/authenticate?session_code=abc&execution=def&client_id=sats-web`;
+    const cookie = (...lines: string[]) => {
+      const headers = new Headers();
+      for (const line of lines) headers.append('set-cookie', line);
+      return headers;
+    };
+    const redirect = (location: string, status = 302, headers = new Headers()) => {
+      headers.set('location', location);
+      return new Response(null, { status, headers });
+    };
+
+    const routes = new Map<string, (init?: RequestInit) => Response>([
+      [
+        `${BASE}/kirjaudu-sisaan?onSuccess=%2Fomat-sivut`,
+        () => redirect('/api/sats-group-auth-log-in?redirect=%2Fomat-sivut'),
+      ],
+      [
+        `${BASE}/api/sats-group-auth-log-in?redirect=%2Fomat-sivut`,
+        () =>
+          redirect(
+            `${AUTH}/realms/sats/protocol/openid-connect/auth?client_id=sats-web&code_challenge=c1`,
+            303,
+            cookie(
+              '.SATS_GROUP_FLOW=1; max-age=600; path=/; secure; samesite=lax; httponly',
+              '.SATS_GROUP_FLOW_00=www-verifier; max-age=600; path=/; secure; samesite=lax; httponly',
+            ),
+          ),
+      ],
+      [
+        `${AUTH}/realms/sats/protocol/openid-connect/auth?client_id=sats-web&code_challenge=c1`,
+        () =>
+          new Response(formHtml(authAction), {
+            status: 200,
+            headers: cookie('AUTH_SESSION_ID=kc-session; Path=/realms/sats/; Secure; HttpOnly'),
+          }),
+      ],
+      [
+        authAction,
+        () =>
+          redirect(
+            `${BASE}/api/sats-group-auth-log-in-return?code=xyz`,
+            302,
+            cookie('KEYCLOAK_IDENTITY=kc-identity; Path=/realms/sats/; Secure; HttpOnly'),
+          ),
+      ],
+      [
+        `${BASE}/api/sats-group-auth-log-in-return?code=xyz`,
+        (init) => {
+          // The PKCE verifier has to come back to the host that issued it.
+          const sent = new Headers(init?.headers).get('cookie') ?? '';
+          if (!sent.includes('.SATS_GROUP_FLOW_00=www-verifier')) {
+            return new Response('invalid flow', { status: 400 });
+          }
+          return redirect(
+            '/omat-sivut',
+            302,
+            cookie(
+              '.SATS_GROUP_AUTH=www-session; Max-Age=1209600; Path=/; Secure; HttpOnly; SameSite=Lax',
+              '.SATS_GROUP_AUTH_00=www-part2; Max-Age=1209600; Path=/; Secure; HttpOnly; SameSite=Lax',
+            ),
+          );
+        },
+      ],
+      [`${BASE}/omat-sivut`, () => redirect(`${OMA}/concept/root`, 303)],
+      [`${OMA}/concept/root`, () => redirect('/', 307)],
+      [`${OMA}/`, () => redirect('/api/sats-group-auth-log-in?redirect=%2F', 303)],
+      [
+        `${OMA}/api/sats-group-auth-log-in?redirect=%2F`,
+        () =>
+          redirect(
+            `${AUTH}/realms/sats/protocol/openid-connect/auth?client_id=oma&code_challenge=c2`,
+            303,
+            cookie('.SATS_GROUP_FLOW_00=oma-verifier; max-age=600; path=/'),
+          ),
+      ],
+      [
+        `${AUTH}/realms/sats/protocol/openid-connect/auth?client_id=oma&code_challenge=c2`,
+        () => redirect(`${OMA}/api/sats-group-auth-log-in-return?code=oma`),
+      ],
+      [
+        `${OMA}/api/sats-group-auth-log-in-return?code=oma`,
+        () =>
+          redirect(
+            `${OMA}/home`,
+            302,
+            cookie('.SATS_GROUP_AUTH=oma-session; Max-Age=1209600; Path=/; Secure; HttpOnly'),
+          ),
+      ],
+      [`${OMA}/home`, () => new Response('portal', { status: 200 })],
+    ]);
+
+    const visited: string[] = [];
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      visited.push(url.toString());
+      const route = routes.get(url.toString());
+      if (!route) throw new Error(`unexpected fetch in test: ${url}`);
+      return route(init);
+    }) as typeof fetch;
+
+    const result = await performElixiaLogin(fetchImpl, BASE, 'user@example.com', 'hunter2', NOW);
+
+    // Done the moment www.elixia.fi issues its session. Following on into the
+    // portal's own sign-in is how the chain outgrew the redirect limit, and
+    // nothing there is needed to book.
+    expect(visited.filter((url) => url.startsWith(OMA))).toEqual([]);
+
+    const stored = new Map(
+      result.accessToken.split('; ').map((pair) => {
+        const eq = pair.indexOf('=');
+        return [pair.slice(0, eq), pair.slice(eq + 1)] as const;
+      }),
+    );
+    expect(stored.get('.SATS_GROUP_AUTH')).toBe('www-session');
+    expect(stored.get('.SATS_GROUP_AUTH_00')).toBe('www-part2');
+    // Only www.elixia.fi's cookies are the session: Keycloak's belong to its
+    // own host, and oma's are a different site's.
+    expect(stored.has('AUTH_SESSION_ID')).toBe(false);
+    expect(stored.has('KEYCLOAK_IDENTITY')).toBe(false);
+    expect(result.accessToken).not.toContain('oma-');
+    expect(result.expiresAtMs).toBe(NOW + 1_209_600_000);
+  });
+
   it('treats a re-rendered login form as rejected credentials, not a crash', async () => {
     // Keycloak's real failure behaviour (docs/api.md §1): wrong credentials
     // come back as HTTP 200 with the same form, never as an error status.
