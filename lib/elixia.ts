@@ -1070,11 +1070,13 @@ export class ElixiaClient implements BookingBackend {
    * The booking endpoint, because it is the one that has to accept the
    * session at T-0: whatever it accepts twenty seconds early it accepts then.
    * A dead session gets the same `401` "Sinun on kirjauduttava sisään…" here
-   * as on a real booking (verified 2026-11-12, docs/api.md §3); any other 4xx
-   * means the session got through and the made-up class was what was
-   * refused. The id cannot be mistaken for a real one, so nothing can be
-   * booked. Anything else — a redirect, a server error, a timeout — is
-   * `'unknown'`, so a check that breaks costs nothing but the check.
+   * as on a real booking; a live one gets past that and fails on the made-up
+   * class instead, as `502` "Tuntematon virhe." (both verified 2026-11-12,
+   * docs/api.md §3). Only the `401` is acted on. A 502 is reported as
+   * `'unknown'` rather than `'live'`, because an outage looks the same — and
+   * either way the run goes ahead with the session it has. A plain 4xx would
+   * mean the session got through, so it reads as `'live'`. The id cannot be
+   * mistaken for a real one, so nothing can be booked.
    *
    * Not the account page `/omat-sivut`, which the first version loaded: it
    * redirects signed-in members to oma.elixia.fi as well (verified from a

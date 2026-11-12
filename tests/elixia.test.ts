@@ -741,7 +741,8 @@ describe('ElixiaClient.book', () => {
 describe('ElixiaClient.checkSession', () => {
   // Asks the booking endpoint itself to book a class that does not exist: a
   // dead session gets the same 401 "Sinun on kirjauduttava sisään…" there as
-  // at T-0 (verified live 2026-11-12), and a live one cannot book anything.
+  // at T-0, and a live one gets 502 "Tuntematon virhe." (both verified live
+  // 2026-11-12). Only the 401 is acted on.
   //
   // It used to load the account page `/omat-sivut` and read a redirect as a
   // dead session. That page redirects signed-in members too (verified from a
@@ -778,6 +779,17 @@ describe('ElixiaClient.checkSession', () => {
 
   it('calls a session dead when Elixia says to sign in', async () => {
     expect(await answering(signIn).client.checkSession(tokens)).toBe('dead');
+  });
+
+  it('does not sign in again on what a signed-in member actually gets back', async () => {
+    // Captured 2026-11-12 from a signed-in browser on www.elixia.fi: the
+    // made-up class gets past the sign-in check and fails further in, as
+    // a 502 "Tuntematon virhe." That must never read as a dead session.
+    const { client } = answering(
+      () => new Response(JSON.stringify({ message: 'Tuntematon virhe.' }), { status: 502 }),
+    );
+
+    expect(await client.checkSession(tokens)).toBe('unknown');
   });
 
   it('calls a session live when Elixia refuses the made-up class for any other reason', async () => {
