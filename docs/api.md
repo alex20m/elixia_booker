@@ -141,6 +141,16 @@ needs a real password: linking an account now finishes by checking the new
 session against `/api/book` (§3) and refuses one Elixia will not accept, so a
 successful link *is* that verification.
 
+**What a wrong password looks like (captured 2026-11-12, made-up account).**
+The credentials `POST` comes back `200` on `auth.satsgroup.com` with the same
+login form *and* an error banner, `<div … id="input-error">` reading
+"Virheellinen käyttäjätunnus tai salasana." This pair — form plus banner — is
+the only thing `performElixiaLogin` reports as `ElixiaCredentialsRejected`, and
+the only sign-in failure that pauses someone's bookings. No session with no
+banner, or a page nobody has seen before, is a sign-in that did not finish: a
+plain error, and booking carries on. The banner is matched by its id, not its
+text, which follows the requested locale.
+
 **Why it matters:** the app exchanges a password for tokens once, at sign-in,
 and never stores the password. Login turned out to be a full OAuth2
 authorization-code redirect chain rather than a JSON POST — but every hop is
@@ -631,3 +641,4 @@ building.
 | 2026-11-11 | §3: the account page `/omat-sivut` doubles as a session check (`200` live, `303` dead). Each run now asks it before T-0 and signs in again there, so a session Elixia dropped is replaced before the race rather than inside it. | Claude |
 | 2026-11-12 | §3: the session check moved from `/omat-sivut`, which redirects signed-in members as well and so read every session as dead, to `/api/book` with a class that cannot exist: `401` dead (verified signed out), `502` "Tuntematon virhe." for a live session (verified signed in), and only the `401` acted on. | Claude |
 | 2026-11-12 | §1: the sign-in flow changed — PKCE with a `.SATS_GROUP_FLOW` cookie, and `/omat-sivut` now hands off to a second sign-in on `oma.elixia.fi` that sets its own `.SATS_GROUP_AUTH`. The login now scopes cookies by host and stops once www issues its session; linking verifies the session before saving it. | Claude |
+| 2026-11-12 | §1: recorded Keycloak's wrong-password response (form plus `id="input-error"` banner). Only that pauses booking now; any other sign-in failure leaves booking running. | Claude |

@@ -700,29 +700,41 @@ async function renewElixiaSession(
   backend: BookingBackend,
   nowMs: number,
 ): Promise<StoredTokens> {
-  const { password } = await openSecret(config, profile).catch((err: unknown) => {
-    throw asRefusal(err);
-  });
+  const { password } = await openSecret(config, profile);
   const tokens = await backend.login(profile.elixiaEmail ?? '', password, nowMs);
   await storeSession(config, profile, password, tokens, nowMs);
   return tokens;
 }
 
 /**
- * Whether the saved login itself is the problem — Elixia rejected the
- * password, or the sealed record cannot be opened — as opposed to signing in
- * failing for some other reason. Only the first is worth telling the user to
- * act on, and only the first is final for a run.
+ * Pause booking for someone whose saved password Elixia has verifiably
+ * rejected, and say so once. Updating the password in the app (or linking
+ * again) sets the link back to 'ok', and booking resumes from the next run.
+ *
+ * Re-read rather than written from the caller's copy, so only the status
+ * changes: the run may have saved a renewed session since it loaded the
+ * profile, and that must not be overwritten with the stale one.
  */
-function savedLoginUnusable(err: unknown): boolean {
-  return err instanceof ElixiaCredentialsRejected || err instanceof DecryptionError;
-}
-
-/** A saved login that cannot be used, as the one error type callers branch on. */
-function asRefusal(err: unknown): unknown {
-  return err instanceof DecryptionError
-    ? new ElixiaCredentialsRejected('the saved Elixia login could not be read')
-    : err;
+async function pauseForRejectedPassword(
+  config: AppConfig,
+  profile: Profile,
+  logger: Logger,
+  nowMs: number,
+  options: { announce: boolean } = { announce: true },
+): Promise<void> {
+  const current = (await config.repo.getProfile(profile.id)) ?? profile;
+  await config.repo.upsertProfile({ ...current, elixiaStatus: 'expired', elixiaCheckedAtMs: nowMs });
+  logger.log('session.paused', { userId: profile.id, reason: 'password rejected by Elixia' });
+  if (options.announce) {
+    await announce(
+      config,
+      current,
+      logger,
+      '🚨 Elixia rejected your saved password, so booking is paused.\n' +
+        'Update your Elixia password in the app to start booking again.',
+      nowMs,
+    );
+  }
 }
 
 /** The session last saved for this profile, if it can be read at all. */
@@ -1876,12 +1888,13 @@ async function prepareUser(
 
   // Prepare the session before sleeping to T-0, never during the race.
   //
-  // A failure here never stops booking — not even a password Elixia has
-  // rejected. This used to mark the link expired and pause every booking
-  // until the user re-linked, and on 2026-11-12 that paused accounts whose
-  // passwords were fine, because the sign-in itself had broken on Elixia's
-  // side. So the run goes on with whatever session it has (or none), and the
-  // booking reports its own failure, with the reason, like any other miss.
+  // Only a password Elixia has *verifiably* rejected pauses booking — Keycloak
+  // serving its form again with the error banner (`performElixiaLogin`).
+  // Every other failure leaves booking running: on 2026-11-12 a change on
+  // Elixia's side broke the sign-in itself, and pausing on any failure
+  // paused accounts whose passwords were fine. So for anything else the run
+  // goes on with whatever session it has (or none), and the booking reports
+  // its own failure, with the reason, like any other miss.
   let tokens: StoredTokens;
   try {
     tokens = await elixiaSession(config, profile, backend, nowMs);
@@ -1890,14 +1903,17 @@ async function prepareUser(
       userId,
       error: err instanceof DecryptionError ? 'decryption failed' : (err as Error).message,
     });
+    if (err instanceof ElixiaCredentialsRejected) {
+      await pauseForRejectedPassword(config, profile, logger, nowMs);
+      return null;
+    }
     tokens = (await savedSession(config, profile)) ?? noSession(nowMs);
-    // A refusal is final for this run: asking again would only repeat it,
-    // and repeated failed sign-ins are what get a real account locked. Any
-    // other failure is left for the race to try once more.
-    if (savedLoginUnusable(err)) {
-      const refused = Promise.reject(asRefusal(err));
-      refused.catch(() => {});
-      renewal = refused;
+    // A saved login that cannot be read cannot be signed in with either, so
+    // trying again later in the run would only fail the same way.
+    if (err instanceof DecryptionError) {
+      const unreadable = Promise.reject(err);
+      unreadable.catch(() => {});
+      renewal = unreadable;
     }
   }
 
@@ -1926,9 +1942,13 @@ async function prepareUser(
         tokens = await renewSession();
         logger.log('session.renewed', { userId, when: 'before-race' });
       } catch (err) {
-        // Cleared so T-0 may try again — unless Elixia refused the password,
-        // which another attempt would only repeat (see above).
-        if (!(err instanceof ElixiaCredentialsRejected)) renewal = null;
+        if (err instanceof ElixiaCredentialsRejected) {
+          await pauseForRejectedPassword(config, profile, logger, nowMs);
+          return null;
+        }
+        // Cleared so T-0 may try again: this was not a verdict on the
+        // password, and the next attempt may well get through.
+        if (!(err instanceof DecryptionError)) renewal = null;
         logger.log('session.renew-failed', {
           userId,
           when: 'before-race',
@@ -2029,6 +2049,13 @@ async function bookEntry(
       });
 
       await announce(config, profile, logger, describeReport(report), nowMs);
+
+      // Elixia rejected the password when the race tried signing in again.
+      // The message just sent already says booking is paused, so no second
+      // one.
+      if (report.outcome.kind === 'unauthorized' && report.outcome.signIn === 'refused') {
+        await pauseForRejectedPassword(config, profile, logger, nowMs, { announce: false });
+      }
     });
 
     return true;
