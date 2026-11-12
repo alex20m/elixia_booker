@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { describeReport, executeBooking, isSuccess } from '../lib/booking';
 import type { BookingReport } from '../lib/booking';
 import { Logger } from '../lib/logger';
-import { ClassNotListedError } from '../lib/types';
+import { ClassNotListedError, ElixiaCredentialsRejected } from '../lib/types';
 import type {
   AttemptOutcome,
   BookingConfig,
@@ -592,7 +592,22 @@ describe('executeBooking', () => {
         detail:
           'Sinun on kirjauduttava sisään, jotta voit tehdä varauksen. ' +
           '(Signing in again failed: Incorrect email or password)',
+        // A plain Error is the sign-in breaking, not Elixia judging the
+        // password — the message the user gets depends on telling them apart.
+        signIn: 'failed',
       });
+    });
+
+    it('marks a sign-in Elixia refused as a password problem', async () => {
+      const book = vi.fn(async (): Promise<AttemptOutcome> => signIn);
+      const renewSession = vi.fn(async () => {
+        throw new ElixiaCredentialsRejected('Elixia rejected the email or password');
+      });
+      const { built } = deps({ book, renewSession });
+
+      const report = await executeBooking(planned, built);
+
+      expect(report.outcome).toMatchObject({ kind: 'unauthorized', signIn: 'refused' });
     });
 
     it('does not sign in again on a 403, which is not about the session', async () => {
@@ -886,6 +901,37 @@ describe('describeReport', () => {
     const text = line({ kind: 'unauthorized', detail: 'HTTP 401 token expired' });
     expect(text).toContain('Re-link your Elixia account');
     expect(text).not.toContain('HTTP 401');
+    // Booking no longer stops over a login problem, so the message must not
+    // promise that re-linking is what starts it again.
+    expect(text).not.toContain('start booking again');
+  });
+
+  it('asks for a new password only when Elixia rejected the saved one', () => {
+    const text = line({
+      kind: 'unauthorized',
+      detail: 'sign in (Signing in again failed: Elixia rejected the email or password)',
+      status: 401,
+      signIn: 'refused',
+    });
+    expect(text).toBe(
+      `🚨 Elixia rejected your saved password, so Bodypump at tapiola on ${WHEN} wasn't booked.\n` +
+        "If you've changed your Elixia password, update it in the app.",
+    );
+  });
+
+  it('does not blame the password when signing in itself broke', () => {
+    // 2026-11-12: Elixia changed its sign-in, every attempt to sign in again
+    // failed, and every user was told to fix a password that was fine.
+    const text = line({
+      kind: 'unauthorized',
+      detail: 'sign in (Signing in again failed: too many redirects)',
+      status: 401,
+      signIn: 'failed',
+    });
+    expect(text).toBe(
+      `🚨 Couldn't sign in to Elixia, so Bodypump at tapiola on ${WHEN} wasn't booked.\n` +
+        "Your password isn't the problem. The Activity page has the details.",
+    );
   });
 
   it('says a class never opened without counting the tries at the reader', () => {

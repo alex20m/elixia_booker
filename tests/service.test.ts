@@ -29,6 +29,7 @@ import {
 } from '../lib/service';
 import { releasesInRange } from '../lib/planner';
 import { MockElixiaClient } from '../lib/mock';
+import { ElixiaCredentialsRejected } from '../lib/types';
 import type { BookingBackend } from '../lib/elixia';
 import type { AppConfig } from '../lib/appConfig';
 import type {
@@ -991,17 +992,83 @@ describe('the booking tick', () => {
     expect(await runDueBookings(config, nowMs, instantClock())).toBe(0);
   });
 
-  it('marks the link expired and stops when the stored credentials stop working', async () => {
-    // Loud, not silent: the user has to know booking has stopped.
-    const profile = await linkedProfile();
-    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+  describe('when signing in fails', () => {
+    // Booking never stops over a sign-in problem, whatever its cause: the
+    // account owner's decision after 2026-11-12, when a change on Elixia's
+    // side broke every sign-in and paused accounts whose passwords were fine.
+    // Each booking is attempted and reports its own failure instead.
+    const signInFirst = {
+      kind: 'unauthorized' as const,
+      detail: 'Sinun on kirjauduttava sisään, jotta voit tehdä varauksen.',
+      status: 401,
+    };
 
-    // Corrupt the sealed record so opening it fails, as a wrong key would.
-    await repo.upsertProfile({ ...profile, elixiaSecret: 'not-a-valid-sealed-blob' });
+    it('keeps booking with the session it has when signing in breaks', async () => {
+      const profile = await linkedProfile();
+      const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+      config.backend = Object.assign(new MockElixiaClient(), {
+        // Like the real client: no refresh, so renewing means signing in.
+        refresh: async (): Promise<StoredTokens> => {
+          throw new Error('Elixia has no refresh endpoint');
+        },
+        login: async (): Promise<StoredTokens> => {
+          throw new Error('Elixia login: too many redirects while chasing the auth flow');
+        },
+      });
 
-    setNow(firstRelease(sub) - 30_000);
-    expect(await runDueBookings(config, nowMs, instantClock())).toBe(0);
-    expect((await repo.getProfile(profile.id))!.elixiaStatus).toBe('expired');
+      // Far enough on that the stored session is due a renewal, which fails.
+      setNow(firstRelease(sub) - 30_000);
+      expect(await runDueBookings(config, nowMs, instantClock())).toBe(1);
+
+      expect((await repo.getProfile(profile.id))!.elixiaStatus).toBe('ok');
+      expect((await repo.listHistory(profile.id))[0]!.outcome).toBe('booked');
+    });
+
+    it('keeps attempting every booking when Elixia rejects the password, signing in once per run', async () => {
+      // Once, not once per step: a password Elixia has refused will be
+      // refused again, and repeated failures on every booking are what an
+      // identity server locks a real account out over.
+      const profile = await linkedProfile();
+      const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+      let logins = 0;
+      config.backend = Object.assign(new MockElixiaClient(), {
+        login: async (): Promise<StoredTokens> => {
+          logins += 1;
+          throw new ElixiaCredentialsRejected('Elixia rejected the email or password');
+        },
+        checkSession: async () => 'dead' as const,
+        book: async () => signInFirst,
+      });
+
+      setNow(firstRelease(sub) - 30_000);
+      expect(await runDueBookings(config, nowMs, instantClock())).toBe(1);
+      expect(logins).toBe(1);
+
+      setNow(firstRelease(sub) + 7 * 86_400_000 - 30_000);
+      expect(await runDueBookings(config, nowMs, instantClock())).toBe(1);
+      expect(logins).toBe(2);
+
+      expect((await repo.getProfile(profile.id))!.elixiaStatus).toBe('ok');
+      const history = await repo.listHistory(profile.id);
+      expect(history.map((h) => h.outcome)).toEqual(['unauthorized', 'unauthorized']);
+      expect(history[0]!.detail).toContain('Elixia rejected the email or password');
+    });
+
+    it('keeps attempting bookings even when the saved login cannot be read', async () => {
+      const profile = await linkedProfile();
+      const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+      // Corrupt the sealed record so opening it fails, as a wrong key would.
+      await repo.upsertProfile({ ...profile, elixiaSecret: 'not-a-valid-sealed-blob' });
+      config.backend = Object.assign(new MockElixiaClient(), {
+        book: async () => signInFirst,
+      });
+
+      setNow(firstRelease(sub) - 30_000);
+      expect(await runDueBookings(config, nowMs, instantClock())).toBe(1);
+
+      expect((await repo.getProfile(profile.id))!.elixiaStatus).toBe('ok');
+      expect((await repo.listHistory(profile.id))[0]!.outcome).toBe('unauthorized');
+    });
   });
 
   it('re-authenticates with the stored password when the token has expired', async () => {

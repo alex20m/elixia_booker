@@ -279,7 +279,19 @@ export type AttemptOutcome =
   | { kind: 'already-booked'; detail?: string }
   | { kind: 'too-early'; retryAfterMs?: number }
   | { kind: 'rate-limited'; retryAfterMs?: number }
-  | { kind: 'unauthorized'; detail: string; status?: number }
+  | {
+      kind: 'unauthorized';
+      detail: string;
+      status?: number;
+      /**
+       * Set when the run tried signing in again and that failed: `refused`
+       * when the saved login itself is the problem (Elixia rejected the
+       * password, or it could not be read), `failed` when signing in broke
+       * for any other reason. The message the user gets turns on it — the
+       * difference between "update your password" and "not your fault".
+       */
+      signIn?: 'refused' | 'failed';
+    }
   | { kind: 'error'; detail: string; status?: number };
 
 /** Whether an outcome is worth retrying, or is final. */

@@ -22,7 +22,7 @@
 
 import { retryWithBackoff, defaultSleep, type RetryResult } from './retry';
 import type { Logger } from './logger';
-import { ClassNotListedError } from './types';
+import { ClassNotListedError, ElixiaCredentialsRejected } from './types';
 import type {
   AttemptOutcome,
   BookingConfig,
@@ -350,7 +350,11 @@ export async function executeBooking(
         // On the record, not only in the platform log: the Activity page
         // shows `detail`, and "sign in" alone cannot say whether the password
         // was refused or the sign-in itself broke.
-        return { ...outcome, detail: `${outcome.detail} (Signing in again failed: ${reason})` };
+        return {
+          ...outcome,
+          detail: `${outcome.detail} (Signing in again failed: ${reason})`,
+          signIn: err instanceof ElixiaCredentialsRejected ? 'refused' : 'failed',
+        };
       }
     }
 
@@ -510,10 +514,24 @@ export function describeReport(report: BookingReport): string {
     // different class at the same time", so neither can this message.
     case 'already-booked':
       return `${prefix}ℹ️ Didn't book ${what} — you already have a booking at that time.`;
+    // Booking carries on after any of these — the next class is attempted as
+    // usual — so none of them says booking has stopped.
     case 'unauthorized':
+      if (outcome.signIn === 'refused') {
+        return (
+          `${prefix}🚨 Elixia rejected your saved password, so ${what} wasn't booked.\n` +
+          `If you've changed your Elixia password, update it in the app.`
+        );
+      }
+      if (outcome.signIn === 'failed') {
+        return (
+          `${prefix}🚨 Couldn't sign in to Elixia, so ${what} wasn't booked.\n` +
+          `Your password isn't the problem. The Activity page has the details.`
+        );
+      }
       return (
         `${prefix}🚨 Elixia wouldn't accept your saved login, so ${what} wasn't booked.\n` +
-        `Re-link your Elixia account in the app to start booking again.`
+        `Re-link your Elixia account in the app.`
       );
     case 'too-early':
       return (

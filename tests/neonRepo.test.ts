@@ -257,6 +257,30 @@ describe('profiles', () => {
     expect((await repo.listLinkedProfiles()).map((p) => p.id)).toEqual([ALICE]);
   });
 
+  it('resumes every link a sign-in failure had paused, and touches nothing else', async () => {
+    // Booking no longer pauses over a sign-in problem (lib/service.ts
+    // `prepareUser`). Accounts paused before that — some by a change on
+    // Elixia's side with nothing wrong with their passwords — must come back
+    // on deploy, without anyone having to re-link.
+    const CAROL = 'user_carol';
+    await repo.upsertProfile(profile(ALICE, { elixiaStatus: 'expired', elixiaSecret: 'sealed-a' }));
+    await repo.upsertProfile(profile(BOB, { elixiaStatus: 'unlinked' }));
+    await repo.upsertProfile(profile(CAROL, { elixiaStatus: 'ok', elixiaSecret: 'sealed-c' }));
+
+    await db.exec(
+      readFileSync(
+        new URL('../db/migrations/0020_resume_paused_elixia_links.sql', import.meta.url),
+        'utf8',
+      ),
+    );
+
+    expect((await repo.getProfile(ALICE))!.elixiaStatus).toBe('ok');
+    expect((await repo.getProfile(ALICE))!.elixiaSecret).toBe('sealed-a');
+    expect((await repo.getProfile(BOB))!.elixiaStatus).toBe('unlinked');
+    expect((await repo.getProfile(CAROL))!.elixiaStatus).toBe('ok');
+    expect((await repo.listLinkedProfiles()).map((p) => p.id).sort()).toEqual([ALICE, CAROL]);
+  });
+
   it('deleting a profile removes its subscriptions, schedule and history, and nobody else\'s', async () => {
     await repo.upsertProfile(profile(ALICE, { elixiaEmail: 'gym@example.com', elixiaSecret: 'sealed-blob' }));
     const alices = await addClass(ALICE, 'Bodypump');
