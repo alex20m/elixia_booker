@@ -345,8 +345,12 @@ export async function executeBooking(
         logger.log('session.renewed', { after: outcome.detail });
         return { kind: 'error', detail: outcome.detail, status: 401 };
       } catch (err) {
-        logger.log('session.renew-failed', { error: (err as Error).message });
-        return outcome;
+        const reason = (err as Error).message;
+        logger.log('session.renew-failed', { error: reason });
+        // On the record, not only in the platform log: the Activity page
+        // shows `detail`, and "sign in" alone cannot say whether the password
+        // was refused or the sign-in itself broke.
+        return { ...outcome, detail: `${outcome.detail} (Signing in again failed: ${reason})` };
       }
     }
 

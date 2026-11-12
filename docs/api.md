@@ -117,6 +117,30 @@ of its data is truncated, not empty.
 | Any pre-login handshake (nonce, PKCE, `state`, CSRF seed)? | No PKCE on this client (`code_challenge` is absent from the `sats-web` authorize URL — a *second* client used by `oma.elixia.fi` in the same session did use PKCE, so it is client-specific, not realm-wide). `state` here is literally the post-login path (`/omat-sivut`), not a random value. The only thing standing in for CSRF protection is that the login form's POST target embeds a server-issued `session_code` + `execution` pair — there is no separate hidden CSRF field to extract. |
 | 2FA/MFA challenge — always, or only on new devices? | Not observed — the captured run went straight from the login form to a redirect. One data point only; this session's device/cookie history may already have been trusted. Unconfirmed either way. |
 
+**Changed by November 2026 (observed 2026-11-12).** Two differences from the
+capture below, and together they are what broke every saved session and then
+every attempt to sign in again:
+
+- The `sats-web` client now uses **PKCE** (`code_challenge_method=S256`) and a
+  random `state`. The verifier rides in a new `.SATS_GROUP_FLOW` cookie (plus
+  `_00`, `Max-Age=600`) that `www.elixia.fi` sets on `/api/sats-group-auth-log-in`
+  and must get back on `/api/sats-group-auth-log-in-return`. The "No PKCE"
+  row below is out of date.
+- `/omat-sivut` no longer renders: it `303`s to `oma.elixia.fi`, which runs a
+  **second sign-in of its own** for the member portal and sets its own
+  `.SATS_GROUP_AUTH` there. Followed to the end, that leg outran the login's
+  redirect limit, and a cookie jar keyed by name alone would let oma's
+  `.SATS_GROUP_AUTH` overwrite the session `www.elixia.fi` accepts.
+
+`performElixiaLogin` now keeps cookies per host (each host only ever sees its
+own, as a browser would) and stops walking the chain the moment
+`www.elixia.fi` issues `.SATS_GROUP_AUTH`; the saved session is www's cookies
+only. Verified live up to the password check with a made-up account (Keycloak
+receives only its own cookies and re-renders the form). The successful leg
+needs a real password: linking an account now finishes by checking the new
+session against `/api/book` (§3) and refuses one Elixia will not accept, so a
+successful link *is* that verification.
+
 **Why it matters:** the app exchanges a password for tokens once, at sign-in,
 and never stores the password. Login turned out to be a full OAuth2
 authorization-code redirect chain rather than a JSON POST — but every hop is
@@ -606,3 +630,4 @@ building.
 | 2026-11-11 | §3, §5: Elixia ended every linked session days before its cookie expiry, so a booking was refused `401` and each user was told to re-link a working account. A `401` now triggers one fresh sign-in with the stored password and a retry, and the new session is saved for later runs. | Claude |
 | 2026-11-11 | §3: the account page `/omat-sivut` doubles as a session check (`200` live, `303` dead). Each run now asks it before T-0 and signs in again there, so a session Elixia dropped is replaced before the race rather than inside it. | Claude |
 | 2026-11-12 | §3: the session check moved from `/omat-sivut`, which redirects signed-in members as well and so read every session as dead, to `/api/book` with a class that cannot exist: `401` dead (verified signed out), `502` "Tuntematon virhe." for a live session (verified signed in), and only the `401` acted on. | Claude |
+| 2026-11-12 | §1: the sign-in flow changed — PKCE with a `.SATS_GROUP_FLOW` cookie, and `/omat-sivut` now hands off to a second sign-in on `oma.elixia.fi` that sets its own `.SATS_GROUP_AUTH`. The login now scopes cookies by host and stops once www issues its session; linking verifies the session before saving it. | Claude |
