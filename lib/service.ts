@@ -1528,7 +1528,8 @@ export async function reviewBookedOccurrences(
         entry.subscriptionId !== null &&
         entry.center !== undefined &&
         !entry.dryRun &&
-        entry.cancelledAtMs === undefined &&
+        // Rows already marked cancelled are asked about too: a class Elixia
+        // shows booked again is put back (see the loop below).
         (entry.outcome === 'booked' || entry.outcome === 'waitlisted'),
     )
     .map((entry) => {
@@ -1547,6 +1548,10 @@ export async function reviewBookedOccurrences(
 
   if (pending.length === 0) return;
 
+  const backend = backendFor(config);
+  const tokens = await liveSessionForReview(config, profile, backend, logger, nowMs);
+  if (!tokens) return;
+
   const centers = [...new Set(pending.map((x) => x.entry.center))];
 
   for (const center of centers) {
@@ -1554,16 +1559,14 @@ export async function reviewBookedOccurrences(
 
     let statuses: ClassBookedStatus[];
     try {
-      statuses = await browsingSchedule(config, profile, nowMs, (backend, tokens) =>
-        backend.checkBookedStatus(
-          tokens,
-          center,
-          inCenter.map((x) => ({
-            className: x.entry.className,
-            startTime: x.entry.startTime,
-            classDate: x.entry.classDate,
-          })),
-        ),
+      statuses = await backend.checkBookedStatus(
+        tokens,
+        center,
+        inCenter.map((x) => ({
+          className: x.entry.className,
+          startTime: x.entry.startTime,
+          classDate: x.entry.classDate,
+        })),
       );
     } catch (err) {
       // Deliberately not read as cancellation: "we could not look" is not
@@ -1578,6 +1581,28 @@ export async function reviewBookedOccurrences(
 
     for (let i = 0; i < inCenter.length; i++) {
       const { entry } = inCenter[i]!;
+
+      if (entry.cancelledAtMs !== undefined) {
+        // Only a definite `booked` undoes a cancellation. It cannot come from
+        // a signed-out page, which shows nothing booked — so it is the one
+        // answer that proves an earlier "cancelled" was a misreading.
+        if (statuses[i] !== 'booked') continue;
+        const restored = await config.repo.clearHistoryCancelled(
+          profile.id,
+          entry.subscriptionId,
+          entry.classDate,
+        );
+        if (restored) {
+          logger.log('booking.restored', {
+            userId: profile.id,
+            subscriptionId: entry.subscriptionId,
+            className: entry.className,
+            classDate: entry.classDate,
+          });
+        }
+        continue;
+      }
+
       if (statuses[i] !== 'not-booked') continue;
 
       const marked = await config.repo.markHistoryCancelled(
@@ -1595,6 +1620,49 @@ export async function reviewBookedOccurrences(
         classDate: entry.classDate,
       });
     }
+  }
+}
+
+/**
+ * The session `reviewBookedOccurrences` reads the schedule with, made sure of
+ * first — or null, meaning "do not look at all".
+ *
+ * The schedule page is public, so a session Elixia has ended is not refused:
+ * the page comes back `200` with every class unbooked, which reads as every
+ * booking cancelled. Elixia has been ending sessions days before their cookie
+ * says (docs/api.md §3), and the local expiry check `elixiaSession` makes
+ * cannot see that. So the session is asked about directly, the same way the
+ * booking run does before T-0, and a dead one is replaced by a fresh sign-in.
+ *
+ * Only a definite `dead` triggers that; `unknown` is what a live session
+ * normally gets from the check (see `ElixiaClient.checkSession`), so it goes
+ * ahead. If signing in again fails, nothing is read: no answer beats a wrong
+ * one here. `matchBookedStatuses` (lib/elixia.ts) is the second line behind
+ * this, for a signed-out page that gets through anyway.
+ */
+async function liveSessionForReview(
+  config: AppConfig,
+  profile: Profile,
+  backend: BookingBackend,
+  logger: Logger,
+  nowMs: number,
+): Promise<StoredTokens | null> {
+  try {
+    const tokens = await elixiaSession(config, profile, backend, nowMs);
+    if (!backend.checkSession) return tokens;
+
+    const check = await backend.checkSession(tokens, AbortSignal.timeout(SESSION_CHECK_TIMEOUT_MS));
+    if (check !== 'dead') return tokens;
+
+    const renewed = await renewElixiaSession(config, profile, backend, nowMs);
+    logger.log('session.renewed', { userId: profile.id, when: 'booked-check' });
+    return renewed;
+  } catch (err) {
+    logger.log('booked.check.failed', {
+      userId: profile.id,
+      error: err instanceof DecryptionError ? 'decryption failed' : (err as Error).message,
+    });
+    return null;
   }
 }
 

@@ -821,6 +821,27 @@ describe('booking history', () => {
     ).toBe(false);
   });
 
+  it('clears a cancellation, so the booking is served again', async () => {
+    const alices = await addClass(ALICE, 'Bodypump');
+    await repo.appendHistory(ALICE, attempt(Date.UTC(2026, 3, 1, 5, 0), alices.id));
+    await repo.markHistoryCancelled(ALICE, alices.id, '2026-04-08', Date.UTC(2026, 3, 2, 6, 0));
+
+    expect(await repo.clearHistoryCancelled(ALICE, alices.id, '2026-04-08')).toBe(true);
+    expect((await repo.listHistory(ALICE))[0]?.cancelledAtMs).toBeUndefined();
+  });
+
+  it('clears nothing for another user, subscription or date, or a row never marked', async () => {
+    const alices = await addClass(ALICE, 'Bodypump');
+    await repo.appendHistory(ALICE, attempt(Date.UTC(2026, 3, 1, 5, 0), alices.id));
+
+    expect(await repo.clearHistoryCancelled(ALICE, alices.id, '2026-04-08')).toBe(false);
+
+    await repo.markHistoryCancelled(ALICE, alices.id, '2026-04-08', Date.UTC(2026, 3, 2, 6, 0));
+    expect(await repo.clearHistoryCancelled(BOB, alices.id, '2026-04-08')).toBe(false);
+    expect(await repo.clearHistoryCancelled(ALICE, alices.id, '2026-04-15')).toBe(false);
+    expect((await repo.listHistory(ALICE))[0]?.cancelledAtMs).toBe(Date.UTC(2026, 3, 2, 6, 0));
+  });
+
   it('honours the limit', async () => {
     const alices = await addClass(ALICE, 'Bodypump');
     for (let day = 1; day <= 4; day++) {

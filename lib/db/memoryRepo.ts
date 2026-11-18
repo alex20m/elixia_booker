@@ -222,6 +222,19 @@ export function createMemoryRepo(): MemoryRepo {
       return true;
     },
 
+    async clearHistoryCancelled(userId, subscriptionId, classDate) {
+      const entry = (history.get(userId) ?? []).find(
+        (e) =>
+          e.subscriptionId === subscriptionId &&
+          e.classDate === classDate &&
+          (e.outcome === 'booked' || e.outcome === 'waitlisted') &&
+          e.cancelledAtMs !== undefined,
+      );
+      if (!entry) return false;
+      delete entry.cancelledAtMs;
+      return true;
+    },
+
     dump() {
       return JSON.stringify({
         profiles: [...profiles.values()],
