@@ -505,5 +505,19 @@ export function createNeonRepo(sql: Sql): Repo {
       );
       return rows.length > 0;
     },
+
+    async clearHistoryCancelled(userId, subscriptionId, classDate) {
+      const rows = await rowsOrNoneForBadId(() =>
+        sql.query(
+          `update public.booking_history
+           set cancelled_at = null
+           where user_id = $1 and subscription_id = $2::uuid and class_date = $3::date
+             and outcome in ('booked', 'waitlisted') and cancelled_at is not null
+           returning id`,
+          [userId, subscriptionId, classDate],
+        ),
+      );
+      return rows.length > 0;
+    },
   };
 }

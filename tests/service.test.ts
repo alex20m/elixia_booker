@@ -2285,6 +2285,80 @@ describe('cancelled bookings', () => {
     expect(centers).toEqual(['Tapiola']);
   });
 
+  it('signs in again before reading, when Elixia has ended the saved session', async () => {
+    // Elixia's schedule page is public: a dead session still gets a 200, with
+    // every class reading isBooked false (verified live, 2026-11-18). Read
+    // with that session, every upcoming booking looked cancelled and fell off
+    // the calendar feed.
+    const profile = await linkedProfile();
+    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+    await bookUpcoming(profile, sub);
+
+    const fresh: StoredTokens = {
+      accessToken: 'renewed',
+      expiresAtMs: nowMs + 86_400_000,
+      updatedAtMs: nowMs,
+    };
+    const readWith: string[] = [];
+    config.backend = gym({
+      checkSession: async (tokens) => (tokens.accessToken === 'renewed' ? 'unknown' : 'dead'),
+      login: async () => fresh,
+      checkBookedStatus: async (tokens, center, checks) => {
+        readWith.push(tokens.accessToken);
+        return checks.map(() => (tokens.accessToken === 'renewed' ? 'booked' : 'not-booked'));
+      },
+    });
+    await reviewBookedOccurrences(config, profile, nowMs);
+
+    expect(readWith).toEqual(['renewed']);
+    expect((await onlyHistory()).cancelledAtMs).toBeUndefined();
+  });
+
+  it('marks nothing cancelled when the session is dead and signing in again fails', async () => {
+    const profile = await linkedProfile();
+    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+    await bookUpcoming(profile, sub);
+
+    config.backend = gym({
+      checkSession: async () => 'dead',
+      login: async () => {
+        throw new Error('elixia sign-in is down');
+      },
+      checkBookedStatus: async (tokens, center, checks) => checks.map(() => 'not-booked'),
+    });
+    await expect(reviewBookedOccurrences(config, profile, nowMs)).resolves.toBeUndefined();
+
+    expect((await onlyHistory()).cancelledAtMs).toBeUndefined();
+  });
+
+  it('puts back an upcoming booking once Elixia shows it booked again', async () => {
+    // Heals the bookings a signed-out reading wrongly marked cancelled: a
+    // `booked` answer is positive proof — a signed-out page never says it.
+    const profile = await linkedProfile();
+    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+    await bookUpcoming(profile, sub, { cancelledAtMs: nowMs - 86_400_000 });
+
+    config.backend = gym({
+      checkBookedStatus: async (tokens, center, checks) => checks.map(() => 'booked'),
+    });
+    await reviewBookedOccurrences(config, profile, nowMs);
+
+    expect((await onlyHistory()).cancelledAtMs).toBeUndefined();
+  });
+
+  it('keeps a cancelled booking cancelled while Elixia still shows it not booked', async () => {
+    const profile = await linkedProfile();
+    const sub = await addSubscription(config, profile, BODYPUMP, nowMs);
+    await bookUpcoming(profile, sub, { cancelledAtMs: nowMs - 86_400_000 });
+
+    config.backend = gym({
+      checkBookedStatus: async (tokens, center, checks) => checks.map(() => 'not-booked'),
+    });
+    await reviewBookedOccurrences(config, profile, nowMs);
+
+    expect((await onlyHistory()).cancelledAtMs).toBe(nowMs - 86_400_000);
+  });
+
   it('is run by the nightly job too, so noticing a cancellation does not wait on a calendar app to poll', async () => {
     // The bug this pins: detection used to happen only on a feed fetch, which
     // made it hostage to one device's refresh setting. A calendar that polls

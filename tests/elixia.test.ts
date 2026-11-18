@@ -11,6 +11,7 @@ import {
   findClubIdByName,
   listClubOptions,
   matchClassAvailability,
+  matchBookedStatuses,
   matchClassBookedStatus,
   parseInstructorName,
   performElixiaLogin,
@@ -532,6 +533,43 @@ describe('matchClassBookedStatus', () => {
     // while it still existed was ever cancelled — never read as "not booked".
     const gone = subscription({ className: 'Bodypump' });
     expect(matchClassBookedStatus(scheduleFixture(), gone, '2026-08-21')).toBe('unknown');
+  });
+});
+
+describe('matchBookedStatuses', () => {
+  const check = { className: 'HIIT Run & Box', startTime: '18:30', classDate: '2026-08-21' };
+
+  it('reads nothing as cancelled from a page that shows no class booked at all', () => {
+    // What Elixia serves a signed-out request, or one carrying a session it
+    // has ended: a normal 200 with isBooked false on every class (verified
+    // live, 2026-11-18). That cannot be told apart from "this member holds
+    // nothing here", so it is not evidence of a cancellation.
+    expect(matchBookedStatuses(scheduleFixture(), [check])).toEqual(['unknown']);
+  });
+
+  it('reports a cancellation when the same page shows another class booked', () => {
+    // Any isBooked true proves the page was rendered for a signed-in member,
+    // so a false next to it is a real "not booked".
+    const props = scheduleFixture();
+    props.schedule.events[0]!.events[0]!.isBooked = true;
+
+    expect(matchBookedStatuses(props, [check])).toEqual(['not-booked']);
+  });
+
+  it('still reports a booked class as booked', () => {
+    const props = scheduleFixture();
+    props.schedule.events[0]!.events[1]!.isBooked = true;
+
+    expect(matchBookedStatuses(props, [check])).toEqual(['booked']);
+  });
+
+  it('is what ElixiaClient.checkBookedStatus answers with for a signed-out page', async () => {
+    const fetchImpl = (async () =>
+      new Response(pageHtml(scheduleFixture()), { status: 200 })) as unknown as typeof fetch;
+
+    await expect(
+      new ElixiaClient({ fetchImpl, baseUrl: BASE }).checkBookedStatus(tokens, '741', [check]),
+    ).resolves.toEqual(['unknown']);
   });
 });
 

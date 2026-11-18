@@ -848,6 +848,38 @@ export function matchClassBookedStatus(
   return match.isBooked ? 'booked' : 'not-booked';
 }
 
+/**
+ * `matchClassBookedStatus` for several occurrences on one page, refusing to
+ * call any of them cancelled unless the page shows it was rendered for a
+ * signed-in member.
+ *
+ * The schedule page is public. Asked without a session, or with one Elixia
+ * has already ended, it still answers `200` with the full timetable — and
+ * `isBooked: false` on every class (verified live, 2026-11-18, docs/api.md
+ * §4). Read naively, that is every booking cancelled at once: exactly how
+ * upcoming classes vanished from the calendar feed after Elixia started
+ * ending sessions early. The page carries no other signed-in marker that has
+ * been verified, so the only proof available is a class it shows booked: one
+ * `isBooked: true` anywhere means the flags are this member's, and a `false`
+ * beside it is a real "not booked". With none at all, every "not booked"
+ * becomes `unknown`.
+ *
+ * The price: a member who cancels *every* booking they hold at a centre is
+ * not noticed until something there is booked again, so those entries stay
+ * on the calendar a while. A stale entry is the lesser failure — the other
+ * one empties the calendar.
+ */
+export function matchBookedStatuses(
+  props: SchedulePageProps,
+  checks: ReadonlyArray<{ className: string; startTime: string; classDate: string }>,
+): ClassBookedStatus[] {
+  const statuses = checks.map((check) => matchClassBookedStatus(props, check, check.classDate));
+  const signedIn = (props.schedule?.events ?? []).some((day) =>
+    day.events.some((e) => e.isBooked === true),
+  );
+  return signedIn ? statuses : statuses.map((s) => (s === 'not-booked' ? 'unknown' : s));
+}
+
 // --- booking responses -------------------------------------------------------
 
 /**
@@ -1126,8 +1158,7 @@ export class ElixiaClient implements BookingBackend {
   ): Promise<ClassBookedStatus[]> {
     const clubId = await this.resolveClubId(tokens, center);
     const url = `${this.baseUrl}${ENDPOINTS.schedule}?clubIds=${encodeURIComponent(clubId)}`;
-    const props = await this.fetchPage(tokens, url);
-    return checks.map((check) => matchClassBookedStatus(props, check, check.classDate));
+    return matchBookedStatuses(await this.fetchPage(tokens, url), checks);
   }
 
   /**

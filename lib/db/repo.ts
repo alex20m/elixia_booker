@@ -153,4 +153,14 @@ export interface Repo {
     classDate: string,
     nowMs: number,
   ): Promise<boolean>;
+  /**
+   * Undo `markHistoryCancelled`: Elixia shows the booking held after all.
+   *
+   * Exists because a cancellation was once recorded from a signed-out read of
+   * the schedule page, which shows every class unbooked (see
+   * `matchBookedStatuses` in lib/elixia.ts). A later signed-in read showing
+   * the class booked is positive proof, and puts it back on the calendar. A
+   * no-op (returns false) if no matching row is marked.
+   */
+  clearHistoryCancelled(userId: string, subscriptionId: string, classDate: string): Promise<boolean>;
 }
