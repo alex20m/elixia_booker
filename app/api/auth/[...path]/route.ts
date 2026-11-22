@@ -214,8 +214,50 @@ function withSessionRetry(original: RouteHandler): RouteHandler {
   };
 }
 
+const SESSION_TOKEN_COOKIE = '__Secure-neon-auth.session_token';
+const SESSION_CACHE_COOKIE = '__Secure-neon-auth.local.session_data';
+
+const hasCookie = (request: Request, name: string): boolean =>
+  (request.headers.get('cookie') ?? '').split(';').some((pair) => pair.trim().startsWith(`${name}=`));
+
+/**
+ * Lets a session check that has to go upstream anyway bring the renewed
+ * session cookie back with it, so a signed-in browser stays signed in for as
+ * long as the app is used.
+ *
+ * Better Auth keeps a session alive by answering `get-session` with the
+ * session-token cookie re-issued on a fresh expiry. Neon Auth's handler,
+ * though, answers `get-session` from its own short-lived signed cache cookie,
+ * and once that has lapsed it re-fetches the session upstream through a path
+ * that keeps only the body and throws the `Set-Cookie` away. The browser's
+ * cookie therefore kept the expiry it was first given, and everyone was
+ * signed out a fixed time after signing in, however often they used the app.
+ *
+ * `disableCookieCache=true` sends the check down the handler's ordinary proxy
+ * path instead, which forwards upstream cookies (re-signed onto this origin)
+ * and re-mints the cache cookie from the same answer. It is only added when
+ * the cache cookie is gone — which is exactly when the handler would have
+ * gone upstream regardless — so a fresh cache is still answered locally and
+ * the number of upstream calls is unchanged.
+ */
+function withSessionRenewal(original: RouteHandler): RouteHandler {
+  return async (request, context) => {
+    const { path } = await context.params;
+    if (
+      !isGetSession(path) ||
+      !hasCookie(request, SESSION_TOKEN_COOKIE) ||
+      hasCookie(request, SESSION_CACHE_COOKIE)
+    ) {
+      return original(request, context);
+    }
+    const url = new URL(request.url);
+    url.searchParams.set('disableCookieCache', 'true');
+    return original(new Request(url, request), context);
+  };
+}
+
 export const GET = handler
-  ? withVerificationLanding(withSessionRetry(handler.GET))
+  ? withVerificationLanding(withSessionRetry(withSessionRenewal(handler.GET)))
   : unconfigured;
 export const POST = handler ? withAccountDeletion(handler.POST) : unconfigured;
 export const PUT = handler?.PUT ?? unconfigured;
