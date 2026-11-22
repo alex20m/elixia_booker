@@ -23,10 +23,16 @@ const TOKEN = 'live-session-token';
 const RENEWED_MAX_AGE = 604800;
 
 const upstreamCalls: string[] = [];
+/** How many of the next get-session calls answer 502, as a blip at the managed instance would. */
+let pendingBlips = 0;
 
 function fakeUpstream(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const url = new URL(input instanceof Request ? input.url : String(input));
   upstreamCalls.push(url.pathname);
+  if (url.pathname === '/neondb/auth/get-session' && pendingBlips > 0) {
+    pendingBlips -= 1;
+    return Promise.resolve(Response.json({ code: 'NETWORK_TIMEOUT' }, { status: 502 }));
+  }
   const cookie = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get('cookie') ?? '';
 
   if (url.pathname !== '/neondb/auth/get-session') {
@@ -80,6 +86,7 @@ const setCookieNamed = (response: Response, name: string): string | undefined =>
 beforeEach(() => {
   vi.resetModules();
   upstreamCalls.length = 0;
+  pendingBlips = 0;
   vi.stubEnv('NEON_AUTH_BASE_URL', UPSTREAM);
   vi.stubEnv('NEON_AUTH_COOKIE_SECRET', 'x'.repeat(48));
   vi.stubGlobal('fetch', vi.fn(fakeUpstream));
@@ -103,6 +110,33 @@ describe('GET /api/auth/get-session once the session cache has lapsed', () => {
     const response = await getSession(`${TOKEN_COOKIE}=${TOKEN}`);
 
     expect(setCookieNamed(response, CACHE_COOKIE)).toMatch(/Max-Age=\d+/);
+  });
+});
+
+describe('GET /api/auth/get-session once the session cache has lapsed, while upstream blips', () => {
+  /**
+   * Before the renewal path existed, a lapsed cache sent each attempt through
+   * the handler's cache path, which makes two upstream calls of its own when
+   * the first one fails (the mint, then the plain proxy) — and the route's
+   * retry doubles that. The renewal path makes one. Without a fallback, a
+   * session check would absorb half the blips it used to, and a fresh sign-in
+   * that hits a short run of them would land signed out.
+   */
+  it('still answers with the session after three consecutive upstream blips', async () => {
+    pendingBlips = 3;
+
+    const response = await getSession(`${TOKEN_COOKIE}=${TOKEN}`);
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).user.id).toBe('u1');
+  });
+
+  it('still gives up with a 502 when upstream never recovers', async () => {
+    pendingBlips = Number.POSITIVE_INFINITY;
+
+    const response = await getSession(`${TOKEN_COOKIE}=${TOKEN}`);
+
+    expect(response.status).toBe(502);
   });
 });
 

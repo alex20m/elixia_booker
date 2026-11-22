@@ -238,7 +238,16 @@ const hasCookie = (request: Request, name: string): boolean =>
  * and re-mints the cache cookie from the same answer. It is only added when
  * the cache cookie is gone — which is exactly when the handler would have
  * gone upstream regardless — so a fresh cache is still answered locally and
- * the number of upstream calls is unchanged.
+ * a successful check makes no more upstream calls than before.
+ *
+ * A blip is the exception. The cache path makes two upstream calls of its
+ * own when the first fails (the mint, then the plain proxy), so it absorbs
+ * twice the blips the single renewal call does — and a fresh sign-in, whose
+ * own cache-cookie mint may be the very call that blipped, leans on exactly
+ * that. So a renewal attempt that comes back as a transient failure falls
+ * back to the cache path: the check is never less tolerant of a flaky
+ * upstream than it was, and only that one answer goes without the renewed
+ * cookie. The next check renews it.
  */
 function withSessionRenewal(original: RouteHandler): RouteHandler {
   return async (request, context) => {
@@ -252,7 +261,9 @@ function withSessionRenewal(original: RouteHandler): RouteHandler {
     }
     const url = new URL(request.url);
     url.searchParams.set('disableCookieCache', 'true');
-    return original(new Request(url, request), context);
+    const renewed = await original(new Request(url, request), context);
+    if (!isTransientFailure(renewed)) return renewed;
+    return original(request, context);
   };
 }
 
